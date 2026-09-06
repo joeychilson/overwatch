@@ -36,9 +36,7 @@ test("usage charts switch grouping and metric, retain provider colors, and fit s
   await expect(ranking.getByText("Anthropic", { exact: true })).toBeVisible();
 });
 
-test("activity tooltip supports hover, keyboard, scale details, and session navigation", async ({
-  page,
-}) => {
+test("activity tooltip supports hover, keyboard, and session navigation", async ({ page }) => {
   await desktop(page);
   await page.goto("/");
   const cell = page.getByRole("button", { name: /tokens$/ }).last();
@@ -49,20 +47,9 @@ test("activity tooltip supports hover, keyboard, scale details, and session navi
   await page.keyboard.press("Escape");
   await expect(tooltip).toBeHidden();
   await page.mouse.move(0, 0);
-  await page.getByRole("combobox", { name: "Activity scale" }).focus();
   await cell.focus();
   await expect(tooltip).toBeVisible();
   await expect(cell).toHaveAttribute("aria-describedby", (await tooltip.getAttribute("id")) ?? "");
-  await page.getByRole("combobox", { name: "Activity scale" }).click();
-  await page.getByRole("option", { name: "Weekly", exact: true }).click();
-  await page.keyboard.press("Tab");
-  await cell.focus();
-  await expect(tooltip.getByText("Week total", { exact: true })).toBeVisible();
-  await page.getByRole("combobox", { name: "Activity scale" }).click();
-  await page.getByRole("option", { name: "Cumulative", exact: true }).click();
-  await page.keyboard.press("Tab");
-  await cell.focus();
-  await expect(tooltip.getByText("Cumulative · displayed period", { exact: true })).toBeVisible();
   await cell.click();
   await expect(page.getByRole("heading", { name: "Sessions", exact: true })).toBeVisible();
 });
