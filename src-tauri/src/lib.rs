@@ -60,22 +60,31 @@ fn run_app() -> std::result::Result<(), Box<dyn std::error::Error>> {
             let handle = app.handle().clone();
             let scanner = Arc::clone(&index);
             std::thread::spawn(move || {
+                let minimum_delay = std::time::Duration::from_secs(4);
+                let maximum_delay = std::time::Duration::from_secs(30);
+                let mut delay = minimum_delay;
                 loop {
                     match scanner.scan() {
                         Ok(true) => {
+                            delay = minimum_delay;
                             if let Err(error) = data::IndexChanged.emit(&handle) {
                                 eprintln!("Index notification failed: {error}");
                             }
                         }
-                        Ok(false) => {}
+                        Ok(false) => {
+                            // Reconciliation still walks every source, so reduce idle filesystem
+                            // traffic while keeping recently-changing histories responsive.
+                            delay = (delay * 2).min(maximum_delay);
+                        }
                         Err(error) => {
+                            delay = maximum_delay;
                             eprintln!("Index scan failed: {error}");
                             if let Err(error) = data::IndexChanged.emit(&handle) {
                                 eprintln!("Index notification failed: {error}");
                             }
                         }
                     }
-                    std::thread::sleep(std::time::Duration::from_secs(4));
+                    std::thread::sleep(delay);
                 }
             });
             let handle = app.handle().clone();

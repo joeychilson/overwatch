@@ -85,7 +85,7 @@ export function AppHeader({
       <button
         disabled={syncing || !nativeApp}
         onClick={onSync}
-        title="Reads local changes every four seconds. Click to rescan."
+        title="Automatically reads local changes. Click to rescan now."
         className={cn(
           "ml-2 flex items-center gap-2 whitespace-nowrap text-[11px]",
           scoped ? "" : "ml-auto",
