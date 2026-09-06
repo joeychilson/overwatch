@@ -99,20 +99,37 @@ pub async fn save_sources(
     sources: Vec<Source>,
 ) -> Result<Snapshot> {
     let index = Arc::clone(&index);
-    blocking(move || {
+    let notify = app.clone();
+    let snapshot = blocking(move || {
         crate::index::validate_sources(&sources)?;
-        store_json(&app, "sources", &sources)?;
+        let previous = index.sources()?;
         index.set_sources(sources)?;
-        index.scan()?;
-        IndexChanged
-            .emit(&app)
-            .map_err(|e| AppError::Internal(e.to_string()))?;
-        AccountsChanged
-            .emit(&app)
-            .map_err(|e| AppError::Internal(e.to_string()))?;
-        index.snapshot()
+        let apply = (|| {
+            index.scan()?;
+            let snapshot = index.snapshot()?;
+            store_json(&app, "sources", &index.sources()?)?;
+            Ok(snapshot)
+        })();
+        match apply {
+            Ok(snapshot) => Ok(snapshot),
+            Err(error) => {
+                if let Err(rollback) = index.set_sources(previous).and_then(|()| index.scan()) {
+                    return Err(AppError::Internal(format!(
+                        "Source update failed: {error}. Restoring the previous sources also failed: {rollback}"
+                    )));
+                }
+                Err(error)
+            }
+        }
     })
-    .await
+    .await?;
+    if let Err(error) = IndexChanged.emit(&notify) {
+        eprintln!("Index notification failed after saving sources: {error}");
+    }
+    if let Err(error) = AccountsChanged.emit(&notify) {
+        eprintln!("Account notification failed after saving sources: {error}");
+    }
+    Ok(snapshot)
 }
 #[tauri::command]
 #[specta::specta]
