@@ -104,7 +104,11 @@ fn index_survives_restart_skips_idle_writes_and_pages_full_search()
     assert!(!index.scan()?);
     assert_eq!(index.snapshot()?.indexed_at, snapshot.indexed_at);
     let id = &snapshot.sessions[0].id;
-    assert_eq!(index.events(id, 100, "")?.events.len(), 100);
+    let page = index.events(id, 100, "")?;
+    assert_eq!(page.events.len(), 100);
+    assert!(page.matches.is_empty());
+    let page = index.events(id, 100, "Record")?;
+    assert_eq!(page.matches, (100..200).collect::<Vec<_>>());
     let result = index.events(id, 0, "Record 244")?;
     assert_eq!(result.matches, vec![244]);
     assert_eq!(index.transcript(id)?.timeline.len(), 245);

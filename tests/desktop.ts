@@ -522,7 +522,7 @@ export async function desktop(
                   events: matches.slice(offset, offset + 100).map((index) => recorded[index]),
                   offset,
                   total: matches.length,
-                  matches,
+                  matches: query ? matches.slice(offset, offset + 100) : [],
                 };
               }
               case "get_accounts":

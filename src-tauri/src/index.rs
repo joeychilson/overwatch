@@ -539,13 +539,28 @@ impl Index {
     pub fn events(&self, id: &str, offset: u32, search: &str) -> Result<EventPage> {
         self.with_reader(id, |data| {
             let search = search.to_lowercase();
+            if search.is_empty() {
+                let total = data.events().len() as u32;
+                let offset = offset.min(total.saturating_sub(1) / 100 * 100);
+                return Ok(EventPage {
+                    events: data
+                        .events()
+                        .iter()
+                        .skip(offset as usize)
+                        .take(100)
+                        .cloned()
+                        .collect(),
+                    offset,
+                    total,
+                    matches: vec![],
+                });
+            }
             let matches: Vec<u32> = data
                 .events()
                 .iter()
                 .enumerate()
                 .filter(|(_, event)| {
-                    search.is_empty()
-                        || event.text.to_lowercase().contains(&search)
+                    event.text.to_lowercase().contains(&search)
                         || event
                             .output
                             .as_ref()
@@ -559,17 +574,21 @@ impl Index {
                 .collect();
             let total = matches.len() as u32;
             let offset = offset.min(total.saturating_sub(1) / 100 * 100);
-            let events = matches
+            let page_matches: Vec<u32> = matches
                 .iter()
                 .skip(offset as usize)
                 .take(100)
+                .copied()
+                .collect();
+            let events = page_matches
+                .iter()
                 .map(|i| data.events()[*i as usize].clone())
                 .collect();
             Ok(EventPage {
                 events,
                 offset,
                 total,
-                matches,
+                matches: page_matches,
             })
         })
     }

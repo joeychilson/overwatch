@@ -1,5 +1,4 @@
 import {
-  useCallback,
   useImperativeHandle,
   useLayoutEffect,
   useMemo,
@@ -66,18 +65,15 @@ export function SessionLog({
   const completedJump = useRef<typeof jump | null>(null);
   const [expanded, setExpanded] = useState<Map<number, boolean>>(() => new Map());
   const search = view.kind === "search" ? view.query : "";
-  const matches = view.kind === "search" ? view.firstPage.matches : undefined;
-  const count = matches?.length ?? timeline.length;
-  // Stable index mapping avoids rebuilding measurements for a large transcript on every scroll.
-  const eventIndex = useCallback((index: number) => matches?.[index] ?? index, [matches]);
+  const count = view.kind === "search" ? view.firstPage.total : timeline.length;
   // Virtual owns a mutable viewport instance. Keep this component outside React Compiler.
   // oxlint-disable-next-line react/incompatible-library
   const virtual = useVirtualizer({
     count,
     getScrollElement: () => scrollRef.current,
-    getItemKey: eventIndex,
+    getItemKey: (index) => index,
     estimateSize: (index) => {
-      const event = timeline[eventIndex(index)];
+      const event = search ? undefined : timeline[index];
       const kind = event?.kind;
       if (kind === "tool") return 40;
       return search || kind === "user" || kind === "assistant" ? 240 : 48;
@@ -162,7 +158,9 @@ export function SessionLog({
         {items.map((item) => {
           const page = byOffset.get(Math.floor(item.index / 100) * 100);
           const event = page?.events[item.index - page.offset];
-          const index = eventIndex(item.index);
+          const index = search
+            ? (page?.matches[item.index - page.offset] ?? item.index)
+            : item.index;
           return (
             <div
               key={item.key}
