@@ -6,6 +6,9 @@ import { desktop } from "./desktop";
 
 test("primary workflows remain usable at 200 percent browser zoom", async ({ browserName }) => {
   test.skip(browserName !== "chromium", "Chrome's extension zoom API is specific to Chromium.");
+  // Launching an extension-enabled browser and checking five views at native zoom
+  // needs more than the default 30 seconds on shared CI runners.
+  test.slow();
   const directory = await mkdtemp(join(tmpdir(), "overwatch-zoom-"));
   let context;
   try {
