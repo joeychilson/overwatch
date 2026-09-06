@@ -1,0 +1,219 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/inter";
+
+@custom-variant dark (&:where(.dark, .dark *));
+@theme inline {
+  --font-sans: "Inter Variable", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: "SFMono-Regular", Consolas, monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--primary);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--foreground);
+  --color-sidebar-accent: var(--accent);
+  --color-sidebar-accent-foreground: var(--foreground);
+  --color-sidebar-primary: var(--primary);
+  --color-sidebar-primary-foreground: var(--primary-foreground);
+  --color-sidebar-border: var(--border);
+  --color-sidebar-ring: var(--primary);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.625rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 0.875rem;
+  --radius-3xl: 1rem;
+  --radius-4xl: 1.25rem;
+}
+:root {
+  color-scheme: light;
+  --background: #fafafa;
+  --foreground: #262626;
+  --card: #f2f2f2;
+  --popover: #ffffff;
+  --primary: #404040;
+  --primary-foreground: #ffffff;
+  --secondary: #eaeaea;
+  --muted: #ededed;
+  --muted-foreground: #737373;
+  --accent: #e5e5e5;
+  --border: #26262612;
+  --input: #cccccc;
+  --sidebar: #f2f2f2;
+  --destructive: #bd3546;
+  --success: #257850;
+  --warning: #946316;
+  --chart-1: #128577;
+  --chart-2: #8471bc;
+  --chart-3: #b67a32;
+  --chart-4: #4d83c2;
+  --chart-5: #b26487;
+  --chart-6: #6e8595;
+  --heatmap-0: #e8e8e8;
+}
+.dark {
+  color-scheme: dark;
+  --background: #171717;
+  --foreground: #ededed;
+  --card: #202020;
+  --popover: #262626;
+  --primary: #e5e5e5;
+  --primary-foreground: #202020;
+  --secondary: #2c2c2c;
+  --muted: #2a2a2a;
+  --muted-foreground: #a3a3a3;
+  --accent: #303030;
+  --border: #ededed0d;
+  --input: #494949;
+  --sidebar: #141414;
+  --destructive: #f08d98;
+  --success: #7dcea0;
+  --warning: #e1b66f;
+  --chart-1: #71d4c2;
+  --chart-2: #b29cdb;
+  --chart-3: #d7ac72;
+  --chart-4: #81aee0;
+  --chart-5: #d29ab5;
+  --chart-6: #92a6b4;
+  --heatmap-0: #292929;
+}
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--muted-foreground) 45%, transparent) transparent;
+  }
+  html {
+    @apply bg-background font-sans text-foreground antialiased;
+    font-synthesis: none;
+  }
+  body {
+    margin: 0;
+  }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+  button:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 3px;
+  }
+  svg {
+    flex-shrink: 0;
+  }
+  a {
+    @apply cursor-pointer text-primary underline-offset-4 hover:underline;
+  }
+  kbd {
+    @apply rounded bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--primary) 25%, transparent);
+  }
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--muted-foreground) 45%, transparent);
+    border-radius: 10px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+@layer components {
+  .prose {
+    @apply text-sm leading-[1.8] break-words text-foreground/90;
+    overflow-wrap: anywhere;
+  }
+  .prose p {
+    @apply my-3 first:mt-0 last:mb-0;
+  }
+  .prose :is(h1, h2, h3, h4) {
+    @apply mt-6 mb-3 leading-snug font-medium tracking-tight;
+  }
+  .prose h1 {
+    @apply text-xl;
+  }
+  .prose h2 {
+    @apply text-lg;
+  }
+  .prose h3 {
+    @apply text-base;
+  }
+  .prose ul {
+    @apply my-3 list-disc pl-5;
+  }
+  .prose ol {
+    @apply my-3 list-decimal pl-5;
+  }
+  .prose li {
+    @apply my-1 marker:text-muted-foreground;
+  }
+  .prose li.task-list-item {
+    @apply list-none;
+  }
+  .prose input[type="checkbox"] {
+    @apply mr-2;
+  }
+  .prose code {
+    @apply rounded bg-muted px-1 py-0.5 font-mono text-xs;
+  }
+  .prose pre {
+    @apply my-4 max-w-full overflow-auto rounded-lg bg-sidebar p-4 font-mono text-xs leading-relaxed;
+  }
+  .prose pre code {
+    @apply bg-transparent p-0;
+  }
+  .prose blockquote {
+    @apply my-4 border-l-2 border-primary/30 pl-4 text-muted-foreground;
+  }
+  .prose table {
+    @apply my-4 block w-full overflow-auto text-xs;
+  }
+  .prose :is(th, td) {
+    @apply px-3 py-2 text-left;
+  }
+  .prose th {
+    @apply font-medium;
+  }
+  .prose hr {
+    @apply my-5;
+  }
+  .dark .prose .shiki span {
+    color: var(--shiki-dark) !important;
+  }
+}

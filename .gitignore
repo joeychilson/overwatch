@@ -1,0 +1,28 @@
+# Dependencies and build output
+node_modules/
+/dist/
+/coverage/
+/test-results/
+/playwright-report/
+*.tsbuildinfo
+
+# Tool caches and generated hooks
+.vite/
+.vite-plus/
+/.vite-hooks/_/
+vite.config.*.timestamp-*
+
+# Local environment and logs
+.env
+.env.*
+!.env.example
+*.local
+*.log
+
+# Editors and operating systems
+/.idea/
+/.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

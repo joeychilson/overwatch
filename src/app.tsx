@@ -1,0 +1,349 @@
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { isTauri } from "@tauri-apps/api/core";
+import { Toaster } from "sonner";
+import { commands, type Agent } from "@/lib/bindings";
+import { emptyModels } from "@/lib/models/catalog";
+import { AppFailure, native } from "@/lib/errors";
+import { catalogOptions, snapshotOptions } from "@/lib/queries";
+import { usePreferences } from "@/lib/hooks/use-preferences";
+import { useNativeEvents } from "@/lib/hooks/use-native-events";
+import { useNow } from "@/lib/hooks/use-now";
+import { useMediaQuery } from "@/lib/hooks/use-media-query";
+import { navigation, type View } from "@/lib/shell/navigation";
+import { cn } from "@/lib/ui";
+import { AppHeader } from "@/lib/shell/header";
+import { AppSidebar } from "@/lib/shell/sidebar";
+import { Skeleton } from "@/lib/components/ui/skeleton";
+import { Empty, ErrorNotice, Modal } from "@/lib/components/page";
+import { CommandMenu } from "@/lib/components/command-menu";
+import { ErrorBoundary } from "@/lib/components/error-boundary";
+
+const Overview = lazy(() => import("@/pages/overview"));
+const Sessions = lazy(() => import("@/pages/sessions"));
+const Models = lazy(() => import("@/pages/models"));
+const Subscriptions = lazy(() => import("@/pages/subscriptions"));
+const Connections = lazy(() => import("@/pages/connections"));
+
+type Route =
+  | { view: Exclude<View, "sessions" | "models"> }
+  | { view: "models"; modelKey?: string }
+  | { view: "sessions"; id?: string; order?: string[]; day?: string; tool?: string };
+
+export default function App() {
+  const [route, setRoute] = useState<Route>({ view: "overview" });
+  const [modelsVisit, setModelsVisit] = useState(0);
+  const [agent, setAgent] = useState<Agent | "all">("all");
+  const [project, setProject] = useState("all");
+  const [range, setRange] = useState("30");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [help, setHelp] = useState(false);
+  const compactWindow = useMediaQuery("(max-width: 799px)");
+  const prefersDark = useMediaQuery("(prefers-color-scheme: dark)");
+  const scroll = useRef<HTMLDivElement>(null);
+  const now = useNow();
+  const client = useQueryClient();
+  const snapshot = useQuery(snapshotOptions);
+  const catalog = useQuery(catalogOptions);
+  const {
+    preferences,
+    save,
+    saving,
+    error: preferenceError,
+    refetch: refetchPreferences,
+  } = usePreferences();
+
+  const sync = useMutation({
+    mutationFn: () => native(commands.refreshIndex()),
+    onSuccess: (snapshot) => client.setQueryData(snapshotOptions.queryKey, snapshot),
+  });
+
+  useNativeEvents();
+
+  useEffect(() => {
+    document.documentElement.classList.toggle(
+      "dark",
+      preferences.theme === "dark" || (preferences.theme === "system" && prefersDark),
+    );
+  }, [preferences.theme, prefersDark]);
+
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey)) return;
+      if (event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen((value) => !value);
+      }
+      const item = navigation[Number(event.key) - 1];
+      if (
+        item &&
+        !(
+          event.target instanceof HTMLInputElement ||
+          event.target instanceof HTMLTextAreaElement ||
+          event.target instanceof HTMLSelectElement
+        )
+      ) {
+        event.preventDefault();
+        if (item.id === "models") setModelsVisit((visit) => visit + 1);
+        setRoute({ view: item.id });
+        scroll.current?.scrollTo({ top: 0 });
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("keydown", key);
+    };
+  }, []);
+
+  const sessions = snapshot.data?.sessions;
+
+  const filtered = useMemo(
+    () =>
+      (sessions ?? []).filter(
+        (session) =>
+          (project === "all" || session.cwd === project) &&
+          (agent === "all" || session.agent === agent),
+      ),
+    [sessions, project, agent],
+  );
+
+  const projects = [
+    ...new Map(sessions?.map((session) => [session.cwd, session.project])).entries(),
+  ]
+    .filter(([path]) => path)
+    .sort((a, b) => a[1].localeCompare(b[1]));
+
+  const navigate = (view: View) => {
+    if (view === "models") setModelsVisit((visit) => visit + 1);
+    setRoute({ view });
+    scroll.current?.scrollTo({ top: 0 });
+  };
+
+  const openSession = (id: string, order = filtered.map((session) => session.id)) => {
+    setRoute((route) => ({
+      ...(route.view === "sessions" ? route : {}),
+      view: "sessions",
+      id,
+      order,
+    }));
+    scroll.current?.scrollTo({ top: 0 });
+  };
+
+  const collapsed = compactWindow || preferences.sidebarCollapsed;
+  const readingSession = route.view === "sessions" && !!route.id;
+  const scoped = !["connections", "subscriptions"].includes(route.view) && !readingSession;
+  const issues = snapshot.data?.sources.filter((source) => source.issues.length) ?? [];
+  const nativeApp = isTauri();
+
+  return (
+    <>
+      <div
+        className={cn(
+          "grid h-dvh grid-cols-[216px_minmax(0,1fr)] overflow-hidden max-[1100px]:grid-cols-[184px_minmax(0,1fr)]",
+          collapsed && "grid-cols-[64px_minmax(0,1fr)] max-[1100px]:grid-cols-[64px_minmax(0,1fr)]",
+        )}
+      >
+        <AppSidebar
+          collapsed={collapsed}
+          compactWindow={compactWindow}
+          view={route.view}
+          sessionCount={sessions?.length}
+          agent={agent}
+          snapshot={snapshot.data}
+          saving={saving}
+          onNavigate={navigate}
+          onSelectAgent={(id) => {
+            setAgent(agent === id ? "all" : id);
+            navigate("overview");
+          }}
+          onSearch={() => setSearchOpen(true)}
+          onHelp={() => setHelp(true)}
+          onToggleSidebar={() => save({ ...preferences, sidebarCollapsed: !collapsed })}
+        />
+        <main className="flex min-h-0 min-w-0 flex-col">
+          <AppHeader
+            scoped={scoped}
+            readingSession={readingSession}
+            project={project}
+            projects={projects}
+            agent={agent}
+            range={range}
+            view={route.view}
+            nativeApp={nativeApp}
+            syncing={sync.isPending}
+            scanning={snapshot.data?.scanning}
+            snapshotError={!!snapshot.error}
+            onProject={setProject}
+            onAgent={setAgent}
+            onRange={setRange}
+            onSync={() => sync.mutate()}
+          />
+          <div
+            ref={scroll}
+            data-slot="page-scroll"
+            className={cn(
+              "min-h-0 flex-1 overflow-x-auto overflow-y-scroll px-9 pb-12 scrollbar-gutter-stable max-[1100px]:px-6 max-[800px]:px-4",
+              !readingSession && "pt-6",
+            )}
+          >
+            <div className="mx-auto max-w-362.5">
+              {preferenceError && (
+                <ErrorNotice error={preferenceError} retry={() => void refetchPreferences()} />
+              )}
+              {snapshot.error && (
+                <ErrorNotice error={snapshot.error} retry={() => void snapshot.refetch()} />
+              )}
+              {catalog.error && (
+                <ErrorNotice error={catalog.error} retry={() => void catalog.refetch()} />
+              )}
+              {catalog.data?.warning && (
+                <ErrorNotice
+                  error={new AppFailure(catalog.data.warning)}
+                  retry={() => void catalog.refetch()}
+                />
+              )}
+              {!!issues.length && route.view !== "connections" && (
+                <button
+                  className="mb-5 w-full rounded-lg bg-warning/10 px-4 py-3 text-left text-xs text-warning"
+                  onClick={() => navigate("connections")}
+                >
+                  {issues.length} source {issues.length === 1 ? "needs" : "need"} attention. Totals
+                  may be incomplete. Review connections.
+                </button>
+              )}
+              {!nativeApp ? (
+                <Empty title="Open Overwatch on your desktop">
+                  Local agent histories are available in the Tauri application. Start it with{" "}
+                  <code className="font-mono">vp run tauri dev</code>.
+                </Empty>
+              ) : snapshot.isPending ? (
+                <div className="space-y-6">
+                  <Skeleton className="h-10 w-48" />
+                  <Skeleton className="h-28 w-full" />
+                  <Skeleton className="h-72 w-full" />
+                </div>
+              ) : (
+                <ErrorBoundary key={route.view}>
+                  <Suspense fallback={<Skeleton className="h-96 w-full rounded-xl" />}>
+                    {route.view === "overview" && (
+                      <Overview
+                        sessions={filtered}
+                        allSessions={sessions ?? []}
+                        models={catalog.data?.models ?? emptyModels}
+                        range={Number(range)}
+                        now={now}
+                        openSession={openSession}
+                        openDay={(day) => {
+                          setRoute({ view: "sessions", day });
+                          scroll.current?.scrollTo({ top: 0 });
+                        }}
+                        openModel={(modelKey) => {
+                          setModelsVisit((visit) => visit + 1);
+                          setRoute({ view: "models", modelKey });
+                          scroll.current?.scrollTo({ top: 0 });
+                        }}
+                        openTool={(tool) => {
+                          setRoute({ view: "sessions", tool });
+                          scroll.current?.scrollTo({ top: 0 });
+                        }}
+                        clearScope={() => {
+                          setProject("all");
+                          setAgent("all");
+                        }}
+                        navigate={navigate}
+                      />
+                    )}
+                    {route.view === "sessions" && (
+                      <Sessions
+                        sessions={filtered}
+                        selected={route.id}
+                        order={route.order}
+                        scrollRef={scroll}
+                        selectedDay={route.day}
+                        selectedTool={route.tool}
+                        openSession={openSession}
+                        clearSelection={() => setRoute({ ...route, id: undefined })}
+                        clearDay={() => setRoute({ ...route, day: undefined })}
+                        clearTool={() => setRoute({ ...route, tool: undefined })}
+                        now={now}
+                      />
+                    )}
+                    {route.view === "models" && (
+                      <Models
+                        key={modelsVisit}
+                        initialModelKey={route.modelKey}
+                        catalog={catalog.data}
+                        sessions={filtered}
+                        range={Number(range)}
+                        now={now}
+                        scrollRef={scroll}
+                      />
+                    )}
+                    {route.view === "subscriptions" && (
+                      <Subscriptions sessions={sessions ?? []} now={now} />
+                    )}
+                    {route.view === "connections" && (
+                      <Connections
+                        sources={snapshot.data?.sources ?? []}
+                        openSubscriptions={() => navigate("subscriptions")}
+                      />
+                    )}
+                  </Suspense>
+                </ErrorBoundary>
+              )}
+            </div>
+          </div>
+        </main>
+      </div>
+      {searchOpen && (
+        <CommandMenu
+          sessions={sessions ?? []}
+          pages={navigation.map((page) => ({ label: page.label, select: () => navigate(page.id) }))}
+          openSession={(id) => {
+            setProject("all");
+            setAgent("all");
+            openSession(
+              id,
+              (sessions ?? []).map((session) => session.id),
+            );
+          }}
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
+      <Modal
+        title="Keyboard shortcuts"
+        description="Move through Overwatch without leaving the keyboard."
+        open={help}
+        onOpenChange={setHelp}
+      >
+        <dl className="space-y-5 text-sm">
+          <div className="flex justify-between">
+            <dt>Search pages and sessions</dt>
+            <dd>
+              <kbd>⌘ / Ctrl K</kbd>
+            </dd>
+          </div>
+          <div className="flex justify-between">
+            <dt>Switch views</dt>
+            <dd>
+              <kbd>⌘ / Ctrl 1–{navigation.length}</kbd>
+            </dd>
+          </div>
+          <div className="flex justify-between">
+            <dt>Navigate session timeline</dt>
+            <dd>
+              <kbd>← → Home End</kbd>
+            </dd>
+          </div>
+          <div className="flex justify-between">
+            <dt>Close dialog</dt>
+            <dd>
+              <kbd>Esc</kbd>
+            </dd>
+          </div>
+        </dl>
+      </Modal>
+      <Toaster theme={preferences.theme} position="bottom-right" closeButton richColors />
+    </>
+  );
+}

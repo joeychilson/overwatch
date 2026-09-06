@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build macOS release
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@v1.19.0
+        with:
+          node-version: "26"
+          cache: true
+          run-install: false
+      - name: Install dependencies
+        run: vp install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - name: Validate release version
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from "node:child_process";
+          import { readFileSync } from "node:fs";
+
+          const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+          const tauri = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
+          const metadata = JSON.parse(execFileSync("cargo", [
+            "metadata", "--manifest-path", "src-tauri/Cargo.toml",
+            "--no-deps", "--format-version", "1", "--locked",
+          ], { encoding: "utf8" }));
+          const crate = metadata.packages.find((entry) => entry.name === pkg.name);
+
+          if (process.env.GITHUB_REF_NAME !== `v${pkg.version}` ||
+              tauri.version !== pkg.version || crate?.version !== pkg.version) {
+            throw new Error("Release tag and package, Tauri, and Cargo versions must match.");
+          }
+          NODE
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+      - name: Lint Rust
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+      - name: Test Rust
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Check generated native bindings
+        run: |
+          cargo run --manifest-path src-tauri/Cargo.toml --locked --bin bindings
+          git diff --exit-code -- src/lib/bindings.ts
+      - name: Test frontend accounting
+        run: vp test run
+      - name: Install test browsers
+        run: vp exec playwright install chromium webkit
+      - name: Test UI workflows
+        run: vp exec playwright test --workers 2
+      - name: Build and create draft release
+        uses: tauri-apps/tauri-action@action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: vp run tauri
+          args: --target aarch64-apple-darwin -- --locked
+          tagName: ${{ github.ref_name }}
+          releaseName: ${{ github.ref_name }}
+          releaseDraft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generateReleaseNotes: true
+          uploadUpdaterJson: false
+      - name: Upload failed browser traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-test-results
+          path: test-results/
+          if-no-files-found: ignore
