@@ -117,9 +117,6 @@ test("session model names remain searchable by name and original identifier", as
     .click();
   const label = page.locator('span[title="gpt-6-astra"]');
   await expect(label).toHaveText("GPT-6 Astra");
-  await page.screenshot({
-    path: `test-results/session-model-name-${test.info().project.name}.png`,
-  });
   await page.getByRole("button", { name: /Search anything/ }).click();
   await page.getByRole("combobox", { name: "Search pages and sessions" }).fill("GPT-6 Astra");
   await expect(page.getByRole("option").first()).toContainText(
@@ -152,8 +149,5 @@ for (const missing of ["all", "mixed"] as const) {
     await expect(conversation.locator('[data-event-index="0"]')).toBeFocused();
     await expect(conversation.locator('[data-event-index="0"]')).toContainText("Time unknown");
     await page.locator('[data-slot="page-scroll"]').evaluate((element) => (element.scrollTop = 0));
-    await page.screenshot({
-      path: `test-results/timeline-${missing}-${test.info().project.name}.png`,
-    });
   });
 }

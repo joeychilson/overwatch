@@ -38,7 +38,12 @@ test("header dropdowns open below their triggers with every option visible", asy
   await page.getByRole("option", { name: "Last 7 days", exact: true }).click();
   await expect(range.locator('[data-slot="select-value"]')).toHaveText("Last 7 days");
   await range.press("ArrowDown");
+  await expect(page.locator('[data-slot="select-content"][data-open]')).toBeVisible();
   await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("option", { name: "Last 30 days", exact: true })).toHaveAttribute(
+    "data-highlighted",
+    "",
+  );
   await page.keyboard.press("Enter");
   await expect(range.locator('[data-slot="select-value"]')).toHaveText("Last 30 days");
 });
