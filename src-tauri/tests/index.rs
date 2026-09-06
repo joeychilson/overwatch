@@ -112,6 +112,13 @@ fn index_survives_restart_skips_idle_writes_and_pages_full_search()
     let result = index.events(id, 0, "Record 244")?;
     assert_eq!(result.matches, vec![244]);
     assert_eq!(index.transcript(id)?.timeline.len(), 245);
+    let missing = directory.join("hidden-sessions");
+    std::fs::rename(directory.join("sessions"), &missing)?;
+    assert!(index.scan()?);
+    assert_eq!(index.snapshot()?.sessions.len(), 1);
+    assert!(!index.snapshot()?.sources[3].issues.is_empty());
+    std::fs::rename(&missing, directory.join("sessions"))?;
+    assert!(index.scan()?);
     drop(index);
     let index = Index::open(root.path().join("index"), sources)?;
     assert_eq!(index.snapshot()?.sessions.len(), 1);

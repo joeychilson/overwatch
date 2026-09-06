@@ -122,7 +122,7 @@ export function AppSidebar({
                     <span
                       className={cn(
                         "ml-auto size-1.5 shrink-0 rounded-full",
-                        source?.available && source.source.enabled
+                        source?.available && source.source.enabled && !source.issues.length
                           ? "bg-success"
                           : "bg-muted-foreground/30",
                       )}

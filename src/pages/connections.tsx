@@ -61,9 +61,11 @@ function SourceEditor({
           <p className="mt-1 text-[11px] text-muted-foreground">
             {!status.source.enabled
               ? "Source disabled"
-              : status.available
-                ? `${status.sessions.toLocaleString()} indexed sessions`
-                : "Folder not found"}
+              : status.issues.length
+                ? "Source needs attention"
+                : status.available
+                  ? `${status.sessions.toLocaleString()} indexed sessions`
+                  : "Folder not found"}
           </p>
         </div>
         <Switch

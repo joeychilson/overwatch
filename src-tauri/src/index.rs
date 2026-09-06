@@ -301,6 +301,11 @@ impl Index {
                             }
                             Err(error) => status.issues.push(error.to_string()),
                         }
+                    } else {
+                        status.issues.push(format!(
+                            "No OpenCode database was found at {}.",
+                            path.display()
+                        ));
                     }
                 } else if status.source.agent != Agent::Antigravity {
                     let folders: &[&str] = match status.source.agent {
@@ -308,11 +313,13 @@ impl Index {
                         Agent::Claude => &["projects"],
                         _ => &["sessions"],
                     };
+                    let mut recognized = false;
                     for folder in folders {
                         let directory = root.join(folder);
-                        if !directory.exists() {
+                        if !directory.is_dir() {
                             continue;
                         }
+                        recognized = true;
                         for entry in WalkDir::new(directory).follow_links(false) {
                             let entry = match entry {
                                 Ok(entry) => entry,
@@ -362,6 +369,13 @@ impl Index {
                                 changed = true;
                             }
                         }
+                    }
+                    if !recognized {
+                        status.issues.push(format!(
+                            "No recognized {} history folders were found under {}.",
+                            status.source.agent.id(),
+                            root.display()
+                        ));
                     }
                 }
                 if status.issues.is_empty() {
