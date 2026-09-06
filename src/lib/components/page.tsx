@@ -1,6 +1,6 @@
 import type { ComponentProps, ReactNode } from "react";
 import { AlertCircle, Search } from "lucide-react";
-import { cn } from "@/lib/ui";
+import { cn } from "cn";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";

@@ -10,7 +10,7 @@ import { AppFailure, failure, native } from "@/lib/errors";
 import { forecasts, type Forecast } from "@/lib/usage/forecast";
 import { accountOptions } from "@/lib/queries";
 import { money, relative } from "@/lib/format";
-import { cn } from "@/lib/ui";
+import { cn } from "cn";
 import { Button } from "@/lib/components/ui/button";
 import { Input } from "@/lib/components/ui/input";
 import { Skeleton } from "@/lib/components/ui/skeleton";

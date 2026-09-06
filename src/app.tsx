@@ -11,7 +11,7 @@ import { useNativeEvents } from "@/lib/hooks/use-native-events";
 import { useNow } from "@/lib/hooks/use-now";
 import { useMediaQuery } from "@/lib/hooks/use-media-query";
 import { navigation, type View } from "@/lib/shell/navigation";
-import { cn } from "@/lib/ui";
+import { cn } from "cn";
 import { AppHeader } from "@/lib/shell/header";
 import { AppSidebar } from "@/lib/shell/sidebar";
 import { Skeleton } from "@/lib/components/ui/skeleton";

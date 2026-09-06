@@ -2,7 +2,7 @@ import { CircleHelp, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react"
 import { agentIds, agents } from "@/lib/agents";
 import type { Agent, Snapshot } from "@/lib/bindings";
 import { navigation, type View } from "./navigation";
-import { cn } from "@/lib/ui";
+import { cn } from "cn";
 import { AgentMark } from "@/lib/components/agent-mark";
 import { Button } from "@/lib/components/ui/button";
 import appIcon from "../../../src-tauri/icons/icon.svg";

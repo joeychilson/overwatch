@@ -9,7 +9,7 @@ import {
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
-import { cn } from "@/lib/ui";
+import { cn } from "cn";
 import { Empty } from "./page";
 
 const features = tableFeatures({ rowSortingFeature, sortedRowModel: createSortedRowModel() });

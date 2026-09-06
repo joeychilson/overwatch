@@ -18,7 +18,7 @@ import { ActivityHeatmap } from "@/lib/components/activity-heatmap";
 import { RankedList } from "@/lib/components/ranked-list";
 import { Metric, PageTitle, Section, Empty } from "@/lib/components/page";
 import { SessionTable } from "@/lib/components/session-table";
-import { cn } from "@/lib/ui";
+import { cn } from "cn";
 
 type Props = {
   sessions: Session[];

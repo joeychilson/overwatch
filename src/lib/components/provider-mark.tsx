@@ -1,5 +1,5 @@
 import { Network } from "lucide-react";
-import { cn } from "@/lib/ui";
+import { cn } from "cn";
 
 const logos = new Set(["openai", "anthropic", "google", "xai", "opencode"]);
 export function ProviderMark({ provider, className }: { provider: string; className?: string }) {

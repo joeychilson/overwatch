@@ -25,7 +25,7 @@ import { toast } from "sonner";
 import type { EventPage, SessionEvent, TimelineEvent } from "@/lib/bindings";
 import { eventPageOptions } from "@/lib/queries";
 import { hasTimestamp, duration } from "@/lib/format";
-import { cn } from "@/lib/ui";
+import { cn } from "cn";
 import { toolPreview, type Snippet } from "@/lib/session/tool-preview";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";

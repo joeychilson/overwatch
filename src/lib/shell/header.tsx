@@ -2,7 +2,7 @@ import { RefreshCw } from "lucide-react";
 import { agentIds, agents } from "@/lib/agents";
 import type { Agent } from "@/lib/bindings";
 import type { View } from "./navigation";
-import { cn } from "@/lib/ui";
+import { cn } from "cn";
 import { FilterSelect } from "@/lib/components/page";
 
 export function AppHeader({

@@ -1,5 +1,5 @@
 import type { Agent } from "@/lib/bindings";
-import { cn } from "@/lib/ui";
+import { cn } from "cn";
 
 const logos: Record<Agent, string> = {
   codex: "openai",
