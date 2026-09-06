@@ -73,6 +73,25 @@ test("subscription summaries switch history without changing the allowance readi
   expect(errors).toEqual([]);
 });
 
+test("removing connection data requires confirmation and explains provider sign-ins", async ({
+  page,
+}) => {
+  await desktop(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Subscriptions", exact: true }).click();
+  await page.getByRole("button", { name: "Remove saved connection data" }).click();
+  const dialog = page.getByRole("dialog", { name: "Remove Codex connection data?" });
+  await expect(dialog).toContainText("Provider sign-in files are not changed");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.getByRole("button", { name: "Remove saved connection data" }).click();
+  await dialog.getByRole("button", { name: "Remove data", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    page.getByText("Quota readings from local session logs", { exact: true }),
+  ).toBeVisible();
+});
+
 for (const state of ["collecting", "stale", "expired"] as const) {
   test(`subscription ${state} readings retain their usage and show the next action`, async ({
     page,

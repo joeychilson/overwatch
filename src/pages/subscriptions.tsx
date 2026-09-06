@@ -71,6 +71,7 @@ export default function Subscriptions({ sessions, now }: { sessions: Session[]; 
   const client = useQueryClient();
   const [agent, setAgent] = useState<Agent>("codex");
   const [connect, setConnect] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
   const [historyBucket, setHistoryBucket] = useState<string | null>(null);
   const query = useQuery(accountOptions);
   const refresh = useMutation({
@@ -79,7 +80,11 @@ export default function Subscriptions({ sessions, now }: { sessions: Session[]; 
   });
   const remove = useMutation({
     mutationFn: () => native(commands.saveToken(agent, null)),
-    onSuccess: () => client.invalidateQueries(accountOptions),
+    onSuccess: async () => {
+      await client.invalidateQueries(accountOptions);
+      setRemoveOpen(false);
+      toast.success("Saved connection data removed");
+    },
   });
   const all = useMemo(() => {
     const accounts = query.data?.accounts ?? [];
@@ -167,9 +172,9 @@ export default function Subscriptions({ sessions, now }: { sessions: Session[]; 
               variant="ghost"
               size="icon"
               disabled={busy}
-              aria-label="Remove saved token and readings"
-              title="Remove saved token and readings"
-              onClick={() => remove.mutate()}
+              aria-label="Remove saved connection data"
+              title="Remove saved connection data"
+              onClick={() => setRemoveOpen(true)}
             >
               <Trash2 />
             </Button>
@@ -279,6 +284,26 @@ export default function Subscriptions({ sessions, now }: { sessions: Session[]; 
         description="Secure provider credentials"
       >
         {connect && <TokenForm key={agent} agent={agent} close={() => setConnect(false)} />}
+      </Modal>
+      <Modal
+        open={removeOpen}
+        onOpenChange={setRemoveOpen}
+        title={`Remove ${agents[agent].name} connection data?`}
+        description="This action cannot be undone."
+      >
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          Overwatch will forget any access token it saved for this provider and delete its local
+          allowance history. Provider sign-in files are not changed, so using the existing sign-in
+          later may connect the account again.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" disabled={remove.isPending} onClick={() => setRemoveOpen(false)}>
+            Cancel
+          </Button>
+          <Button variant="destructive" disabled={remove.isPending} onClick={() => remove.mutate()}>
+            {remove.isPending ? "Removing…" : "Remove data"}
+          </Button>
+        </div>
       </Modal>
     </>
   );

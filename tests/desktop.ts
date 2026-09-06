@@ -553,7 +553,16 @@ export async function desktop(
                 }));
                 return state.snapshot;
               case "save_catalog":
+                return null;
               case "save_token":
+                if (args.token == null) {
+                  state.accounts.accounts = state.accounts.accounts.filter(
+                    (account) => account.agent !== args.agent,
+                  );
+                  state.accounts.samples = state.accounts.samples.filter(
+                    (sample) => sample.agent !== args.agent,
+                  );
+                }
                 return null;
               case "export_file":
               case "export_session":
