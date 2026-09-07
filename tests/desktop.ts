@@ -5,6 +5,8 @@ import type {
   Preferences,
   Session,
   SessionEvent,
+  Source,
+  SourcePreview,
   Snapshot,
 } from "../src/lib/bindings";
 import { subDays } from "date-fns";
@@ -481,9 +483,15 @@ export async function desktop(
                 state.preferences = args.preferences as Preferences;
                 return state.preferences;
               case "get_catalog":
+                document.documentElement.dataset.catalogRequests = JSON.stringify([
+                  ...JSON.parse(document.documentElement.dataset.catalogRequests ?? "[]"),
+                  args.request,
+                ]);
                 return {
                   json: JSON.stringify(
-                    options.invalidCatalog && args.request !== "bundled"
+                    options.invalidCatalog &&
+                      args.request !== "bundled" &&
+                      args.request !== "compactbundled"
                       ? {
                           lab: {
                             name: "Broken provider",
@@ -495,7 +503,10 @@ export async function desktop(
                       : catalog,
                   ),
                   updatedAt: now,
-                  source: args.request === "bundled" ? "bundled" : "cached",
+                  source:
+                    args.request === "bundled" || args.request === "compactbundled"
+                      ? "bundled"
+                      : "cached",
                   warning: null,
                 };
               case "get_transcript":
@@ -549,6 +560,41 @@ export async function desktop(
                 emit("accounts-changed");
                 return account;
               }
+              case "preview_source": {
+                const source = args.source as Source;
+                const current = state.snapshot.sources.find(
+                  (status) => status.source.agent === source.agent,
+                )!.source;
+                const changed = current.path !== source.path;
+                return {
+                  current,
+                  source,
+                  sessions: changed
+                    ? state.snapshot.sessions.filter((session) => session.agent === source.agent)
+                        .length
+                    : 0,
+                  allowanceSamples: changed
+                    ? state.accounts.samples.filter((sample) => sample.agent === source.agent)
+                        .length
+                    : 0,
+                  account:
+                    changed &&
+                    state.accounts.accounts.some((account) => account.agent === source.agent),
+                  available: true,
+                  issues: [],
+                };
+              }
+              case "save_source_preview":
+                if (options.failSave)
+                  throw { kind: "io", message: "Fixture settings write failed" };
+                state.snapshot.sources = state.snapshot.sources.map((status) => ({
+                  ...status,
+                  source:
+                    status.source.agent === (args.preview as SourcePreview).source.agent
+                      ? (args.preview as SourcePreview).source
+                      : status.source,
+                }));
+                return null;
               case "save_sources":
                 if (options.failSave)
                   throw { kind: "io", message: "Fixture settings write failed" };

@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, RefreshCw } from "lucide-react";
 import { agents } from "@/lib/agents";
-import { commands, type Source, type SourceStatus } from "@/lib/bindings";
+import { commands, type Source, type SourcePreview, type SourceStatus } from "@/lib/bindings";
 import { native } from "@/lib/errors";
 import { accountOptions, snapshotOptions } from "@/lib/queries";
 import { usePreferences } from "@/lib/hooks/use-preferences";
@@ -11,7 +11,7 @@ import { AgentMark } from "@/lib/components/agent-mark";
 import { Button } from "@/lib/components/ui/button";
 import { Input } from "@/lib/components/ui/input";
 import { Switch } from "@/lib/components/ui/switch";
-import { ErrorNotice, PageTitle, Section } from "@/lib/components/page";
+import { ErrorNotice, Modal, PageTitle, Section } from "@/lib/components/page";
 
 function SourceEditor({
   status,
@@ -125,18 +125,32 @@ export default function Connections({
 }) {
   const client = useQueryClient();
   const preferences = usePreferences();
+  const [pending, setPending] = useState<SourcePreview | null>(null);
   const save = useMutation({
-    mutationFn: (source: Source) =>
-      native(
-        commands.saveSources(
-          sources.map((status) => (status.source.agent === source.agent ? source : status.source)),
-        ),
-      ),
-    onSuccess: () =>
-      Promise.all([
+    mutationFn: (preview: SourcePreview) => native(commands.saveSourcePreview(preview)),
+    onSuccess: async () => {
+      setPending(null);
+      await Promise.all([
         client.invalidateQueries(snapshotOptions),
         client.invalidateQueries(accountOptions),
-      ]),
+      ]);
+    },
+  });
+  const preview = useMutation({
+    mutationFn: (source: Source) => native(commands.previewSource(source)),
+    onSuccess: (result) => {
+      save.reset();
+      if (
+        result.sessions ||
+        result.allowanceSamples ||
+        result.account ||
+        (result.source.enabled && result.issues.length)
+      ) {
+        setPending(result);
+      } else {
+        save.mutate(result);
+      }
+    },
   });
   const refresh = useMutation({
     mutationFn: () => native(commands.refreshIndex()),
@@ -163,8 +177,8 @@ export default function Connections({
             <SourceEditor
               key={`${status.source.agent}:${status.source.path}:${status.source.enabled}`}
               status={status}
-              busy={save.isPending}
-              save={save.mutate}
+              busy={save.isPending || preview.isPending}
+              save={preview.mutate}
               openSubscriptions={openSubscriptions}
             />
           ))}
@@ -201,6 +215,72 @@ export default function Connections({
           read on demand. There is no telemetry or cloud synchronization.
         </p>
       </Section>
+      <Modal
+        open={!!pending}
+        onOpenChange={(open) => {
+          if (!open && !save.isPending) setPending(null);
+        }}
+        title={
+          pending ? `Change ${agents[pending.source.agent].name} folder?` : "Change source folder?"
+        }
+        description="Review this change before saving."
+      >
+        {pending && (
+          <>
+            <dl className="space-y-3 text-xs">
+              <div>
+                <dt className="mb-1 text-muted-foreground">Current folder</dt>
+                <dd className="font-mono break-all">{pending.current.path}</dd>
+              </div>
+              <div>
+                <dt className="mb-1 text-muted-foreground">New folder</dt>
+                <dd className="font-mono break-all">{pending.source.path}</dd>
+              </div>
+            </dl>
+            {(pending.sessions > 0 || pending.allowanceSamples > 0 || pending.account) && (
+              <div className="space-y-2 rounded-lg bg-muted p-4 text-sm">
+                {pending.sessions > 0 && (
+                  <p>
+                    {pending.sessions.toLocaleString()} cached sessions will be replaced by history
+                    from the new folder.
+                  </p>
+                )}
+                {pending.allowanceSamples > 0 && (
+                  <p>
+                    {pending.allowanceSamples.toLocaleString()} saved allowance readings will be
+                    cleared. Rescanning cannot recover these readings.
+                  </p>
+                )}
+                {pending.account && (
+                  <p>The saved account reading will be refreshed from the new folder’s sign-in.</p>
+                )}
+              </div>
+            )}
+            {pending.issues.map((issue) => (
+              <p key={issue} className="text-xs leading-relaxed text-warning">
+                {issue}
+              </p>
+            ))}
+            <p className="text-xs text-muted-foreground">
+              Original history files will stay untouched.
+            </p>
+            {save.error && (
+              <ErrorNotice error={save.error} retry={() => preview.mutate(pending.source)} />
+            )}
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" disabled={save.isPending} onClick={() => setPending(null)}>
+                Cancel
+              </Button>
+              <Button
+                disabled={save.isPending || preview.isPending || !!save.error}
+                onClick={() => save.mutate(pending)}
+              >
+                Change folder
+              </Button>
+            </div>
+          </>
+        )}
+      </Modal>
     </>
   );
 }

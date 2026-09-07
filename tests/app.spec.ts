@@ -215,10 +215,14 @@ test("provider failures keep the last reading and failed source edits keep the d
   await page.getByRole("button", { name: "Connections", exact: true }).click();
   await page.getByRole("textbox", { name: "Codex source folder" }).fill("/new/codex");
   await page.getByRole("button", { name: "Save source", exact: true }).click();
+  await page.getByRole("button", { name: "Change folder", exact: true }).click();
+  await expect(page.getByRole("dialog").getByRole("alert")).toContainText(
+    "Fixture settings write failed",
+  );
+  await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "Codex source folder" })).toHaveValue(
     "/new/codex",
   );
-  await expect(page.getByText("Fixture settings write failed")).toBeVisible();
 });
 test("command search, light theme, source selection and collapsed navigation", async ({ page }) => {
   await desktop(page);
@@ -234,6 +238,7 @@ test("command search, light theme, source selection and collapsed navigation", a
     "/fixtures/chosen",
   );
   await page.getByRole("button", { name: "Save source", exact: true }).click();
+  await page.getByRole("button", { name: "Change folder", exact: true }).click();
   await page.getByRole("button", { name: "Collapse sidebar" }).click();
   await page.getByRole("button", { name: "Overview", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
