@@ -49,6 +49,7 @@ test("match navigation crosses event pages and preserves keyboard focus and Mark
   await page.getByRole("button", { name: "Previous match", exact: true }).click();
   await expect(log.locator('[data-event-index="103"]')).toBeInViewport();
   await search.fill("");
+  await expect(page.getByText("245 events", { exact: true })).toBeVisible();
   const timeline = page.getByRole("slider", { name: "Session activity timeline" });
   await timeline.focus();
   await page.keyboard.press("PageDown");
@@ -57,6 +58,34 @@ test("match navigation crosses event pages and preserves keyboard focus and Mark
   await page.keyboard.press("PageUp");
   await expect(log.locator('[data-event-index="0"]')).toBeFocused();
   expect(errors).toEqual([]);
+});
+
+test("clearing transcript search restores timeline navigation before the debounce settles", async ({
+  page,
+}) => {
+  await page.clock.install({ time: new Date("2026-09-07T12:00:00Z") });
+  await desktop(page, { events });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  await page
+    .locator('[data-row-id="session-0"]')
+    .getByRole("button", { name: sessions[0].title, exact: true })
+    .click();
+  const search = page.getByRole("textbox", { name: "Search the entire transcript…" });
+  await search.fill("result 200");
+  await expect(page.getByText("1 of 1 matching events", { exact: true })).toBeVisible();
+  await page.clock.pauseAt(new Date("2026-09-07T12:01:00Z"));
+  await search.fill("");
+  await expect(page.getByText("245 events", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Next match", exact: true })).toHaveCount(0);
+  await page.clock.resume();
+  const timeline = page.getByRole("slider", { name: "Session activity timeline" });
+  await timeline.press("PageDown");
+  const target = page
+    .getByRole("region", { name: "Session conversation" })
+    .locator('[data-event-index="100"]');
+  await expect(target).toBeFocused();
+  await expect(target).toBeInViewport();
 });
 
 test("expanded tool input and results highlight and copy the original payload", async ({

@@ -41,7 +41,9 @@ export function SessionReader({
   const [match, setMatch] = useState(0);
   const [titleExpanded, setTitleExpanded] = useState(false);
   const [position, setPosition] = useState({ index: savedPosition, focus: false });
-  const deferred = useDebounced(search);
+  const debouncedSearch = useDebounced(search);
+  // Clear immediately so a pending debounce cannot remount the log after a timeline jump.
+  const deferred = search ? debouncedSearch : "";
   const log = useRef<SessionLogHandle>(null);
   const transcript = useQuery({
     queryKey: ["transcript", id],
