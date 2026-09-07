@@ -32,6 +32,7 @@ rusqlite = { version = "0.38", features = ["bundled", "functions"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 walkdir = "2"
+notify = "8.2"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 tokio = { version = "1", features = ["sync", "time"] }
 sha2 = "0.10"

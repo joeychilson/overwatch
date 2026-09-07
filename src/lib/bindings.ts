@@ -12,8 +12,6 @@ export const commands = {
 	getToolStats: (scope: HistoryScope) => typedError<ToolStats[], AppError>(__TAURI_INVOKE("get_tool_stats", { scope })),
 	getLogAllowances: () => typedError<QuotaSample[], AppError>(__TAURI_INVOKE("get_log_allowances")),
 	refreshHistory: () => typedError<HistoryStatus, AppError>(__TAURI_INVOKE("refresh_history")),
-	getSnapshot: () => typedError<Snapshot, AppError>(__TAURI_INVOKE("get_snapshot")),
-	refreshIndex: () => typedError<Snapshot, AppError>(__TAURI_INVOKE("refresh_index")),
 	getTranscript: (id: string) => typedError<Transcript, AppError>(__TAURI_INVOKE("get_transcript", { id })),
 	openSessionSource: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("open_session_source", { id })),
 	getEvents: (id: string, offset: number, search: string) => typedError<EventPage, AppError>(__TAURI_INVOKE("get_events", { id, offset, search })),
@@ -118,7 +116,10 @@ export type HistoryStatus = {
 	offerings: string[],
 };
 
-export type IndexChanged = null;
+export type IndexChanged = {
+	sessions: string[] | null,
+	progress: boolean,
+};
 
 export type Preferences = {
 	theme: Theme,
@@ -218,12 +219,6 @@ export type SessionQuery = {
 };
 
 export type SessionSort = "title" | "project" | "tokens" | "duration" | "responses" | "updatedAt";
-
-export type Snapshot = {
-	sessions: Session[],
-	sources: SourceStatus[],
-	scanning: boolean,
-};
 
 export type Source = {
 	agent: Agent,

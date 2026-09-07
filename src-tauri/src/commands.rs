@@ -81,30 +81,10 @@ pub async fn refresh_history(
         index.history_status()
     })
     .await?;
-    IndexChanged
+    IndexChanged::default()
         .emit(&app)
         .map_err(|error| AppError::Internal(error.to_string()))?;
     Ok(status)
-}
-#[tauri::command]
-#[specta::specta]
-pub async fn get_snapshot(index: State<'_, Arc<Index>>) -> Result<Snapshot> {
-    let index = Arc::clone(&index);
-    blocking(move || index.snapshot()).await
-}
-#[tauri::command]
-#[specta::specta]
-pub async fn refresh_index(index: State<'_, Arc<Index>>, app: AppHandle) -> Result<Snapshot> {
-    let index = Arc::clone(&index);
-    let snapshot = blocking(move || {
-        index.scan()?;
-        index.snapshot()
-    })
-    .await?;
-    IndexChanged
-        .emit(&app)
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    Ok(snapshot)
 }
 #[tauri::command]
 #[specta::specta]
@@ -161,7 +141,7 @@ pub async fn save_source_preview(
         Ok(())
     })
     .await?;
-    let _ = IndexChanged.emit(&app);
+    let _ = IndexChanged::default().emit(&app);
     let _ = AccountsChanged.emit(&app);
     Ok(())
 }
@@ -175,7 +155,7 @@ pub async fn save_sources(
     let index = Arc::clone(&index);
     blocking(move || {
         index.set_sources(sources)?;
-        // Saving is atomic. A later scan failure is exposed by get_snapshot,
+        // Saving is atomic. A later scan failure is exposed by get_history_status,
         // not reported as a failed settings change after it has committed.
         if let Err(error) = index.scan() {
             eprintln!("Index scan failed after saving sources: {error}");
@@ -183,7 +163,7 @@ pub async fn save_sources(
         Ok(())
     })
     .await?;
-    if let Err(error) = IndexChanged.emit(&app) {
+    if let Err(error) = IndexChanged::default().emit(&app) {
         eprintln!("Index notification failed after saving sources: {error}");
     }
     if let Err(error) = AccountsChanged.emit(&app) {
@@ -332,8 +312,6 @@ pub fn bindings() -> tauri_specta::Builder<tauri::Wry> {
             get_tool_stats,
             get_log_allowances,
             refresh_history,
-            get_snapshot,
-            refresh_index,
             get_transcript,
             open_session_source,
             get_events,

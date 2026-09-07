@@ -7,10 +7,12 @@ import type {
   SessionEvent,
   Source,
   SourcePreview,
-  Snapshot,
+  SourceStatus,
 } from "../src/lib/bindings";
 import { historyFixture } from "./history-fixture";
 import { subDays } from "date-fns";
+
+export type Snapshot = { sessions: Session[]; sources: SourceStatus[]; scanning: boolean };
 
 export async function captureRuntimeErrors(page: Page) {
   await page.addInitScript(() => {
@@ -456,10 +458,13 @@ export async function desktop(
       const callbacks = new Map<number, (value: unknown) => void>();
       let sequence = 0;
       const listeners = new Map<string, number[]>();
-      const emit = (event: string) => {
+      const emit = (event: string, payload: unknown = { sessions: null, progress: false }) => {
         for (const callback of listeners.get(event) ?? [])
-          callbacks.get(callback)?.({ event, payload: null });
+          callbacks.get(callback)?.({ event, payload });
       };
+      window.addEventListener("fixture-index-change", (event) =>
+        emit("index-changed", (event as CustomEvent).detail),
+      );
       Object.defineProperty(window, "isTauri", { value: true });
       Object.defineProperty(window, "__TAURI_EVENT_PLUGIN_INTERNALS__", {
         value: { unregisterListener: () => {} },
@@ -502,12 +507,6 @@ export async function desktop(
               return result;
             }
             switch (command) {
-              case "get_snapshot":
-                return structuredClone(state.snapshot);
-              case "refresh_index":
-                if (options.failRefresh) throw { kind: "io", message: "Fixture disk read failed" };
-                if (options.cachedSummaryIssue) state.snapshot.sources[0].issues = [];
-                return structuredClone(state.snapshot);
               case "get_preferences":
                 return state.preferences;
               case "save_preferences":
@@ -541,6 +540,9 @@ export async function desktop(
                   warning: null,
                 };
               case "get_transcript":
+                document.documentElement.dataset.transcriptRequests = String(
+                  Number(document.documentElement.dataset.transcriptRequests ?? 0) + 1,
+                );
                 return {
                   session: state.snapshot.sessions.find((session) => session.id === args.id),
                   timeline: recorded.map((event, index) => ({
@@ -632,7 +634,7 @@ export async function desktop(
                 state.snapshot.sources = state.snapshot.sources.map((status) => ({
                   ...status,
                   source:
-                    (args.sources as Snapshot["sources"][number]["source"][]).find(
+                    (args.sources as Source[]).find(
                       (source) => source.agent === status.source.agent,
                     ) ?? status.source,
                 }));
@@ -667,6 +669,10 @@ export async function desktop(
                 return args.handler;
               }
               case "plugin:event|unlisten":
+                listeners.set(
+                  String(args.event),
+                  (listeners.get(String(args.event)) ?? []).filter((id) => id !== args.eventId),
+                );
                 return null;
               default:
                 throw new Error(`Unhandled fixture command: ${command}`);

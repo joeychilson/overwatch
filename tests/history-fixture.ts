@@ -1,5 +1,5 @@
+import type { Snapshot } from "./desktop";
 import type {
-  Snapshot,
   HistoryScope,
   SessionQuery,
   Session,

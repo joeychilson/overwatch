@@ -313,7 +313,10 @@ pub enum CatalogRequest {
     CompactBundled,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
-pub struct IndexChanged;
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type, tauri_specta::Event)]
+pub struct IndexChanged {
+    pub sessions: Option<Vec<String>>,
+    pub progress: bool,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
 pub struct AccountsChanged;

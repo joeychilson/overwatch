@@ -16,18 +16,15 @@ export function useNativeEvents() {
         .invalidateQueries({ queryKey, refetchType: document.hidden ? "none" : "active" })
         .catch((error: unknown) => toast.error(failure(error).message));
     const subscriptions = [
-      events.indexChanged.listen(() => {
-        for (const key of [
-          "history",
-          "sessions",
-          "session-navigation",
-          "usage",
-          "tools",
-          "log-allowances",
-        ])
+      events.indexChanged.listen(({ payload }) => {
+        void invalidate(["history"]);
+        if (payload.progress) return;
+        for (const key of ["sessions", "session-navigation", "usage", "tools", "log-allowances"])
           void invalidate([key]);
-        void invalidate(["transcript"]);
-        void invalidate(["events"]);
+        for (const key of ["transcript", "events"]) {
+          if (payload.sessions === null) void invalidate([key]);
+          else for (const id of payload.sessions) void invalidate([key, id]);
+        }
       }),
       events.accountsChanged.listen(() => {
         void invalidate(["accounts"]);

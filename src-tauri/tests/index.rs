@@ -54,7 +54,7 @@ fn opencode_indexes_multiple_batches_and_reconciles_live_updates()
         "UPDATE session_v2 SET title='Changed',time_updated=time_updated+1000 WHERE id='s65';
         DELETE FROM session_v2 WHERE id='s1';",
     )?;
-    assert!(index.scan()?);
+    assert!(index.scan_paths(&[root.path().join("opencode.db-wal")].into())?);
     let snapshot = index.snapshot()?;
     assert_eq!(snapshot.sessions.len(), 64);
     assert_eq!(snapshot.sessions[0].title, "Changed");
@@ -178,7 +178,7 @@ fn grok_summary_changes_refresh_an_open_transcript() -> Result<(), Box<dyn std::
     let id = index.snapshot()?.sessions[0].id.clone();
     assert_eq!(index.transcript(&id)?.session.title, "Original");
     std::fs::write(&summary, r#"{"generated_title":"Updated title"}"#)?;
-    assert!(index.scan()?);
+    assert!(index.scan_paths(&[summary].into())?);
     assert_eq!(index.snapshot()?.sessions[0].title, "Updated title");
     assert_eq!(index.transcript(&id)?.session.title, "Updated title");
     assert!(!index.scan()?);
@@ -350,5 +350,147 @@ fn unreadable_cached_summary_keeps_other_sessions_and_recovers_without_source_ch
     );
     assert_eq!(std::fs::read(&damaged.source_path)?, source_bytes);
     assert!(!index.scan()?);
+    Ok(())
+}
+
+#[test]
+fn incremental_scans_isolate_paths_and_reconcile_missed_events()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let directory = root.path().join("history");
+    std::fs::create_dir_all(directory.join("sessions"))?;
+    let a = directory.join("sessions/a.jsonl");
+    let b = directory.join("sessions/b.jsonl");
+    let message = |text: &str| {
+        format!(
+            "{}\n",
+            json!({"type":"message","message":{"role":"user","content":text}})
+        )
+    };
+    std::fs::write(&a, message("First A"))?;
+    std::fs::write(&b, message("First B"))?;
+    let sources: Vec<_> = Agent::ALL
+        .into_iter()
+        .map(|agent| Source {
+            agent,
+            path: directory.to_string_lossy().into_owned(),
+            enabled: agent == Agent::Pi,
+        })
+        .collect();
+    let index = std::sync::Arc::new(Index::open(root.path().join("index"), sources.clone())?);
+    let progress_index = std::sync::Arc::downgrade(&index);
+    index.set_progress_handler(std::sync::Arc::new(move || {
+        // Progress callbacks can query committed rows without locking the writer.
+        let index = progress_index.upgrade().unwrap();
+        assert!(index.history_status().is_ok());
+        assert!(index.scanning.load(std::sync::atomic::Ordering::Relaxed));
+    }))?;
+    index.scan()?;
+    index.take_changes(false)?;
+    let a_id = index
+        .snapshot()?
+        .sessions
+        .iter()
+        .find(|s| s.title == "First A")
+        .unwrap()
+        .id
+        .clone();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&a)?
+        .write_all(message("Second A").as_bytes())?;
+    // Change B without notifying the index. Its cache must stay untouched.
+    std::fs::write(&b, message("Replacement B"))?;
+    assert!(index.scan_paths(&[a.clone()].into())?);
+    let snapshot = index.snapshot()?;
+    assert_eq!(
+        snapshot
+            .sessions
+            .iter()
+            .find(|s| s.id == a_id)
+            .unwrap()
+            .messages,
+        2
+    );
+    assert!(snapshot.sessions.iter().any(|s| s.title == "First B"));
+    assert_eq!(
+        index.take_changes(false)?.sessions,
+        Some(vec![a_id.clone()])
+    );
+    assert!(!index.scan_paths(&[directory.join("irrelevant.json")].into())?);
+    assert!(index.scan()?);
+    assert!(
+        index
+            .snapshot()?
+            .sessions
+            .iter()
+            .any(|s| s.title == "Replacement B")
+    );
+    // Truncation, rename and deletion affect only the named paths.
+    std::fs::write(&a, message("Truncated A"))?;
+    index.scan_paths(&[a.clone()].into())?;
+    assert_eq!(index.transcript(&a_id)?.session.messages, 1);
+    let moved = directory.join("sessions/moved.jsonl");
+    std::fs::rename(&a, &moved)?;
+    index.scan_paths(&[a, moved.clone()].into())?;
+    assert_eq!(index.snapshot()?.sessions.len(), 2);
+    std::fs::remove_file(&moved)?;
+    index.scan_paths(&[moved].into())?;
+    assert_eq!(index.snapshot()?.sessions.len(), 1);
+    // Unavailable roots preserve history; recreation discovers the replacement.
+    let offline = root.path().join("offline");
+    std::fs::rename(&directory, &offline)?;
+    index.scan_paths(&[directory.clone()].into())?;
+    assert_eq!(index.snapshot()?.sessions.len(), 1);
+    std::fs::rename(&offline, &directory)?;
+    assert!(index.scan_paths(&[directory.clone()].into())?);
+    let disabled = sources
+        .into_iter()
+        .map(|mut s| {
+            s.enabled = false;
+            s
+        })
+        .collect();
+    index.set_sources(disabled)?;
+    assert!(!index.scan_paths(&[b].into())?);
+    assert!(index.snapshot()?.sessions.is_empty());
+    Ok(())
+}
+
+#[test]
+fn codex_archive_moves_keep_one_session_and_targeted_change()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let directory = root.path().join("history");
+    std::fs::create_dir_all(directory.join("sessions"))?;
+    std::fs::create_dir_all(directory.join("archived_sessions"))?;
+    let active = directory.join("sessions/test.jsonl");
+    std::fs::write(
+        &active,
+        format!(
+            "{}\n",
+            json!({"type":"session_meta","payload":{"id":"archive-test","cwd":"/project"}})
+        ),
+    )?;
+    let sources = Agent::ALL
+        .into_iter()
+        .map(|agent| Source {
+            agent,
+            path: directory.to_string_lossy().into_owned(),
+            enabled: agent == Agent::Codex,
+        })
+        .collect();
+    let index = Index::open(root.path().join("index"), sources)?;
+    index.scan()?;
+    index.take_changes(false)?;
+    let archived = directory.join("archived_sessions/test.jsonl");
+    std::fs::rename(&active, &archived)?;
+    assert!(index.scan_paths(&[active, archived.clone()].into())?);
+    assert_eq!(index.snapshot()?.sessions.len(), 1);
+    assert_eq!(index.source_path("codex:archive-test")?, archived);
+    assert_eq!(
+        index.take_changes(false)?.sessions,
+        Some(vec!["codex:archive-test".into()])
+    );
     Ok(())
 }

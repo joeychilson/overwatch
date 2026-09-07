@@ -10,7 +10,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -25,6 +25,9 @@ pub struct Index {
     pub scanning: AtomicBool,
     scan_error: Mutex<Option<AppError>>,
     invalid_summaries: Mutex<HashSet<String>>,
+    changed_ids: Mutex<Option<HashSet<String>>>,
+    progress: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    last_progress: Mutex<std::time::Instant>,
 }
 struct Reader {
     source: String,
@@ -119,6 +122,86 @@ fn split_opencode_source(source: &str) -> Result<(&str, &str)> {
         .rsplit_once('#')
         .ok_or_else(|| AppError::InvalidData("Invalid OpenCode source".into()))
 }
+pub(crate) fn history_folders(agent: Agent) -> &'static [&'static str] {
+    match agent {
+        Agent::Codex => &["sessions", "archived_sessions"],
+        Agent::Claude => &["projects"],
+        Agent::Opencode | Agent::Antigravity => &[],
+        _ => &["sessions"],
+    }
+}
+fn collapse_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    paths.sort();
+    paths.dedup();
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for path in paths {
+        if !roots.iter().any(|root| path.starts_with(root)) {
+            roots.push(path);
+        }
+    }
+    roots
+}
+fn changed_targets(source: &Source, paths: &HashSet<PathBuf>) -> Vec<PathBuf> {
+    if !source.enabled || source.agent == Agent::Antigravity {
+        return vec![];
+    }
+    let root = Path::new(&source.path);
+    // FSEvents reports physical paths (e.g. /private/tmp), while a configured
+    // source can use an alias or symlink. Keep cache keys in configured form.
+    let resolved = resolved_path(root);
+    let mut selected = Vec::new();
+    for path in paths {
+        let mapped = if resolved.starts_with(path) {
+            root.to_path_buf()
+        } else if let Ok(suffix) = path.strip_prefix(&resolved) {
+            root.join(suffix)
+        } else {
+            path.clone()
+        };
+        let path = &mapped;
+        if root.starts_with(path) {
+            selected.push(root.to_path_buf());
+            continue;
+        }
+        if source.agent == Agent::Opencode {
+            if path.parent() == Some(root)
+                && path.file_name().is_some_and(|name| {
+                    matches!(
+                        name.to_str(),
+                        Some("opencode.db" | "opencode.db-wal" | "opencode.db-shm")
+                    )
+                })
+            {
+                selected.push(root.join("opencode.db"));
+            }
+            continue;
+        }
+        if history_folders(source.agent)
+            .iter()
+            .any(|folder| path.starts_with(root.join(folder)))
+        {
+            selected.push(
+                if source.agent == Agent::Grok
+                    && path.file_name().is_some_and(|name| name == "summary.json")
+                {
+                    path.with_file_name("updates.jsonl")
+                } else {
+                    path.clone()
+                },
+            );
+        }
+    }
+    collapse_paths(selected)
+}
+fn resolved_path(path: &Path) -> PathBuf {
+    if let Ok(resolved) = path.canonicalize() {
+        return resolved;
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => resolved_path(parent).join(name),
+        _ => path.to_path_buf(),
+    }
+}
 impl Index {
     pub fn open(directory: PathBuf, sources: Vec<Source>) -> Result<Self> {
         validate_sources(&sources)?;
@@ -150,6 +233,9 @@ impl Index {
             scanning: AtomicBool::new(false),
             scan_error: Mutex::new(None),
             invalid_summaries: Mutex::new(invalid.into_iter().collect()),
+            changed_ids: Mutex::new(Some(HashSet::new())),
+            progress: Mutex::new(None),
+            last_progress: Mutex::new(std::time::Instant::now()),
         })
     }
     pub fn sources(&self) -> Result<Vec<Source>> {
@@ -225,6 +311,7 @@ impl Index {
             }
         }
         tx.commit()?;
+        *self.changed_ids.lock()? = None;
         *statuses = sources
             .into_iter()
             .map(|source| SourceStatus {
@@ -313,13 +400,19 @@ impl Index {
         crate::queries::status(self, sources, self.scanning.load(Ordering::Relaxed))
     }
     pub fn scan(&self) -> Result<bool> {
-        let result = self.scan_files();
+        self.scan_selected(None)
+    }
+    pub fn scan_paths(&self, paths: &HashSet<PathBuf>) -> Result<bool> {
+        self.scan_selected(Some(paths))
+    }
+    fn scan_selected(&self, paths: Option<&HashSet<PathBuf>>) -> Result<bool> {
+        let result = self.scan_files(paths);
         let mut error = self.scan_error.lock()?;
         let recovered = error.is_some() && result.is_ok();
         *error = result.as_ref().err().cloned();
         result.map(|changed| changed || recovered)
     }
-    fn scan_files(&self) -> Result<bool> {
+    fn scan_files(&self, paths: Option<&HashSet<PathBuf>>) -> Result<bool> {
         let mut cursors = self.cursors.lock()?;
         self.scanning.store(true, Ordering::Relaxed);
         struct Reset<'a>(&'a AtomicBool);
@@ -329,7 +422,12 @@ impl Index {
             }
         }
         let _reset = Reset(&self.scanning);
-        let sources = self.sources()?;
+        self.publish_progress(true)?;
+        let previous_statuses = self.sources.lock()?.clone();
+        let sources: Vec<_> = previous_statuses
+            .iter()
+            .map(|status| status.source.clone())
+            .collect();
         let invalid = self.invalid_summaries.lock()?.clone();
         for key in &invalid {
             cursors.remove(key);
@@ -346,13 +444,45 @@ impl Index {
         let mut pending = Vec::new();
         let mut retained = HashSet::new();
         for source in sources {
+            let mut targets = paths.map(|paths| changed_targets(&source, paths));
+            if targets.as_ref().is_some_and(Vec::is_empty) {
+                if let Some(previous) = previous_statuses
+                    .iter()
+                    .find(|status| status.source.agent == source.agent)
+                {
+                    statuses.push(previous.clone());
+                }
+                continue;
+            }
+            // An earlier discovery/read failure may concern another file. Reconcile
+            // this source before clearing its warning or deleting cached rows.
+            if previous_statuses
+                .iter()
+                .any(|status| status.source.agent == source.agent && !status.issues.is_empty())
+            {
+                targets = None;
+            }
             let mut status = SourceStatus {
                 available: Path::new(&source.path).is_dir(),
                 source,
                 sessions: 0,
                 issues: vec![],
             };
-            let mut found = HashSet::new();
+            let mut found: HashSet<String> = targets
+                .as_ref()
+                .filter(|_| status.source.agent != Agent::Opencode)
+                .map(|targets| {
+                    stamps
+                        .keys()
+                        .filter(|key| {
+                            !targets
+                                .iter()
+                                .any(|target| Path::new(key).starts_with(target))
+                        })
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
             if status.available && status.source.enabled {
                 let root = Path::new(&status.source.path);
                 if status.source.agent == Agent::Opencode {
@@ -388,11 +518,7 @@ impl Index {
                         ));
                     }
                 } else if status.source.agent != Agent::Antigravity {
-                    let folders: &[&str] = match status.source.agent {
-                        Agent::Codex => &["sessions", "archived_sessions"],
-                        Agent::Claude => &["projects"],
-                        _ => &["sessions"],
-                    };
+                    let folders = history_folders(status.source.agent);
                     let mut recognized = false;
                     for folder in folders {
                         let directory = root.join(folder);
@@ -400,53 +526,83 @@ impl Index {
                             continue;
                         }
                         recognized = true;
-                        for entry in WalkDir::new(directory).follow_links(false) {
-                            let entry = match entry {
-                                Ok(entry) => entry,
+                        let roots = targets
+                            .as_ref()
+                            .map(|targets| {
+                                targets
+                                    .iter()
+                                    .filter_map(|target| {
+                                        if directory.starts_with(target) {
+                                            Some(directory.clone())
+                                        } else if target.starts_with(&directory) {
+                                            Some(target.clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_else(|| vec![directory]);
+                        for scan_root in collapse_paths(roots) {
+                            match scan_root.try_exists() {
+                                Ok(false) => continue,
                                 Err(error) => {
                                     status.issues.push(error.to_string());
                                     continue;
                                 }
-                            };
-                            if !entry.file_type().is_file()
-                                || entry.path().extension().is_none_or(|ext| ext != "jsonl")
-                                || (status.source.agent == Agent::Grok
-                                    && entry.file_name() != "updates.jsonl")
-                            {
-                                continue;
+                                Ok(true) => {}
                             }
-                            let key = entry.path().to_string_lossy().into_owned();
-                            found.insert(key.clone());
-                            let result = (|| -> Result<()> {
-                                let current = history_stamp(status.source.agent, entry.path())?;
-                                if stamps.get(&key) == Some(&current) && !invalid.contains(&key) {
-                                    return Ok(());
-                                }
-                                let cursor = cursors.entry(key.clone()).or_insert_with(|| {
-                                    Cursor::new(status.source.agent, entry.path(), false)
-                                });
-                                cursor.read(entry.path())?;
-                                pending.push((key.clone(), current, cursor.summary()));
-                                retained.insert(key.clone());
-                                if cursors.len() > 32 {
-                                    let oldest = cursors
-                                        .iter()
-                                        .min_by_key(|(_, cursor)| cursor.data.session.updated_at)
-                                        .map(|(key, _)| key.clone());
-                                    if let Some(oldest) = oldest {
-                                        cursors.remove(&oldest);
+                            for entry in WalkDir::new(scan_root).follow_links(false) {
+                                let entry = match entry {
+                                    Ok(entry) => entry,
+                                    Err(error) => {
+                                        status.issues.push(error.to_string());
+                                        continue;
                                     }
+                                };
+                                if !entry.file_type().is_file()
+                                    || entry.path().extension().is_none_or(|ext| ext != "jsonl")
+                                    || (status.source.agent == Agent::Grok
+                                        && entry.file_name() != "updates.jsonl")
+                                {
+                                    continue;
                                 }
-                                Ok(())
-                            })();
-                            if let Err(error) = result {
-                                status
-                                    .issues
-                                    .push(format!("{}: {error}", entry.path().display()));
-                            }
-                            if pending.len() >= 32 {
-                                self.commit(&mut pending)?;
-                                changed = true;
+                                let key = entry.path().to_string_lossy().into_owned();
+                                found.insert(key.clone());
+                                let result = (|| -> Result<()> {
+                                    let current = history_stamp(status.source.agent, entry.path())?;
+                                    if stamps.get(&key) == Some(&current) && !invalid.contains(&key)
+                                    {
+                                        return Ok(());
+                                    }
+                                    let cursor = cursors.entry(key.clone()).or_insert_with(|| {
+                                        Cursor::new(status.source.agent, entry.path(), false)
+                                    });
+                                    cursor.read(entry.path())?;
+                                    pending.push((key.clone(), current, cursor.summary()));
+                                    retained.insert(key.clone());
+                                    if cursors.len() > 32 {
+                                        let oldest = cursors
+                                            .iter()
+                                            .min_by_key(|(_, cursor)| {
+                                                cursor.data.session.updated_at
+                                            })
+                                            .map(|(key, _)| key.clone());
+                                        if let Some(oldest) = oldest {
+                                            cursors.remove(&oldest);
+                                        }
+                                    }
+                                    Ok(())
+                                })();
+                                if let Err(error) = result {
+                                    status
+                                        .issues
+                                        .push(format!("{}: {error}", entry.path().display()));
+                                }
+                                if pending.len() >= 32 {
+                                    self.commit(&mut pending)?;
+                                    changed = true;
+                                }
                             }
                         }
                     }
@@ -460,13 +616,16 @@ impl Index {
                 }
                 if status.issues.is_empty() {
                     let db = self.db.lock()?;
-                    let mut query = db.prepare("SELECT source FROM sessions WHERE agent=?1")?;
+                    let mut query = db.prepare("SELECT source,id FROM sessions WHERE agent=?1")?;
                     let previous = query
-                        .query_map([status.source.agent.id()], |r| r.get::<_, String>(0))?
+                        .query_map([status.source.agent.id()], |r| {
+                            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                        })?
                         .collect::<std::result::Result<Vec<_>, _>>()?;
-                    for key in previous.into_iter().filter(|key| !found.contains(key)) {
+                    for (key, id) in previous.into_iter().filter(|(key, _)| !found.contains(key)) {
                         db.execute("DELETE FROM sessions WHERE source=?1", [&key])?;
                         cursors.remove(&key);
+                        self.note_changed(&id)?;
                         changed = true;
                     }
                 }
@@ -493,17 +652,31 @@ impl Index {
             }
         }
         let mut previous = self.sources.lock()?;
-        changed |= previous
+        let status_changed = previous
             .iter()
             .zip(&statuses)
             .any(|(a, b)| a.available != b.available || a.issues != b.issues);
+        changed |= status_changed;
+        if status_changed {
+            *self.changed_ids.lock()? = None;
+        }
         *previous = statuses;
         Ok(changed)
     }
     fn commit(&self, pending: &mut Vec<(String, String, Session)>) -> Result<()> {
         let mut db = self.db.lock()?;
         let tx = db.transaction()?;
+        let mut changed_ids = HashSet::new();
         for (source, stamp, session) in pending.iter() {
+            if let Some(id) = tx
+                .query_row("SELECT id FROM sessions WHERE source=?1", [source], |row| {
+                    row.get::<_, String>(0)
+                })
+                .optional()?
+            {
+                changed_ids.insert(id);
+            }
+            changed_ids.insert(session.id.clone());
             tx.prepare_cached("INSERT OR REPLACE INTO sessions VALUES(?1,?2,?3,?4,?5,?6)")?
                 .execute(params![
                     source,
@@ -521,7 +694,48 @@ impl Index {
             invalid.remove(source);
         }
         pending.clear();
+        drop(invalid);
+        drop(db);
+        for id in changed_ids {
+            self.note_changed(&id)?;
+        }
+        self.publish_progress(false)?;
         Ok(())
+    }
+    pub fn set_progress_handler(&self, handler: Arc<dyn Fn() + Send + Sync>) -> Result<()> {
+        *self.progress.lock()? = Some(handler);
+        Ok(())
+    }
+    fn publish_progress(&self, force: bool) -> Result<()> {
+        let mut previous = self.last_progress.lock()?;
+        if force || previous.elapsed() >= std::time::Duration::from_secs(1) {
+            *previous = std::time::Instant::now();
+            let callback = self.progress.lock()?.clone();
+            if let Some(callback) = callback {
+                callback();
+            }
+        }
+        Ok(())
+    }
+    fn note_changed(&self, id: &str) -> Result<()> {
+        let mut changed = self.changed_ids.lock()?;
+        if let Some(ids) = changed.as_mut() {
+            ids.insert(id.to_string());
+            if ids.len() > 128 {
+                *changed = None;
+            }
+        }
+        Ok(())
+    }
+    pub fn take_changes(&self, progress: bool) -> Result<IndexChanged> {
+        let mut changed = self.changed_ids.lock()?;
+        let sessions = changed.take().map(|ids| {
+            let mut ids: Vec<_> = ids.into_iter().collect();
+            ids.sort();
+            ids
+        });
+        *changed = Some(HashSet::new());
+        Ok(IndexChanged { sessions, progress })
     }
     fn indexed_source(&self, id: &str) -> Result<(Agent, String, String)> {
         let (agent, source, stamp): (String, String, String) = {

@@ -62,3 +62,56 @@ test("session pages keep full-scope sorting, navigation and export", async ({ pa
       .every((request: { args: { query: { limit: number } } }) => request.args.query.limit <= 50),
   ).toBe(true);
 });
+
+test("history events refresh only the affected reader", async ({ page }) => {
+  await desktop(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  await page
+    .locator('[data-row-id="session-0"]')
+    .getByRole("button", { name: sessions[0].title, exact: true })
+    .click();
+  await expect(page.getByRole("heading", { name: sessions[0].title, exact: true })).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-transcript-requests", "1");
+  await page.evaluate(() =>
+    window.dispatchEvent(
+      new CustomEvent("fixture-index-change", {
+        detail: { sessions: ["session-12"], progress: false },
+      }),
+    ),
+  );
+  // Wait for the scope refresh to finish, ensuring the event was processed.
+  await expect
+    .poll(
+      async () =>
+        JSON.parse(
+          (await page.locator("html").getAttribute("data-history-requests")) ?? "[]",
+        ).filter((r: { command: string }) => r.command === "get_history_status").length,
+    )
+    .toBeGreaterThan(1);
+  await expect(page.locator("html")).toHaveAttribute("data-transcript-requests", "1");
+  await page.evaluate(() =>
+    window.dispatchEvent(
+      new CustomEvent("fixture-index-change", {
+        detail: { sessions: ["session-0"], progress: true },
+      }),
+    ),
+  );
+  await expect(page.locator("html")).toHaveAttribute("data-transcript-requests", "1");
+  await page.evaluate(() =>
+    window.dispatchEvent(
+      new CustomEvent("fixture-index-change", {
+        detail: { sessions: ["session-0"], progress: false },
+      }),
+    ),
+  );
+  await expect(page.locator("html")).toHaveAttribute("data-transcript-requests", "2");
+  await page.evaluate(() =>
+    window.dispatchEvent(
+      new CustomEvent("fixture-index-change", {
+        detail: { sessions: null, progress: false },
+      }),
+    ),
+  );
+  await expect(page.locator("html")).toHaveAttribute("data-transcript-requests", "3");
+});

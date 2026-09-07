@@ -2,7 +2,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { bench, describe } from "vite-plus/test";
-import type { Snapshot } from "../bindings";
+import type { Session } from "../bindings";
+type Snapshot = { sessions: Session[] };
 import { parseCatalog } from "../models/catalog";
 import { aggregate } from "./analytics";
 
