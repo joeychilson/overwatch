@@ -160,11 +160,58 @@ impl Index {
             .collect())
     }
     pub fn set_sources(&self, sources: Vec<Source>) -> Result<()> {
+        self.replace_sources(sources, None)
+    }
+    pub fn preview_source(&self, source: Source) -> Result<SourcePreview> {
+        let statuses = self.sources.lock()?;
+        crate::sources::preview(&*self.db.lock()?, &statuses, source)
+    }
+    pub fn save_source_preview(&self, preview: SourcePreview) -> Result<()> {
+        self.replace_sources(vec![], Some(preview))
+    }
+    fn replace_sources(
+        &self,
+        mut sources: Vec<Source>,
+        preview: Option<SourcePreview>,
+    ) -> Result<()> {
+        if let Some(preview) = &preview {
+            sources = self
+                .sources()?
+                .into_iter()
+                .map(|source| {
+                    if source.agent == preview.source.agent {
+                        preview.source.clone()
+                    } else {
+                        source
+                    }
+                })
+                .collect();
+        }
         validate_sources(&sources)?;
         let _scan = self.cursors.lock()?;
         let mut statuses = self.sources.lock()?;
         let mut db = self.db.lock()?;
         let tx = db.transaction()?;
+        if let Some(preview) = &preview {
+            let current = crate::sources::preview(&tx, &statuses, preview.source.clone())?;
+            if current != *preview {
+                return Err(AppError::InvalidData(
+                    "Source settings or cached history changed. Review the source change again."
+                        .into(),
+                ));
+            }
+            // Preserve other agents if their configuration changed while this preview was open.
+            sources = statuses
+                .iter()
+                .map(|status| {
+                    if status.source.agent == preview.source.agent {
+                        preview.source.clone()
+                    } else {
+                        status.source.clone()
+                    }
+                })
+                .collect();
+        }
         settings::write(&tx, "sources", &sources)?;
         for source in &sources {
             if statuses

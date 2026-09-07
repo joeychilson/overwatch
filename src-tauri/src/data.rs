@@ -151,6 +151,18 @@ pub struct SourceStatus {
     pub issues: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SourcePreview {
+    pub current: Source,
+    pub source: Source,
+    pub sessions: u32,
+    pub allowance_samples: u32,
+    pub account: bool,
+    pub available: bool,
+    pub issues: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {

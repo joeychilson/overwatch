@@ -74,6 +74,32 @@ pub async fn get_events(
 }
 #[tauri::command]
 #[specta::specta]
+pub async fn preview_source(index: State<'_, Arc<Index>>, source: Source) -> Result<SourcePreview> {
+    let index = Arc::clone(&index);
+    blocking(move || index.preview_source(source)).await
+}
+#[tauri::command]
+#[specta::specta]
+pub async fn save_source_preview(
+    index: State<'_, Arc<Index>>,
+    app: AppHandle,
+    preview: SourcePreview,
+) -> Result<()> {
+    let index = Arc::clone(&index);
+    blocking(move || {
+        index.save_source_preview(preview)?;
+        if let Err(error) = index.scan() {
+            eprintln!("Index scan failed after saving sources: {error}");
+        }
+        Ok(())
+    })
+    .await?;
+    let _ = IndexChanged.emit(&app);
+    let _ = AccountsChanged.emit(&app);
+    Ok(())
+}
+#[tauri::command]
+#[specta::specta]
 pub async fn save_sources(
     index: State<'_, Arc<Index>>,
     app: AppHandle,
@@ -220,6 +246,8 @@ pub fn bindings() -> tauri_specta::Builder<tauri::Wry> {
             get_transcript,
             open_session_source,
             get_events,
+            preview_source,
+            save_source_preview,
             save_sources,
             get_preferences,
             save_preferences,

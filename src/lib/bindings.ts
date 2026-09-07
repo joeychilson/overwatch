@@ -10,6 +10,8 @@ export const commands = {
 	getTranscript: (id: string) => typedError<Transcript, AppError>(__TAURI_INVOKE("get_transcript", { id })),
 	openSessionSource: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("open_session_source", { id })),
 	getEvents: (id: string, offset: number, search: string) => typedError<EventPage, AppError>(__TAURI_INVOKE("get_events", { id, offset, search })),
+	previewSource: (source: Source) => typedError<SourcePreview, AppError>(__TAURI_INVOKE("preview_source", { source })),
+	saveSourcePreview: (preview: SourcePreview) => typedError<null, AppError>(__TAURI_INVOKE("save_source_preview", { preview })),
 	saveSources: (sources: Source[]) => typedError<null, AppError>(__TAURI_INVOKE("save_sources", { sources })),
 	getPreferences: () => typedError<Preferences, AppError>(__TAURI_INVOKE("get_preferences")),
 	savePreferences: (preferences: Preferences) => typedError<Preferences, AppError>(__TAURI_INVOKE("save_preferences", { preferences })),
@@ -149,6 +151,16 @@ export type Source = {
 	agent: Agent,
 	path: string,
 	enabled: boolean,
+};
+
+export type SourcePreview = {
+	current: Source,
+	source: Source,
+	sessions: number,
+	allowanceSamples: number,
+	account: boolean,
+	available: boolean,
+	issues: string[],
 };
 
 export type SourceStatus = {

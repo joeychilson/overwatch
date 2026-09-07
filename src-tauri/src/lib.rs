@@ -8,6 +8,7 @@ mod opencode;
 mod parse;
 mod quota;
 mod settings;
+mod sources;
 
 use std::sync::Arc;
 use tauri::Manager;
