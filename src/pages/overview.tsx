@@ -116,7 +116,7 @@ export default function Overview({
       <PageHeader
         icon={<ChartNoAxesCombined />}
         title="Overview"
-        description="Explore activity, token usage, and costs across your coding agents."
+        description="Activity, tokens, and costs across your coding agents."
         action={
           <Button
             variant="outline"
@@ -237,7 +237,11 @@ export default function Overview({
             />
             <Metric
               label="API equivalent"
-              value={money(knownCost(stats))}
+              value={
+                <span title="Recorded costs and model-price estimates, not your subscription bill.">
+                  {money(knownCost(stats))}
+                </span>
+              }
               detail={
                 stats.unpricedCalls > 0
                   ? `${integer(stats.unpricedCalls)} responses unpriced · known subtotal`
@@ -338,10 +342,6 @@ export default function Overview({
               onOpen={(id) => openSession(id)}
             />
           </Section>
-          <p className="mt-8 text-xs leading-relaxed text-muted-foreground">
-            API equivalent is a model-price estimate, not your subscription bill. Usage follows each
-            recorded event’s date; tool activity includes complete sessions updated in this period.
-          </p>
         </>
       )}
     </>

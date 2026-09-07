@@ -418,7 +418,6 @@ pub struct UsageReport {
     pub session_count: u32,
     pub project_count: u32,
     pub agent_count: u32,
-    pub longest_session: Option<u64>,
 }
 fn tokens(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Tokens> {
     Ok(Tokens {
@@ -560,13 +559,6 @@ pub fn usage(index: &Index, scope: &HistoryScope) -> Result<UsageReport> {
     ) = db.query_row(&counts, params![agents, raw], |row| {
         Ok((row.get(0)?, row.get(1)?, row.get(2)?))
     })?;
-    report.longest_session = db
-        .query_row(
-            &format!("{CANONICAL} SELECT MAX(r.elapsed) FROM canonical r WHERE {SCOPE}"),
-            params![agents, raw],
-            |row| row.get::<_, Option<i64>>(0),
-        )?
-        .and_then(|value| u64::try_from(value).ok());
     report.days = days.into_values().collect();
     report.models = models.into_values().collect();
     report

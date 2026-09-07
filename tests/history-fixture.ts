@@ -97,10 +97,6 @@ export function historyFixture(
       sessionCount: matched.length,
       projectCount: new Set(matched.map((session) => session.cwd).filter(Boolean)).size,
       agentCount: new Set(matched.map((session) => session.agent)).size,
-      longestSession: selected.reduce<number | null>((max, session) => {
-        const value = elapsed(session.startedAt, session.updatedAt);
-        return value == null ? max : Math.max(max ?? 0, value);
-      }, null),
     };
     return report;
   }

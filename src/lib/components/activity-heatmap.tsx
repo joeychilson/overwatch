@@ -2,7 +2,7 @@ import { useId, useRef, useState } from "react";
 import { eachDayOfInterval, format, startOfWeek, subDays } from "date-fns";
 import { Tooltip } from "@base-ui/react/tooltip";
 import type { UsageStats } from "@/lib/history";
-import { compact, day, duration, integer } from "@/lib/format";
+import { day, integer } from "@/lib/format";
 import { ChartHoverCard } from "@/lib/components/ui/chart";
 import { Section } from "@/lib/components/page";
 
@@ -127,10 +127,6 @@ export function ActivityHeatmap({
         <span>{format(heatDays[0], "MMM d, yyyy")}</span>
         <span>{format(now, "MMM d, yyyy")}</span>
       </div>
-      <p className="mt-3 text-xs text-muted-foreground">
-        {compact(lifetime.total)} lifetime tokens · {duration(lifetime.longestSession)} longest
-        session
-      </p>
     </Section>
   );
 }

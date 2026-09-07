@@ -46,6 +46,7 @@ export function ModelDetail({
 }) {
   const analysisPosition = useRef(0);
   const sessionScroll = useRef<HTMLDivElement>(null);
+  const sessionPosition = useRef(0);
   const restoreSession = useRef<string | undefined>(undefined);
   const [controls, setControls] = useWorkspaceField("models");
   const { agent, offset, sort, descending } = controls;
@@ -143,6 +144,7 @@ export function ModelDetail({
   ];
   const openSession = (id: string) => {
     analysisPosition.current = scrollRef.current?.scrollTop ?? 0;
+    sessionPosition.current = sessionScroll.current?.scrollTop ?? 0;
     setReading(id);
     scrollRef.current?.scrollTo({ top: 0 });
   };
@@ -151,6 +153,7 @@ export function ModelDetail({
     const id = restoreSession.current;
     if (reading || !root || !id) return;
     return whenPresent(root, () => {
+      root.scrollTop = sessionPosition.current;
       const button = rowButton(root, id);
       if (!button?.getClientRects().length) return false;
       button.focus();
@@ -203,10 +206,7 @@ export function ModelDetail({
               {group.label}
             </Button>
           </nav>
-          <p className="mb-4 text-xs text-muted-foreground">
-            Full session transcript · includes all models and dates. Your analysis filters are
-            retained.
-          </p>
+          <p className="mb-4 text-xs text-muted-foreground">Full session · all models and dates</p>
           <div>
             <Suspense fallback={<ReaderSkeleton />}>
               <SessionReader key={reading} id={reading} scrollRef={scrollRef} />
@@ -265,12 +265,8 @@ export function ModelDetail({
                 : "Recorded costs and estimates"
             }
           />
-          <Metric
-            label="Sessions"
-            value={integer(stats.sessionCount)}
-            detail="In selected period"
-          />
-          <Metric label="Agents" value={integer(stats.agentCount)} detail="Coding agents" />
+          <Metric label="Sessions" value={integer(stats.sessionCount)} />
+          <Metric label="Agents" value={integer(stats.agentCount)} />
         </div>
         <UsageOverTime stats={stats} start={start} now={now} range={range} visible={!reading} />
         <Section title="Providers">
@@ -282,14 +278,7 @@ export function ModelDetail({
             className="max-h-65"
           />
         </Section>
-        <Section
-          title="Sessions"
-          action={
-            <span className="text-xs text-muted-foreground">
-              {integer(stats.sessionCount)} sessions
-            </span>
-          }
-        >
+        <Section title="Sessions">
           {page.error && (
             <ErrorNotice
               error={page.error}
@@ -318,21 +307,7 @@ export function ModelDetail({
               onOpen={openSession}
             />
           )}
-          <p className="mt-5 text-xs text-muted-foreground">
-            Tokens and responses include this model’s usage in the selected period. Open a session
-            to read its full conversation.
-          </p>
         </Section>
-        <details className="text-xs text-muted-foreground">
-          <summary className="cursor-pointer rounded py-2">Recorded model identifiers</summary>
-          <ul className="mt-2 space-y-2">
-            {group.offerings.map((offering) => (
-              <li key={offering.key} className="break-all">
-                {offering.providerName} · <code>{offering.model}</code>
-              </li>
-            ))}
-          </ul>
-        </details>
       </div>
     </>
   );

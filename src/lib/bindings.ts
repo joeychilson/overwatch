@@ -321,7 +321,6 @@ export type UsageReport = {
 	sessionCount: number,
 	projectCount: number,
 	agentCount: number,
-	longestSession: number | null,
 };
 
 export type UsageSummary = {

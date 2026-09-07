@@ -166,7 +166,7 @@ export function ModelUsage({
         <span
           title={
             row.original.unpricedCalls
-              ? `${integer(row.original.unpricedCalls)} responses unpriced; known subtotal`
+              ? `${integer(row.original.unpricedCalls)} responses unpriced; partial cost coverage, known subtotal`
               : "Recorded costs and catalog estimates"
           }
         >
@@ -229,9 +229,6 @@ export function ModelUsage({
             }
           />
         </div>
-        <p className="mt-5 text-xs text-muted-foreground">
-          {integer(rows.length)} models · selected period · * partial cost coverage
-        </p>
       </div>
       {detail && (
         <ModelDetail

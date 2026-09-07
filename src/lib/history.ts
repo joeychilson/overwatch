@@ -80,7 +80,6 @@ export type UsageStats = Omit<ReturnType<typeof aggregate>, "sessionIds"> & {
   sessionCount: number;
   projectCount: number;
   agentCount: number;
-  longestSession: number | null;
 };
 export function reportStats(report: UsageReport, models: Model[]): UsageStats {
   const identity = modelIdentityLookup(models);
@@ -90,7 +89,6 @@ export function reportStats(report: UsageReport, models: Model[]): UsageStats {
     sessionCount: report.sessionCount,
     projectCount: report.projectCount,
     agentCount: report.agentCount,
-    longestSession: report.longestSession,
     days: new Map(
       report.days.map((point): [string, DailyUsage] => [
         point.day,

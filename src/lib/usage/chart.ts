@@ -104,7 +104,6 @@ export function usageChart(
     buckets.set(key, bucket);
   }
   return {
-    groupCount: ranked.length,
     series: series.map((item, index) => ({ ...item, dataKey: `series${index}` })),
     points: [...buckets.values()].map(({ values, ...point }) => ({
       ...point,

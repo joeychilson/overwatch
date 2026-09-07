@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { desktop } from "./desktop";
+import { desktop, sessions as fixtureSessions } from "./desktop";
 
 test("model analysis combines providers, preserves their prices and filters contributing sessions", async ({
   page,
@@ -205,3 +205,52 @@ for (const input of ["mouse", "keyboard"] as const) {
     );
   });
 }
+
+test("model sessions scroll through multiple batches and restore the opened row", async ({
+  page,
+}) => {
+  const sessions = Array.from({ length: 123 }, (_, index) => ({
+    ...fixtureSessions[0],
+    id: `model-page-${index}`,
+    title: `Model session ${String(index).padStart(3, "0")}`,
+    updatedAt: Date.now() - index * 1000,
+  }));
+  await desktop(page, { sessions });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await page.getByRole("button", { name: "GPT-6 Astra", exact: true }).click();
+  const table = page.getByRole("table", { name: "Model contributing sessions" });
+  await table.scrollIntoViewIfNeeded();
+  const scroll = table.locator("..");
+  await expect(table.locator("tbody [data-row-id]").first()).toBeVisible();
+  expect(await table.locator("tbody [data-row-id]").count()).toBeLessThan(50);
+  const last = table.getByRole("button", { name: "Model session 122", exact: true });
+  await expect
+    .poll(async () => {
+      await scroll.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      return last.isVisible();
+    })
+    .toBe(true);
+  const requests = JSON.parse(
+    (await page.locator("html").getAttribute("data-history-requests")) ?? "[]",
+  );
+  expect(
+    requests.some(
+      (request: {
+        command: string;
+        args: { query: { usageOnly: boolean; offset: number; limit: number } };
+      }) =>
+        request.command === "get_sessions" &&
+        request.args.query.usageOnly &&
+        request.args.query.offset === 100 &&
+        request.args.query.limit === 50,
+    ),
+  ).toBe(true);
+  await last.click();
+  await expect(page.getByRole("region", { name: "Session conversation" })).toBeVisible();
+  await page.getByRole("button", { name: "Back to model analysis" }).click();
+  await expect(last).toBeFocused();
+  await expect(last).toBeVisible();
+});

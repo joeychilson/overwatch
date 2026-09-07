@@ -49,6 +49,11 @@ export function UsageOverTime({
                 size="xs"
                 variant={metric === option ? "secondary" : "ghost"}
                 aria-pressed={metric === option}
+                title={
+                  option === "cost"
+                    ? "Recorded costs and model-price estimates, not your subscription bill."
+                    : undefined
+                }
                 onClick={() => setMetric(option)}
               >
                 {option === "cost" ? "API equivalent" : "Tokens"}
@@ -165,20 +170,11 @@ export function UsageOverTime({
           </div>
         ))}
       </div>
-      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-        {range > 90 ? "Weekly totals" : "Daily totals"} · local time (
-        {Intl.DateTimeFormat().resolvedOptions().timeZone}) ·{" "}
-        {metric === "cost" && stats.pricedCalls === 0
-          ? "—"
-          : display((metric === "cost" ? stats.cost : stats.total) / range)}{" "}
-        {metric === "tokens" ? "tokens" : "API equivalent"} per day
-        {grouping !== "agent" && chart.groupCount > 5
-          ? ` · Top 5 ${grouping}s; remaining usage included in Other`
-          : ""}
-        {metric === "cost"
-          ? ` · Not your subscription bill${stats.unpricedCalls ? ` · ${integer(stats.unpricedCalls)} responses unpriced · known subtotal` : ""}`
-          : ` · ${integer(stats.calls)} recorded model responses`}
-      </p>
+      {metric === "cost" && stats.pricedCalls > 0 && stats.unpricedCalls > 0 && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          {integer(stats.unpricedCalls)} responses unpriced · known subtotal
+        </p>
+      )}
       {metric === "cost" && stats.pricedCalls > 0 && (
         <p className="mt-2 text-xs text-muted-foreground">
           USD · {money(stats.recordedCost)} recorded · {money(stats.estimatedCost)} estimated at
