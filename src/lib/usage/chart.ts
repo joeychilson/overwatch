@@ -12,7 +12,7 @@ export function usageChart(
   metric: "tokens" | "cost",
   weekly: boolean,
 ) {
-  const ranked = usageGroups(stats.models, grouping === "provider" ? "provider" : "model").sort(
+  const ranked = (grouping === "agent" ? [] : usageGroups(stats.models, grouping)).sort(
     (a, b) => b[metric] - a[metric] || a.key.localeCompare(b.key),
   );
   const offeringSeries = new Map(
@@ -20,25 +20,23 @@ export function usageChart(
       group.offerings.map((offering) => [offering.key, Math.min(index, 5)] as const),
     ),
   );
+  const days = [...stats.days.values()];
   const series =
     grouping === "agent"
       ? agentIds
+          .filter((agent) => days.some((point) => Object.hasOwn(point.agents, agent)))
           .map((agent) => ({
             key: agent,
             label: agents[agent].name,
             color: agents[agent].color,
-            pricedCalls: [...stats.days.values()].reduce(
-              (sum, point) => sum + (point.agentPricedCalls[agent] ?? 0),
-              0,
-            ),
-            total: [...stats.days.values()].reduce(
+            pricedCalls: days.reduce((sum, point) => sum + (point.agentPricedCalls[agent] ?? 0), 0),
+            total: days.reduce(
               (sum, point) =>
                 sum +
                 (metric === "tokens" ? (point.agents[agent] ?? 0) : (point.agentCosts[agent] ?? 0)),
               0,
             ),
           }))
-          .filter((item) => item.total > 0)
           .sort((a, b) => b.total - a.total)
       : ranked.slice(0, 5).map((model) => ({
           key: model.key,

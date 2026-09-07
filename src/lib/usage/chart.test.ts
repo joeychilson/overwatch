@@ -37,6 +37,26 @@ const sessions: Session[] = Array.from({ length: 7 }, (_, index) => ({
 }));
 
 describe("usage chart", () => {
+  it("keeps agents with free and unknown costs in the cost breakdown", () => {
+    const stats = aggregate(
+      sessions.slice(0, 2).map((session, index) => ({
+        ...session,
+        usage: session.usage.map((usage) => ({ ...usage, reportedCost: index === 0 ? 0 : null })),
+      })),
+      [],
+      start,
+      end,
+    );
+    const chart = usageChart(stats, start, end - 1, "agent", "cost", false);
+    expect(
+      chart.series.map(({ key, total, pricedCalls }) => ({ key, total, pricedCalls })),
+    ).toEqual([
+      { key: "codex", total: 0, pricedCalls: 1 },
+      { key: "claude", total: 0, pricedCalls: 0 },
+    ]);
+    expect(usageChart(aggregate([], []), start, end, "agent", "cost", false).series).toEqual([]);
+  });
+
   it("keeps token and priced-cost totals exact across both groupings and bucket sizes", () => {
     const stats = aggregate(sessions, [], start, end);
     expect(stats.total).toBe(2870);

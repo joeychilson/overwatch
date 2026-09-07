@@ -103,7 +103,7 @@ export function UsageOverTime({
                     {chart.series
                       .filter((item) => point[item.dataKey] > 0)
                       .map((item) => (
-                        <div key={item.key} className="flex items-center gap-2">
+                        <div key={item.dataKey} className="flex items-center gap-2">
                           <span
                             className="size-2 shrink-0 rounded-sm"
                             style={{ background: item.color }}
@@ -140,7 +140,7 @@ export function UsageOverTime({
             />
             {chart.series.map((item) => (
               <Bar
-                key={item.key}
+                key={item.dataKey}
                 dataKey={item.dataKey}
                 stackId="usage"
                 fill={item.color}
@@ -153,7 +153,7 @@ export function UsageOverTime({
       <div className="mt-5 flex flex-wrap gap-x-5 gap-y-3" aria-label="Usage breakdown">
         {chart.series.map((item) => (
           <div
-            key={item.key}
+            key={item.dataKey}
             className="flex max-w-full min-w-0 items-center gap-2 text-xs"
             title={item.label}
           >

@@ -71,6 +71,13 @@ for (const coverage of ["unknown", "zero", "mixed"] as const) {
       await expect(metric).toContainText("known subtotal");
     }
     await page.getByRole("button", { name: "API equivalent", exact: true }).click();
+    const breakdown = page.getByLabel("Usage breakdown");
+    for (const agent of ["Codex", "Claude Code", "OpenCode"]) {
+      const row = breakdown.locator("div").filter({ has: page.getByText(agent, { exact: true }) });
+      await expect(row).toBeVisible();
+      if (coverage === "zero") await expect(row).toContainText("$0.00");
+      if (coverage === "unknown") await expect(row).toContainText("—");
+    }
     if (coverage === "unknown")
       await expect(page.getByRole("status").filter({ hasText: "Cost unavailable" })).toBeVisible();
     if (coverage === "mixed")
