@@ -333,6 +333,10 @@ pub fn bindings() -> tauri_specta::Builder<tauri::Wry> {
             export_sessions,
             export_session
         ])
-        .events(tauri_specta::collect_events![IndexChanged, AccountsChanged])
+        .events(tauri_specta::collect_events![
+            IndexChanged,
+            AccountsChanged,
+            NavigationRequested
+        ])
         .dangerously_cast_bigints_to_number()
 }

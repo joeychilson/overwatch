@@ -34,6 +34,7 @@ export const commands = {
 export const events = {
 	accountsChanged: makeEvent<AccountsChanged>("accounts-changed"),
 	indexChanged: makeEvent<IndexChanged>("index-changed"),
+	navigationRequested: makeEvent<NavigationRequested>("navigation-requested"),
 };
 
 /* Types */
@@ -120,6 +121,8 @@ export type IndexChanged = {
 	sessions: string[] | null,
 	progress: boolean,
 };
+
+export type NavigationRequested = "back" | "forward";
 
 export type Preferences = {
 	theme: Theme,

@@ -5,6 +5,7 @@ pub mod data;
 pub mod error;
 pub mod history;
 pub mod index;
+mod navigation;
 mod opencode;
 mod parse;
 pub mod queries;
@@ -12,6 +13,7 @@ mod quota;
 mod settings;
 mod sources;
 mod timeline;
+mod updates;
 mod watch;
 
 use std::sync::Arc;
@@ -52,6 +54,7 @@ fn run_app() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .invoke_handler(bindings.invoke_handler())
         .setup(move |app| {
             bindings.mount_events(app);
+            navigation::install(app.handle())?;
             let index = Arc::new(index::Index::open(
                 app.path().app_data_dir()?,
                 index::default_sources()?,

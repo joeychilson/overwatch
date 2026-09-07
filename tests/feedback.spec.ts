@@ -72,3 +72,17 @@ for (const outcome of ["cancel", "failure"] as const)
     if (outcome === "failure")
       await expect(page.getByText("Could not write this export.", { exact: true })).toBeVisible();
   });
+test("native menu events use the same navigation history", async ({ page }) => {
+  await desktop(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await page.evaluate(() =>
+    window.dispatchEvent(new CustomEvent("fixture-navigation", { detail: "back" })),
+  );
+  await expect(page.getByRole("heading", { name: "Sessions", exact: true })).toBeVisible();
+  await page.evaluate(() =>
+    window.dispatchEvent(new CustomEvent("fixture-navigation", { detail: "forward" })),
+  );
+  await expect(page.getByRole("heading", { name: "Models", exact: true })).toBeVisible();
+});

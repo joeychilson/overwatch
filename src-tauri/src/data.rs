@@ -330,3 +330,10 @@ pub struct IndexChanged {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
 pub struct AccountsChanged;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "lowercase")]
+pub enum NavigationRequested {
+    Back,
+    Forward,
+}

@@ -16,6 +16,10 @@ export function useNativeEvents() {
         .invalidateQueries({ queryKey, refetchType: document.hidden ? "none" : "active" })
         .catch((error: unknown) => toast.error(failure(error).message));
     const subscriptions = [
+      events.navigationRequested.listen(({ payload }) => {
+        if (payload === "back") history.back();
+        else history.forward();
+      }),
       events.indexChanged.listen(({ payload }) => {
         void invalidate(["history"]);
         if (payload.progress) return;

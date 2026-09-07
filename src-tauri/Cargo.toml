@@ -38,6 +38,7 @@ tokio = { version = "1", features = ["sync", "time"] }
 sha2 = "0.10"
 base64 = "0.22"
 keyring = "4.2"
+tauri-plugin-updater = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"

@@ -1,3 +1,4 @@
+import { isTauri } from "@tauri-apps/api/core";
 import {
   createContext,
   useCallback,
@@ -119,6 +120,7 @@ export function useWorkspaceOwner(scrollRef: RefObject<HTMLDivElement | null>): 
       )
         return;
       if ((event.metaKey || event.ctrlKey) && (event.key === "[" || event.key === "]")) {
+        if (isTauri()) return; // Native menu accelerators own this shortcut in the desktop app.
         event.preventDefault();
         if (event.key === "[") history.back();
         else history.forward();
