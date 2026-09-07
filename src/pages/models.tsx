@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, type RefObject } from "react";
+import { lazy, Suspense, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { isTauri } from "@tauri-apps/api/core";
 import { fullCatalogOptions } from "@/lib/queries";
@@ -12,21 +12,27 @@ import { Skeleton } from "@/lib/components/ui/skeleton";
 const PricingCatalog = lazy(() => import("./model-catalog"));
 
 export default function Models({
-  initialModelKey,
+  modelKey,
+  pricing,
+  reading,
+  onRoute,
   scope,
   offerings,
   range,
   now,
   scrollRef,
 }: {
-  initialModelKey?: string;
+  modelKey?: string;
+  pricing: boolean;
+  reading?: string;
+  onRoute: (patch: { modelKey?: string; pricing?: boolean; reading?: string }) => void;
   scope: HistoryScope;
   offerings: string[];
   range: number;
   now: number;
   scrollRef: RefObject<HTMLDivElement | null>;
 }) {
-  const [pricing, setPricing] = useState(false);
+  const setPricing = (pricing: boolean) => onRoute({ pricing });
   const details = useQuery({ ...fullCatalogOptions, enabled: pricing && isTauri() });
   const start = startOfDay(subDays(now, range - 1)).getTime();
   const end = addDays(startOfDay(now), 1).getTime();
@@ -37,7 +43,9 @@ export default function Models({
     <>
       <div hidden={pricing}>
         <ModelUsage
-          initialModelKey={initialModelKey}
+          modelKey={modelKey}
+          reading={reading}
+          onRoute={onRoute}
           stats={stats}
           scope={scope}
           lifetime={lifetime}

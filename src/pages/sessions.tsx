@@ -1,7 +1,8 @@
-import { useMemo, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useMemo, useLayoutEffect, useRef, type RefObject } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowDownToLine, ArrowLeft, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { startOfDay, subDays } from "date-fns";
+import { useWorkspaceField, useWorkspace } from "@/lib/shell/use-workspace";
 import { useSessionSearch } from "@/lib/hooks/use-session-search";
 import { useDebounced } from "@/lib/hooks/use-debounced";
 import { sessionQuery, sessionOptions, navigationOptions } from "@/lib/history";
@@ -21,7 +22,6 @@ import { ErrorBoundary } from "@/lib/components/error-boundary";
 
 export default function Sessions({
   scope,
-  initialSearch = "",
   selected,
   selectedQuery,
   scrollRef,
@@ -34,7 +34,6 @@ export default function Sessions({
   now,
 }: {
   scope: HistoryScope;
-  initialSearch?: string;
   selected?: string;
   selectedQuery?: SessionQuery;
   scrollRef: RefObject<HTMLDivElement | null>;
@@ -46,21 +45,30 @@ export default function Sessions({
   clearTool: () => void;
   now: number;
 }) {
-  const [search, setSearch] = useState(initialSearch);
-  const [model, setModel] = useState<string | null>(null);
-  const [tool, setTool] = useState<string | null>(null);
-  const [failedOnly, setFailedOnly] = useState(false);
+  const [controls, setControls] = useWorkspaceField("sessions");
+  const { restore } = useWorkspace();
+  const { search, range, offset, sort, descending, model, tool, failedOnly } = controls;
+  const setSearch = (search: string) => setControls((previous) => ({ ...previous, search }));
+  const setRange = (range: string) =>
+    setControls((previous) => ({ ...previous, range: range as typeof previous.range }));
+  const setOffset = (offset: number) => setControls((previous) => ({ ...previous, offset }));
+  const setSort = (sort: SessionQuery["sort"]) =>
+    setControls((previous) => ({ ...previous, sort }));
+  const setDescending = (descending: boolean) =>
+    setControls((previous) => ({ ...previous, descending }));
+  const setModel = (model: string | null) => setControls((previous) => ({ ...previous, model }));
+  const setTool = (tool: string | null) => setControls((previous) => ({ ...previous, tool }));
+  const setFailedOnly = (failedOnly: boolean) =>
+    setControls((previous) => ({ ...previous, failedOnly }));
   const modelName = useModelName();
   const activeTool = selectedTool ?? tool;
-  const [range, setRange] = useState("all");
-  const [offset, setOffset] = useState(0);
-  const [sort, setSort] = useState<SessionQuery["sort"]>("updatedAt");
-  const [descending, setDescending] = useState(true);
   const deferred = useDebounced(search);
   const searchModels = useSessionSearch(deferred);
   const list = useRef<HTMLDivElement>(null);
-  const place = useRef<{ page: number; id: string } | null>(null);
-  const restoring = useRef(false);
+  const place = useRef<{ page: number; id: string } | null>(
+    controls.focus ? { page: controls.scroll, id: controls.focus } : null,
+  );
+  const restoring = useRef(!!controls.focus);
   const start = range === "all" ? null : startOfDay(subDays(now, Number(range) - 1)).getTime();
   const query = sessionQuery(scope, {
     search: deferred,
@@ -81,7 +89,15 @@ export default function Sessions({
   const position = navigation.data?.position ?? -1;
   const previous = navigation.data?.previous;
   const next = navigation.data?.next;
+  const lastSelected = useRef(selected);
+  const lastRestore = useRef(restore.revision);
   useLayoutEffect(() => {
+    if (restore.revision !== lastRestore.current) {
+      place.current = controls.focus ? { id: controls.focus, page: controls.scroll } : null;
+      lastRestore.current = restore.revision;
+    }
+    if (lastSelected.current && !selected) restoring.current = true;
+    lastSelected.current = selected;
     if (selected || !restoring.current) return;
     const root = list.current;
     if (!root) return;
@@ -96,7 +112,7 @@ export default function Sessions({
       restoring.current = false;
       return true;
     });
-  }, [selected, scrollRef, filtered]);
+  }, [selected, scrollRef, filtered, restore.revision, controls.focus, controls.scroll]);
   const exportData = useMutation({ mutationFn: () => native(commands.exportSessions(query)) });
   const changePage = (offset: number) => {
     setOffset(offset);
@@ -301,6 +317,11 @@ export default function Sessions({
                   page: scrollRef.current?.scrollTop ?? 0,
                   id,
                 };
+                setControls((previous) => ({
+                  ...previous,
+                  scroll: Math.round(place.current?.page ?? 0),
+                  focus: id,
+                }));
                 openSession(id, query);
               }}
             />

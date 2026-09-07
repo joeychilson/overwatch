@@ -1,5 +1,6 @@
-import { lazy, Suspense, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { lazy, Suspense, useLayoutEffect, useMemo, useRef, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useWorkspaceField } from "@/lib/shell/use-workspace";
 import { historyScope, sessionOptions, sessionQuery, useUsage } from "@/lib/history";
 import { Pagination } from "@/lib/components/pagination";
 import { ArrowLeft } from "lucide-react";
@@ -23,6 +24,8 @@ const SessionReader = lazy(() =>
 
 export function ModelDetail({
   group,
+  reading,
+  onReading: setReading,
   scrollRef,
   scope,
   start,
@@ -32,6 +35,8 @@ export function ModelDetail({
   onClose,
 }: {
   group: UsageGroup;
+  reading?: string;
+  onReading: (id: string | undefined) => void;
   scrollRef: RefObject<HTMLDivElement | null>;
   scope: HistoryScope;
   start: number;
@@ -40,15 +45,23 @@ export function ModelDetail({
   range: number;
   onClose: () => void;
 }) {
-  const [reading, setReading] = useState<string>();
   const analysisPosition = useRef(0);
   const sessionScroll = useRef<HTMLDivElement>(null);
   const restoreSession = useRef<string | undefined>(undefined);
-  const [provider, setProvider] = useState("all");
-  const [agent, setAgent] = useState<Agent | "all">("all");
-  const [offset, setOffset] = useState(0);
-  const [sort, setSort] = useState<SessionQuery["sort"]>("updatedAt");
-  const [descending, setDescending] = useState(true);
+  const [controls, setControls] = useWorkspaceField("models");
+  const { agent, offset, sort, descending } = controls;
+  const provider = group.offerings.some((offering) => offering.provider === controls.provider)
+    ? controls.provider
+    : "all";
+  const setProvider = (provider: string) =>
+    setControls((previous) => ({ ...previous, provider, offset: 0 }));
+  const setAgent = (agent: Agent | "all") =>
+    setControls((previous) => ({ ...previous, agent, offset: 0 }));
+  const setOffset = (offset: number) => setControls((previous) => ({ ...previous, offset }));
+  const setSort = (sort: SessionQuery["sort"]) =>
+    setControls((previous) => ({ ...previous, sort }));
+  const setDescending = (descending: boolean) =>
+    setControls((previous) => ({ ...previous, descending }));
   const selectedScope = historyScope({
     ...scope,
     start,

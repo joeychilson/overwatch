@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   ArrowDownToLine,
@@ -10,12 +10,13 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { commands } from "@/lib/bindings";
-import { native } from "@/lib/errors";
+import { AppFailure, native } from "@/lib/errors";
 import { knownCost } from "@/lib/usage/costs";
 import { compact, duration, elapsed, hasTimestamp, integer, money } from "@/lib/format";
 import { aggregate, totalTokens } from "@/lib/usage/analytics";
 import { catalogOptions, eventPageOptions } from "@/lib/queries";
 import { useDebounced } from "@/lib/hooks/use-debounced";
+import { useWorkspace } from "@/lib/shell/use-workspace";
 import { useModelName } from "@/lib/hooks/use-model-name";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
@@ -32,16 +33,31 @@ export function SessionReader({
   id: string;
   scrollRef: RefObject<HTMLDivElement | null>;
 }) {
+  const { state, change, saveReader } = useWorkspace();
+  const savedPosition = state.readers.find((reader) => reader.id === id)?.index ?? 0;
+  const onPosition = useCallback((index: number) => saveReader(id, index), [id, saveReader]);
   const [search, setSearch] = useState("");
   const [match, setMatch] = useState(0);
   const [titleExpanded, setTitleExpanded] = useState(false);
-  const [position, setPosition] = useState({ index: 0, focus: false });
+  const [position, setPosition] = useState({ index: savedPosition, focus: false });
   const deferred = useDebounced(search);
   const log = useRef<SessionLogHandle>(null);
   const transcript = useQuery({
     queryKey: ["transcript", id],
     queryFn: () => native(commands.getTranscript(id)),
   });
+  useEffect(() => {
+    if (!(transcript.error instanceof AppFailure) || transcript.error.detail.kind !== "notFound")
+      return;
+    change((previous) => {
+      const route = previous.route;
+      if (route.view === "sessions" && route.id === id)
+        return { ...previous, route: { ...route, id: undefined } };
+      if (route.view === "models" && route.reading === id)
+        return { ...previous, route: { ...route, reading: undefined } };
+      return previous;
+    });
+  }, [transcript.error, change, id]);
   const results = useQuery({
     ...eventPageOptions(id, deferred, 0),
     queryKey: ["events", id, "search", deferred],
@@ -312,6 +328,7 @@ export function SessionReader({
           ref={log}
           id={id}
           cwd={session.cwd}
+          onPosition={onPosition}
           timeline={timeline}
           view={
             deferred && results.data

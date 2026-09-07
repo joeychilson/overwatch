@@ -543,6 +543,8 @@ export async function desktop(
                   warning: null,
                 };
               case "get_transcript":
+                if (!state.snapshot.sessions.some((session) => session.id === args.id))
+                  throw { kind: "notFound", message: "This session is no longer indexed." };
                 document.documentElement.dataset.transcriptRequests = String(
                   Number(document.documentElement.dataset.transcriptRequests ?? 0) + 1,
                 );

@@ -1,4 +1,5 @@
-import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useLayoutEffect, useMemo, useRef, type RefObject } from "react";
+import { useWorkspaceField } from "@/lib/shell/use-workspace";
 import type { HistoryScope } from "@/lib/bindings";
 import type { UsageStats } from "@/lib/history";
 import { knownCost } from "@/lib/usage/costs";
@@ -12,7 +13,9 @@ import { ProviderMark } from "@/lib/components/provider-mark";
 import { Button } from "@/lib/components/ui/button";
 
 export function ModelUsage({
-  initialModelKey,
+  modelKey,
+  reading,
+  onRoute,
   stats,
   scope,
   lifetime,
@@ -23,7 +26,9 @@ export function ModelUsage({
   scrollRef,
   openCatalog,
 }: {
-  initialModelKey?: string;
+  modelKey?: string;
+  reading?: string;
+  onRoute: (patch: { modelKey?: string; reading?: string }) => void;
   stats: UsageStats;
   lifetime: UsageStats;
   scope: HistoryScope;
@@ -34,7 +39,9 @@ export function ModelUsage({
   scrollRef: RefObject<HTMLDivElement | null>;
   openCatalog: () => void;
 }) {
-  const [search, setSearch] = useState("");
+  const [controls, setControls] = useWorkspaceField("models");
+  const search = controls.search;
+  const setSearch = (search: string) => setControls((previous) => ({ ...previous, search }));
   const tableRoot = useRef<HTMLDivElement>(null);
   const listRoot = useRef<HTMLDivElement>(null);
   const listPosition = useRef(0);
@@ -42,23 +49,44 @@ export function ModelUsage({
   const restoreKey = useRef("");
   const allGroups = useMemo(() => usageGroups(lifetime.models, "model"), [lifetime.models]);
   const groups = useMemo(() => usageGroups(stats.models, "model"), [stats.models]);
-  const [selected, setSelected] = useState<UsageGroup | undefined>(() =>
-    allGroups.find((group) => group.key === initialModelKey),
-  );
-  const rows = useMemo(
-    () =>
-      groups.filter((group) =>
-        `${group.label} ${group.detail} ${group.offerings.map((offering) => `${offering.providerName} ${offering.model}`).join(" ")}`
-          .toLowerCase()
-          .includes(search.toLowerCase()),
-      ),
-    [groups, search],
-  );
+  const selected = allGroups.find((group) => group.key === modelKey);
+  const setSelected = (group: UsageGroup | undefined) =>
+    onRoute({ modelKey: group?.key, reading: undefined });
+  const rows = useMemo(() => {
+    const filtered = groups.filter((group) =>
+      `${group.label} ${group.detail} ${group.offerings.map((offering) => `${offering.providerName} ${offering.model}`).join(" ")}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+    );
+    if (!controls.ranking) return filtered;
+    const value = (group: UsageGroup) => {
+      switch (controls.ranking) {
+        case "model":
+          return group.label;
+        case "cost":
+          return knownCost(group) ?? -1;
+        case "calls":
+          return group.calls;
+        default:
+          return group.tokens;
+      }
+    };
+    return filtered.sort((a, b) => {
+      const av = value(a),
+        bv = value(b);
+      const comparison =
+        typeof av === "string" && typeof bv === "string"
+          ? av.localeCompare(bv)
+          : Number(av) - Number(bv);
+      return comparison * (controls.rankingDescending ? -1 : 1) || a.key.localeCompare(b.key);
+    });
+  }, [groups, search, controls.ranking, controls.rankingDescending]);
   const detail = selected
     ? (allGroups.find((group) => group.key === selected.key) ?? selected)
     : undefined;
   const openModel = (group: UsageGroup) => {
     listPosition.current = scrollRef.current?.scrollTop ?? 0;
+    setControls((previous) => ({ ...previous, provider: "all", agent: "all", offset: 0 }));
     setSelected(group);
     scrollRef.current?.scrollTo({ top: 0 });
   };
@@ -180,6 +208,16 @@ export function ModelUsage({
           <DataTable
             label="Model usage"
             data={rows}
+            sorting={{
+              id: controls.ranking ?? "",
+              descending: controls.rankingDescending,
+              onChange: (id, descending) =>
+                setControls((previous) => ({
+                  ...previous,
+                  ranking: id as NonNullable<typeof previous.ranking>,
+                  rankingDescending: descending,
+                })),
+            }}
             columns={columns}
             rowKey={(row) => row.key}
             scrollRef={scrollRef}
@@ -199,6 +237,8 @@ export function ModelUsage({
         <ModelDetail
           key={detail.key}
           group={detail}
+          reading={reading}
+          onReading={(reading) => onRoute({ reading })}
           scope={scope}
           start={start}
           end={end}

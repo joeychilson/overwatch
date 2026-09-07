@@ -46,6 +46,7 @@ export function SessionLog({
   timeline,
   view,
   initialPosition,
+  onPosition,
   scrollRef,
   ref,
 }: {
@@ -54,6 +55,7 @@ export function SessionLog({
   timeline: TimelineSummary;
   view: { kind: "all" } | { kind: "search"; query: string; firstPage: EventPage };
   initialPosition: { index: number; focus: boolean };
+  onPosition: (index: number) => void;
   scrollRef: RefObject<HTMLDivElement | null>;
   ref: Ref<SessionLogHandle>;
 }) {
@@ -137,9 +139,33 @@ export function SessionLog({
       const element = container.current?.querySelector<HTMLElement>(`[data-index="${target}"]`);
       if (jump.focus) element?.focus({ preventScroll: true });
       completedJump.current = jump;
+      const originalIndex = search ? targetPage?.matches[target - targetPage.offset] : target;
+      if (originalIndex !== undefined) onPosition(originalIndex);
     });
     return () => cancelAnimationFrame(frame);
-  }, [virtual, margin, count, jump, target, targetLoaded, targetRendered]);
+  }, [
+    virtual,
+    margin,
+    count,
+    jump,
+    target,
+    targetLoaded,
+    targetRendered,
+    search,
+    targetPage,
+    onPosition,
+  ]);
+
+  useLayoutEffect(() => {
+    if (completedJump.current !== jump) return;
+    const edge = (scrollRef.current?.scrollTop ?? 0) + 128;
+    const visible = items.find((item) => item.start + item.size > edge);
+    if (!visible) return;
+    const page = byOffset.get(Math.floor(visible.index / 100) * 100);
+    if (!page) return;
+    const index = search ? page.matches[visible.index - page.offset] : visible.index;
+    if (index !== undefined) onPosition(index);
+  });
 
   return (
     <div role="region" aria-label="Session conversation">

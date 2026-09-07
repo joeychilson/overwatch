@@ -1,8 +1,16 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type SetStateAction,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isTauri } from "@tauri-apps/api/core";
 import { Toaster } from "sonner";
-import { commands, type Agent, type SessionQuery } from "@/lib/bindings";
+import { commands, type Agent } from "@/lib/bindings";
 import { historyOptions, historyScope, sessionQuery } from "@/lib/history";
 import { AppFailure, native } from "@/lib/errors";
 import { catalogOptions } from "@/lib/queries";
@@ -10,6 +18,8 @@ import { usePreferences } from "@/lib/hooks/use-preferences";
 import { useNativeEvents } from "@/lib/hooks/use-native-events";
 import { useNow } from "@/lib/hooks/use-now";
 import { useMediaQuery } from "@/lib/hooks/use-media-query";
+import { WorkspaceContext, useWorkspaceOwner } from "@/lib/shell/use-workspace";
+import { initialWorkspace, type Route } from "@/lib/shell/workspace-state";
 import { navigation, type View } from "@/lib/shell/navigation";
 import { cn } from "cn";
 import { AppHeader } from "@/lib/shell/header";
@@ -25,29 +35,40 @@ const Models = lazy(() => import("@/pages/models"));
 const Subscriptions = lazy(() => import("@/pages/subscriptions"));
 const Connections = lazy(() => import("@/pages/connections"));
 
-type Route =
-  | { view: Exclude<View, "sessions" | "models"> }
-  | { view: "models"; modelKey?: string }
-  | {
-      view: "sessions";
-      id?: string;
-      query?: SessionQuery;
-      day?: string;
-      tool?: string;
-      search?: string;
-    };
-
 export default function App() {
-  const [route, setRoute] = useState<Route>({ view: "overview" });
-  const [modelsVisit, setModelsVisit] = useState(0);
-  const [agent, setAgent] = useState<Agent | "all">("all");
-  const [project, setProject] = useState("all");
-  const [range, setRange] = useState("30");
+  const scroll = useRef<HTMLDivElement>(null);
+  const workspace = useWorkspaceOwner(scroll);
+  const { change } = workspace;
+  const { route, agent, project, range } = workspace.state;
+  const setRoute = useCallback(
+    (value: SetStateAction<Route>, push = true) =>
+      change(
+        (previous) => ({
+          ...previous,
+          route: typeof value === "function" ? value(previous.route) : value,
+        }),
+        push,
+      ),
+    [change],
+  );
+  const setAgent = (agent: Agent | "all") =>
+    change((previous) => ({
+      ...previous,
+      agent,
+      sessions: { ...previous.sessions, offset: 0 },
+    }));
+  const setProject = (project: string) =>
+    change((previous) => ({
+      ...previous,
+      project,
+      sessions: { ...previous.sessions, offset: 0 },
+    }));
+  const setRange = (range: string) =>
+    change((previous) => ({ ...previous, range: range as typeof previous.range }));
   const [searchOpen, setSearchOpen] = useState(false);
   const [help, setHelp] = useState(false);
   const compactWindow = useMediaQuery("(max-width: 799px)");
   const prefersDark = useMediaQuery("(prefers-color-scheme: dark)");
-  const scroll = useRef<HTMLDivElement>(null);
   const now = useNow();
   const client = useQueryClient();
   const snapshot = useQuery(historyOptions);
@@ -91,7 +112,6 @@ export default function App() {
         )
       ) {
         event.preventDefault();
-        if (item.id === "models") setModelsVisit((visit) => visit + 1);
         setRoute({ view: item.id });
         scroll.current?.scrollTo({ top: 0 });
       }
@@ -100,16 +120,27 @@ export default function App() {
     return () => {
       window.removeEventListener("keydown", key);
     };
-  }, []);
+  }, [setRoute]);
 
   const scope = historyScope({
     project: project === "all" ? null : project,
     agent: agent === "all" ? null : agent,
   });
   const projects = snapshot.data?.projects ?? [];
+  useEffect(() => {
+    if (!snapshot.data || snapshot.data.scanning) return;
+    if (project !== "all" && !snapshot.data.projects.some(([key]) => key === project))
+      change((previous) => ({ ...previous, project: "all" }));
+    if (
+      agent !== "all" &&
+      !snapshot.data.sources.some(
+        (source) => source.source.agent === agent && source.source.enabled,
+      )
+    )
+      change((previous) => ({ ...previous, agent: "all" }));
+  }, [snapshot.data, project, agent, change]);
 
   const navigate = (view: View) => {
-    if (view === "models") setModelsVisit((visit) => visit + 1);
     setRoute({ view });
     scroll.current?.scrollTo({ top: 0 });
   };
@@ -131,7 +162,7 @@ export default function App() {
   const nativeApp = isTauri();
 
   return (
-    <>
+    <WorkspaceContext.Provider value={workspace}>
       <div
         className={cn(
           "grid h-dvh grid-cols-[216px_minmax(0,1fr)] overflow-hidden max-[1100px]:grid-cols-[184px_minmax(0,1fr)]",
@@ -228,16 +259,29 @@ export default function App() {
                         now={now}
                         openSession={openSession}
                         openDay={(day) => {
-                          setRoute({ view: "sessions", day });
+                          change(
+                            (previous) => ({
+                              ...previous,
+                              route: { view: "sessions", day },
+                              sessions: { ...initialWorkspace.sessions },
+                            }),
+                            true,
+                          );
                           scroll.current?.scrollTo({ top: 0 });
                         }}
                         openModel={(modelKey) => {
-                          setModelsVisit((visit) => visit + 1);
                           setRoute({ view: "models", modelKey });
                           scroll.current?.scrollTo({ top: 0 });
                         }}
                         openTool={(tool) => {
-                          setRoute({ view: "sessions", tool });
+                          change(
+                            (previous) => ({
+                              ...previous,
+                              route: { view: "sessions", tool },
+                              sessions: { ...initialWorkspace.sessions },
+                            }),
+                            true,
+                          );
                           scroll.current?.scrollTo({ top: 0 });
                         }}
                         clearScope={() => {
@@ -249,9 +293,7 @@ export default function App() {
                     )}
                     {route.view === "sessions" && (
                       <Sessions
-                        key={`${scope.agent}:${scope.project}:${route.search ?? ""}`}
                         scope={scope}
-                        initialSearch={route.search}
                         selected={route.id}
                         selectedQuery={route.query}
                         scrollRef={scroll}
@@ -266,8 +308,10 @@ export default function App() {
                     )}
                     {route.view === "models" && (
                       <Models
-                        key={modelsVisit}
-                        initialModelKey={route.modelKey}
+                        modelKey={route.modelKey}
+                        pricing={route.pricing ?? false}
+                        reading={route.reading}
+                        onRoute={(patch) => setRoute({ ...route, ...patch })}
                         scope={scope}
                         offerings={snapshot.data?.offerings ?? []}
                         range={Number(range)}
@@ -300,7 +344,14 @@ export default function App() {
           seeAll={(search) => {
             setProject("all");
             setAgent("all");
-            setRoute({ view: "sessions", search });
+            change(
+              (previous) => ({
+                ...previous,
+                route: { view: "sessions" },
+                sessions: { ...initialWorkspace.sessions, search },
+              }),
+              true,
+            );
             scroll.current?.scrollTo({ top: 0 });
           }}
           onClose={() => setSearchOpen(false)}
@@ -340,6 +391,6 @@ export default function App() {
         </dl>
       </Modal>
       <Toaster theme={preferences.theme} position="bottom-right" closeButton richColors />
-    </>
+    </WorkspaceContext.Provider>
   );
 }
