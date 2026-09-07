@@ -28,7 +28,14 @@ const Connections = lazy(() => import("@/pages/connections"));
 type Route =
   | { view: Exclude<View, "sessions" | "models"> }
   | { view: "models"; modelKey?: string }
-  | { view: "sessions"; id?: string; query?: SessionQuery; day?: string; tool?: string };
+  | {
+      view: "sessions";
+      id?: string;
+      query?: SessionQuery;
+      day?: string;
+      tool?: string;
+      search?: string;
+    };
 
 export default function App() {
   const [route, setRoute] = useState<Route>({ view: "overview" });
@@ -242,7 +249,9 @@ export default function App() {
                     )}
                     {route.view === "sessions" && (
                       <Sessions
+                        key={`${scope.agent}:${scope.project}:${route.search ?? ""}`}
                         scope={scope}
+                        initialSearch={route.search}
                         selected={route.id}
                         selectedQuery={route.query}
                         scrollRef={scroll}
@@ -287,6 +296,12 @@ export default function App() {
             setProject("all");
             setAgent("all");
             openSession(id, sessionQuery());
+          }}
+          seeAll={(search) => {
+            setProject("all");
+            setAgent("all");
+            setRoute({ view: "sessions", search });
+            scroll.current?.scrollTo({ top: 0 });
           }}
           onClose={() => setSearchOpen(false)}
         />

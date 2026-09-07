@@ -8,6 +8,8 @@ import { sessionQuery, sessionOptions, navigationOptions } from "@/lib/history";
 import { commands, type HistoryScope, type SessionQuery } from "@/lib/bindings";
 import { integer } from "@/lib/format";
 import { native } from "@/lib/errors";
+import { SessionFilters } from "@/lib/components/session-filters";
+import { useModelName } from "@/lib/hooks/use-model-name";
 import { Pagination } from "@/lib/components/pagination";
 import { Skeleton } from "@/lib/components/ui/skeleton";
 import { Button } from "@/lib/components/ui/button";
@@ -19,6 +21,7 @@ import { ErrorBoundary } from "@/lib/components/error-boundary";
 
 export default function Sessions({
   scope,
+  initialSearch = "",
   selected,
   selectedQuery,
   scrollRef,
@@ -31,6 +34,7 @@ export default function Sessions({
   now,
 }: {
   scope: HistoryScope;
+  initialSearch?: string;
   selected?: string;
   selectedQuery?: SessionQuery;
   scrollRef: RefObject<HTMLDivElement | null>;
@@ -42,7 +46,12 @@ export default function Sessions({
   clearTool: () => void;
   now: number;
 }) {
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(initialSearch);
+  const [model, setModel] = useState<string | null>(null);
+  const [tool, setTool] = useState<string | null>(null);
+  const [failedOnly, setFailedOnly] = useState(false);
+  const modelName = useModelName();
+  const activeTool = selectedTool ?? tool;
   const [range, setRange] = useState("all");
   const [offset, setOffset] = useState(0);
   const [sort, setSort] = useState<SessionQuery["sort"]>("updatedAt");
@@ -58,7 +67,9 @@ export default function Sessions({
     searchModels,
     activityAfter: start,
     day: selectedDay ?? null,
-    tool: selectedTool ?? null,
+    tool: activeTool,
+    model,
+    failedOnly,
     offset,
     sort,
     descending,
@@ -157,7 +168,7 @@ export default function Sessions({
           action={
             <Button
               variant="outline"
-              disabled={exportData.isPending || !filtered.length}
+              disabled={exportData.isPending || !filtered.length || search !== deferred}
               onClick={() => exportData.mutate()}
             >
               <ArrowDownToLine />
@@ -188,6 +199,19 @@ export default function Sessions({
               { value: "90", label: "Active in last 90 days" },
             ]}
           />
+          <SessionFilters
+            scope={scope}
+            model={model}
+            tool={activeTool}
+            failedOnly={failedOnly}
+            onChange={(filters) => {
+              setModel(filters.model);
+              setTool(filters.tool);
+              setFailedOnly(filters.failedOnly);
+              setOffset(0);
+              if (selectedTool) clearTool();
+            }}
+          />
         </div>
         <p className="mb-4 text-sm text-muted-foreground">
           Dates filter sessions by their last activity. Tokens and elapsed time cover each entire
@@ -195,23 +219,67 @@ export default function Sessions({
           {selectedDay &&
             " The selected day matches sessions with usage or a start on that local day."}
         </p>
-        {selectedDay && (
-          <Button variant="secondary" size="sm" className="mb-4" onClick={clearDay}>
-            {selectedDay}
-            <X />
-          </Button>
-        )}
-        {selectedTool && (
-          <Button
-            variant="secondary"
-            size="sm"
-            className="mb-4"
-            onClick={clearTool}
-            aria-label="Clear tool filter"
-          >
-            {selectedTool}
-            <X />
-          </Button>
+        {(selectedDay || activeTool || model || failedOnly) && (
+          <div className="mb-4 flex flex-wrap gap-2">
+            {selectedDay && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  clearDay();
+                  setOffset(0);
+                }}
+                aria-label="Clear day filter"
+              >
+                {selectedDay}
+                <X />
+              </Button>
+            )}
+            {model && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setModel(null);
+                  setOffset(0);
+                }}
+                aria-label="Clear model filter"
+              >
+                {modelName(model)}
+                <X />
+              </Button>
+            )}
+            {activeTool && (
+              <Button
+                variant="secondary"
+                size="sm"
+                className="max-w-full"
+                onClick={() => {
+                  clearTool();
+                  setTool(null);
+                  setOffset(0);
+                }}
+                aria-label="Clear tool filter"
+              >
+                <span className="truncate">{activeTool}</span>
+                <X />
+              </Button>
+            )}
+            {failedOnly && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setFailedOnly(false);
+                  setOffset(0);
+                }}
+                aria-label="Clear failure filter"
+              >
+                Failed tool calls
+                <X />
+              </Button>
+            )}
+          </div>
         )}
         {page.error && <ErrorNotice error={page.error} retry={() => void page.refetch()} />}
         {page.isPending ? (

@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useDebounced } from "@/lib/hooks/use-debounced";
 import { useSessionSearch } from "@/lib/hooks/use-session-search";
 import { sessionOptions, sessionQuery } from "@/lib/history";
+import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Modal, ErrorNotice } from "./page";
 import { AgentMark } from "./agent-mark";
@@ -12,10 +13,12 @@ export function CommandMenu({
   pages,
   onClose,
   openSession,
+  seeAll,
 }: {
   pages: { label: string; select: () => void }[];
   onClose: () => void;
   openSession: (id: string) => void;
+  seeAll: (query: string) => void;
 }) {
   const [search, setSearch] = useState("");
   const [active, setActive] = useState(0);
@@ -101,6 +104,7 @@ export function CommandMenu({
           <button
             type="button"
             role="option"
+            tabIndex={-1}
             aria-selected={index === active}
             id={`command-${index}`}
             key={`${result.label}:${index}`}
@@ -125,6 +129,19 @@ export function CommandMenu({
           </p>
         )}
       </div>
+      {query && sessions.data && sessions.data.total > sessions.data.sessions.length && (
+        <Button
+          variant="ghost"
+          className="justify-between"
+          disabled={search.toLowerCase() !== query}
+          onClick={() => {
+            seeAll(search);
+            onClose();
+          }}
+        >
+          See all {sessions.data.total.toLocaleString()} matching sessions <ArrowUpRight />
+        </Button>
+      )}
     </Modal>
   );
 }
