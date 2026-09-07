@@ -1,7 +1,6 @@
 import { useDeferredValue, useMemo, useState, type RefObject } from "react";
 import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Brain, Check, Eye, GitCompareArrows, RefreshCw, Star, Wrench, X } from "lucide-react";
-import type { Session } from "@/lib/bindings";
 import { emptyModels, getCatalog, type Catalog, type Model } from "@/lib/models/catalog";
 import { tokenCost } from "@/lib/usage/costs";
 import { compact, integer, money } from "@/lib/format";
@@ -98,11 +97,11 @@ function Calculator({ models }: { models: Model[] }) {
 
 export default function Models({
   catalog,
-  sessions,
+  offerings,
   scrollRef,
 }: {
   catalog?: Catalog;
-  sessions: Session[];
+  offerings: string[];
   scrollRef: RefObject<HTMLDivElement | null>;
 }) {
   const client = useQueryClient();
@@ -128,12 +127,7 @@ export default function Models({
   });
   const refreshing = useIsMutating({ mutationKey: ["catalog-refresh"] }) > 0;
   const models = catalog?.models ?? emptyModels;
-  const used = useMemo(() => {
-    const keys = new Set<string>();
-    for (const session of sessions)
-      for (const usage of session.usage) keys.add(`${usage.provider}/${usage.model}`);
-    return keys;
-  }, [sessions]);
+  const used = useMemo(() => new Set(offerings), [offerings]);
   const providers = useMemo(
     () =>
       [...new Map(models.map((model) => [model.provider, model.providerName])).entries()].sort(

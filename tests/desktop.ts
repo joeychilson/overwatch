@@ -9,6 +9,7 @@ import type {
   SourcePreview,
   Snapshot,
 } from "../src/lib/bindings";
+import { historyFixture } from "./history-fixture";
 import { subDays } from "date-fns";
 
 export async function captureRuntimeErrors(page: Page) {
@@ -437,6 +438,7 @@ export async function desktop(
     samples: options.accountErrorWithoutUsage ? [] : [...samples, ...weekly],
   };
   const preferences: Preferences = { theme: "dark", savedModels: [], sidebarCollapsed: false };
+  await page.exposeFunction("historyFixture", historyFixture);
   await page.addInitScript(
     ({ snapshot, catalog, transcript, previewTranscript, accounts, preferences, options, now }) => {
       const state = { snapshot, accounts, preferences };
@@ -470,6 +472,35 @@ export async function desktop(
           },
           unregisterCallback: (id: number) => callbacks.delete(id),
           invoke: async (command: string, args: Record<string, unknown> = {}) => {
+            if (
+              [
+                "get_history_status",
+                "refresh_history",
+                "get_sessions",
+                "get_session_navigation",
+                "get_usage",
+                "get_tool_stats",
+                "get_log_allowances",
+                "export_sessions",
+              ].includes(command)
+            ) {
+              if (command === "refresh_history") {
+                if (options.failRefresh) throw { kind: "io", message: "Fixture disk read failed" };
+                if (options.cachedSummaryIssue) state.snapshot.sources[0].issues = [];
+              }
+              document.documentElement.dataset.historyRequests = JSON.stringify([
+                ...JSON.parse(document.documentElement.dataset.historyRequests ?? "[]"),
+                { command, args },
+              ]);
+              const result = await (
+                window as unknown as { historyFixture: (...args: unknown[]) => Promise<unknown> }
+              ).historyFixture(command, args, state.snapshot, catalog);
+              if (command === "export_sessions") {
+                document.documentElement.dataset.exportedFile = JSON.stringify(result);
+                return true;
+              }
+              return result;
+            }
             switch (command) {
               case "get_snapshot":
                 return structuredClone(state.snapshot);

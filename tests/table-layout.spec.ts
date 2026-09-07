@@ -49,14 +49,16 @@ test("row highlights have rounded outer corners on neutral surfaces in both them
   }
 });
 
-test("session columns and row heights stay stable when long names enter the virtual viewport", async ({
+test("paged session columns and row heights stay stable while scrolling past long names", async ({
   page,
 }) => {
   await page.getByRole("button", { name: "Sessions", exact: true }).click();
   const table = page.getByRole("table", { name: "Sessions", exact: true });
   await expect(table.locator("tbody tr[data-row-id]").first()).toBeVisible();
   const initial = await columns(table);
-  await expect(table.getByRole("button", { name: longNames.session, exact: true })).toHaveCount(0);
+  await expect(
+    table.getByRole("button", { name: longNames.session, exact: true }),
+  ).not.toBeInViewport();
   const viewport = page.locator('[data-slot="page-scroll"]');
   await viewport.evaluate((element) => {
     element.scrollTop = element.scrollHeight;

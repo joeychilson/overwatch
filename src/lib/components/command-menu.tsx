@@ -1,46 +1,42 @@
 import { useState } from "react";
 import { ArrowUpRight, Search } from "lucide-react";
-import type { Session } from "@/lib/bindings";
-import { useModelName } from "@/lib/hooks/use-model-name";
+import { useQuery } from "@tanstack/react-query";
+import { useDebounced } from "@/lib/hooks/use-debounced";
+import { useSessionSearch } from "@/lib/hooks/use-session-search";
+import { sessionOptions, sessionQuery } from "@/lib/history";
 import { Input } from "./ui/input";
-import { Modal } from "./page";
+import { Modal, ErrorNotice } from "./page";
 import { AgentMark } from "./agent-mark";
 
 export function CommandMenu({
-  sessions,
   pages,
   onClose,
   openSession,
 }: {
-  sessions: Session[];
   pages: { label: string; select: () => void }[];
   onClose: () => void;
   openSession: (id: string) => void;
 }) {
   const [search, setSearch] = useState("");
   const [active, setActive] = useState(0);
-  const modelName = useModelName();
-  const query = search.toLowerCase();
+  const query = useDebounced(search.toLowerCase());
+  const searchModels = useSessionSearch(query);
+  const sessions = useQuery(
+    sessionOptions(sessionQuery({}, { search: query, searchModels, limit: 30 })),
+  );
   const results = [
     ...pages
       .filter((page) => page.label.toLowerCase().includes(query))
       .map((page) => ({ ...page, detail: "Navigate", agent: null })),
-    ...sessions
-      .filter((session) =>
-        `${session.title} ${session.cwd} ${session.model} ${modelName(session.model)}`
-          .toLowerCase()
-          .includes(query),
-      )
-      .slice(0, 30)
-      .map((session) => ({
-        label: session.title,
-        detail: session.project,
-        agent: session.agent,
-        select: () => openSession(session.id),
-      })),
+    ...(sessions.data?.sessions ?? []).map((session) => ({
+      label: session.title,
+      detail: session.project,
+      agent: session.agent,
+      select: () => openSession(session.id),
+    })),
   ];
   function select(index: number) {
-    if (!results[index]) return;
+    if (!results[index] || search.toLowerCase() !== query || sessions.isPending) return;
     results[index].select();
     onClose();
   }
@@ -91,7 +87,11 @@ export function CommandMenu({
           }}
         />
       </div>
+      {sessions.error && (
+        <ErrorNotice error={sessions.error} retry={() => void sessions.refetch()} />
+      )}
       <div
+        aria-busy={sessions.isFetching || search.toLowerCase() !== query}
         id="command-results"
         role="listbox"
         aria-label="Search results"
@@ -119,7 +119,7 @@ export function CommandMenu({
             </div>
           </button>
         ))}
-        {!results.length && (
+        {!results.length && !sessions.isPending && (
           <p className="py-8 text-center text-sm text-muted-foreground">
             No matching pages or sessions.
           </p>

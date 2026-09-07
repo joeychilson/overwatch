@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import type { Session } from "@/lib/bindings";
+import type { Session, UsageSummary, SessionQuery } from "@/lib/bindings";
 import { agents } from "@/lib/agents";
 import { useModelName } from "@/lib/hooks/use-model-name";
 import { compact, duration, elapsed, relative } from "@/lib/format";
@@ -14,8 +14,14 @@ export function SessionTable({
   boxed,
   usageOnly = false,
   label = "Sessions",
+  usage = {},
+  query,
+  onSort,
 }: {
   sessions: Session[];
+  usage?: Record<string, UsageSummary>;
+  query?: SessionQuery;
+  onSort?: (sort: SessionQuery["sort"], descending: boolean) => void;
   usageOnly?: boolean;
   label?: string;
   onOpen: (id: string, orderedIds: string[]) => void;
@@ -25,7 +31,7 @@ export function SessionTable({
   const modelName = useModelName();
   const tokens = (session: Session) =>
     usageOnly
-      ? session.usage.reduce((sum, usage) => sum + totalTokens(usage.tokens), 0)
+      ? totalTokens(usage[session.id]?.tokens ?? session.tokens)
       : totalTokens(session.tokens);
   const columns: DataColumn<Session>[] = [
     {
@@ -53,7 +59,7 @@ export function SessionTable({
             <p className="mt-1 truncate text-xs text-muted-foreground" title={row.original.model}>
               {agents[row.original.agent].name} <span className="mx-1.5 opacity-40">/</span>{" "}
               {usageOnly
-                ? [...new Set(row.original.usage.map((usage) => modelName(usage.model)))].join(", ")
+                ? [...new Set((usage[row.original.id]?.models ?? []).map(modelName))].join(", ")
                 : modelName(row.original.model)}
             </p>
           </div>
@@ -83,7 +89,7 @@ export function SessionTable({
         {
           id: "responses",
           header: "Responses",
-          accessorFn: (session: Session) => session.usage.length,
+          accessorFn: (session: Session) => usage[session.id]?.calls ?? 0,
           width: 100,
         },
       ]
@@ -114,6 +120,21 @@ export function SessionTable({
   return (
     <DataTable
       label={label}
+      virtualize={!query}
+      sorting={
+        query && onSort
+          ? {
+              id: query.sort,
+              descending: query.descending,
+              onChange: (id, descending) => {
+                if (
+                  ["title", "project", "tokens", "duration", "responses", "updatedAt"].includes(id)
+                )
+                  onSort(id as SessionQuery["sort"], descending);
+              },
+            }
+          : undefined
+      }
       data={sessions}
       columns={columns}
       rowKey={(session) => session.id}

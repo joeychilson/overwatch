@@ -29,7 +29,15 @@ export function DataTable<T extends RowData>({
   boxed: boxedProp,
   empty,
   className,
+  virtualize = true,
+  sorting,
 }: {
+  virtualize?: boolean;
+  sorting?: {
+    id: string;
+    descending: boolean;
+    onChange: (id: string, descending: boolean) => void;
+  };
   data: T[];
   columns: DataColumn<T>[];
   label: string;
@@ -49,12 +57,13 @@ export function DataTable<T extends RowData>({
   const localScroll = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const scroll = scrollRef ?? localScroll;
-  const margin = useScrollMargin(root, scroll, page && data.length > 0) ?? 0;
+  const margin = useScrollMargin(root, scroll, virtualize && page && data.length > 0) ?? 0;
   const table = useTable({ features, data, columns, getRowId: rowKey });
   const rows = table.getRowModel().rows;
   // Virtual owns a mutable viewport instance. Keep this component outside React Compiler.
   // oxlint-disable-next-line react/incompatible-library
   const virtual = useVirtualizer({
+    enabled: virtualize,
     count: rows.length,
     getScrollElement: () => scroll.current,
     estimateSize: () => 60,
@@ -63,11 +72,16 @@ export function DataTable<T extends RowData>({
     overscan: 8,
     scrollMargin: page ? margin : 0,
   });
-  const items = virtual.getVirtualItems();
+  const items = virtualize
+    ? virtual.getVirtualItems()
+    : rows.map((_, index) => ({ index, start: 0, end: 0 }));
   const lead = items[0] ? Math.max(0, items[0].start - (page ? margin : 0)) : 0;
-  const trail = items.length
-    ? Math.max(0, virtual.getTotalSize() - (items[items.length - 1].end - (page ? margin : 0)))
-    : 0;
+  const trail =
+    virtualize && items.length
+      ? Math.max(0, virtual.getTotalSize() - (items[items.length - 1].end - (page ? margin : 0)))
+      : 0;
+  const direction = (id: string, fallback: false | "asc" | "desc") =>
+    sorting ? (sorting.id === id ? (sorting.descending ? "desc" : "asc") : false) : fallback;
   if (!data.length)
     return empty ?? <Empty title="No results">Try a different search or filter.</Empty>;
   return (
@@ -98,9 +112,9 @@ export function DataTable<T extends RowData>({
                   key={header.id}
                   scope="col"
                   aria-sort={
-                    header.column.getIsSorted() === "asc"
+                    direction(header.column.id, header.column.getIsSorted()) === "asc"
                       ? "ascending"
-                      : header.column.getIsSorted() === "desc"
+                      : direction(header.column.id, header.column.getIsSorted()) === "desc"
                         ? "descending"
                         : "none"
                   }
@@ -113,12 +127,22 @@ export function DataTable<T extends RowData>({
                     <button
                       type="button"
                       className="inline-flex items-center gap-2 rounded py-2 hover:text-foreground"
-                      onClick={header.column.getToggleSortingHandler()}
+                      onClick={
+                        sorting
+                          ? () =>
+                              sorting.onChange(
+                                header.column.id,
+                                sorting.id === header.column.id
+                                  ? !sorting.descending
+                                  : header.column.getFirstSortDir() === "desc",
+                              )
+                          : header.column.getToggleSortingHandler()
+                      }
                     >
                       <table.FlexRender header={header} />
-                      {header.column.getIsSorted() === "desc" ? (
+                      {direction(header.column.id, header.column.getIsSorted()) === "desc" ? (
                         <ArrowDown className="size-3" />
-                      ) : header.column.getIsSorted() === "asc" ? (
+                      ) : direction(header.column.id, header.column.getIsSorted()) === "asc" ? (
                         <ArrowUp className="size-3" />
                       ) : (
                         <ArrowUpDown className="size-3 opacity-40" />

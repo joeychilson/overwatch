@@ -1,6 +1,6 @@
 import { CircleHelp, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
 import { agentIds, agents } from "@/lib/agents";
-import type { Agent, Snapshot } from "@/lib/bindings";
+import type { Agent, HistoryStatus } from "@/lib/bindings";
 import { navigation, type View } from "./navigation";
 import { cn } from "cn";
 import { AgentMark } from "@/lib/components/agent-mark";
@@ -26,7 +26,7 @@ export function AppSidebar({
   view: View;
   sessionCount?: number;
   agent: Agent | "all";
-  snapshot?: Snapshot;
+  snapshot?: HistoryStatus;
   saving: boolean;
   onNavigate: (view: View) => void;
   onSelectAgent: (agent: Agent) => void;

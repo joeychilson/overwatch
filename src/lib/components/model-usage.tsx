@@ -1,7 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
-import type { Session } from "@/lib/bindings";
-import type { Model } from "@/lib/models/catalog";
-import { aggregate } from "@/lib/usage/analytics";
+import type { HistoryScope } from "@/lib/bindings";
+import type { UsageStats } from "@/lib/history";
 import { knownCost } from "@/lib/usage/costs";
 import { compact, integer, money } from "@/lib/format";
 import { rowButton, whenPresent } from "@/lib/components/restore-focus";
@@ -15,8 +14,8 @@ import { Button } from "@/lib/components/ui/button";
 export function ModelUsage({
   initialModelKey,
   stats,
-  sessions,
-  models,
+  scope,
+  lifetime,
   start,
   end,
   now,
@@ -25,9 +24,9 @@ export function ModelUsage({
   openCatalog,
 }: {
   initialModelKey?: string;
-  stats: ReturnType<typeof aggregate>;
-  sessions: Session[];
-  models: Model[];
+  stats: UsageStats;
+  lifetime: UsageStats;
+  scope: HistoryScope;
   start: number;
   end: number;
   now: number;
@@ -41,10 +40,7 @@ export function ModelUsage({
   const listPosition = useRef(0);
   const restore = useRef(false);
   const restoreKey = useRef("");
-  const allGroups = useMemo(
-    () => usageGroups(aggregate(sessions, models).models, "model"),
-    [sessions, models],
-  );
+  const allGroups = useMemo(() => usageGroups(lifetime.models, "model"), [lifetime.models]);
   const groups = useMemo(() => usageGroups(stats.models, "model"), [stats.models]);
   const [selected, setSelected] = useState<UsageGroup | undefined>(() =>
     allGroups.find((group) => group.key === initialModelKey),
@@ -203,8 +199,7 @@ export function ModelUsage({
         <ModelDetail
           key={detail.key}
           group={detail}
-          sessions={sessions}
-          models={models}
+          scope={scope}
           start={start}
           end={end}
           now={now}

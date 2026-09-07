@@ -1,31 +1,26 @@
-import {
-  useDeferredValue,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type RefObject,
-} from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMemo, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowDownToLine, ArrowLeft, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { startOfDay, subDays } from "date-fns";
-import { agents } from "@/lib/agents";
-import { useModelName } from "@/lib/hooks/use-model-name";
-import { type Session } from "@/lib/bindings";
-import { totalTokens } from "@/lib/usage/analytics";
-import { day, elapsed, hasTimestamp, integer } from "@/lib/format";
-import { exportCsv } from "@/lib/export";
+import { useSessionSearch } from "@/lib/hooks/use-session-search";
+import { useDebounced } from "@/lib/hooks/use-debounced";
+import { sessionQuery, sessionOptions, navigationOptions } from "@/lib/history";
+import { commands, type HistoryScope, type SessionQuery } from "@/lib/bindings";
+import { integer } from "@/lib/format";
+import { native } from "@/lib/errors";
+import { Pagination } from "@/lib/components/pagination";
+import { Skeleton } from "@/lib/components/ui/skeleton";
 import { Button } from "@/lib/components/ui/button";
-import { FilterSelect, PageTitle, SearchField } from "@/lib/components/page";
+import { ErrorNotice, FilterSelect, PageTitle, SearchField } from "@/lib/components/page";
 import { rowButton, whenPresent } from "@/lib/components/restore-focus";
 import { SessionTable } from "@/lib/components/session-table";
 import { SessionReader } from "@/lib/components/session-reader";
 import { ErrorBoundary } from "@/lib/components/error-boundary";
 
 export default function Sessions({
-  sessions,
+  scope,
   selected,
-  order,
+  selectedQuery,
   scrollRef,
   selectedDay,
   selectedTool,
@@ -35,13 +30,13 @@ export default function Sessions({
   clearTool,
   now,
 }: {
-  sessions: Session[];
+  scope: HistoryScope;
   selected?: string;
-  order?: string[];
+  selectedQuery?: SessionQuery;
   scrollRef: RefObject<HTMLDivElement | null>;
   selectedDay?: string;
   selectedTool?: string;
-  openSession: (id: string, orderedIds: string[]) => void;
+  openSession: (id: string, query: SessionQuery) => void;
   clearSelection: () => void;
   clearDay: () => void;
   clearTool: () => void;
@@ -49,35 +44,32 @@ export default function Sessions({
 }) {
   const [search, setSearch] = useState("");
   const [range, setRange] = useState("all");
-  const modelName = useModelName();
+  const [offset, setOffset] = useState(0);
+  const [sort, setSort] = useState<SessionQuery["sort"]>("updatedAt");
+  const [descending, setDescending] = useState(true);
+  const deferred = useDebounced(search);
+  const searchModels = useSessionSearch(deferred);
   const list = useRef<HTMLDivElement>(null);
   const place = useRef<{ page: number; id: string } | null>(null);
   const restoring = useRef(false);
-  const deferred = useDeferredValue(search.toLowerCase());
-  const start = range === "all" ? 0 : startOfDay(subDays(now, Number(range) - 1)).getTime();
-  const filtered = useMemo(
-    () =>
-      sessions.filter(
-        (session) =>
-          session.updatedAt >= start &&
-          (!selectedTool || session.tools.some((tool) => tool.name === selectedTool)) &&
-          (!selectedDay ||
-            session.usage.some((point) => day(point.timestamp) === selectedDay) ||
-            day(session.startedAt) === selectedDay) &&
-          `${session.title} ${session.cwd} ${session.model} ${modelName(session.model)}`
-            .toLowerCase()
-            .includes(deferred),
-      ),
-    [sessions, start, selectedTool, selectedDay, deferred, modelName],
-  );
-  const ordered = useMemo(() => {
-    if (!order) return filtered.map((session) => session.id);
-    const available = new Set(sessions.map((session) => session.id));
-    return order.filter((id) => available.has(id));
-  }, [order, sessions, filtered]);
-  const position = selected ? ordered.indexOf(selected) : -1;
-  const previous = position > 0 ? ordered[position - 1] : undefined;
-  const next = position >= 0 ? ordered[position + 1] : undefined;
+  const start = range === "all" ? null : startOfDay(subDays(now, Number(range) - 1)).getTime();
+  const query = sessionQuery(scope, {
+    search: deferred,
+    searchModels,
+    activityAfter: start,
+    day: selectedDay ?? null,
+    tool: selectedTool ?? null,
+    offset,
+    sort,
+    descending,
+  });
+  const page = useQuery(sessionOptions(query));
+  const filtered = useMemo(() => page.data?.sessions ?? [], [page.data]);
+  const context = selectedQuery ?? query;
+  const navigation = useQuery(navigationOptions(selected ?? "", context));
+  const position = navigation.data?.position ?? -1;
+  const previous = navigation.data?.previous;
+  const next = navigation.data?.next;
   useLayoutEffect(() => {
     if (selected || !restoring.current) return;
     const root = list.current;
@@ -94,41 +86,11 @@ export default function Sessions({
       return true;
     });
   }, [selected, scrollRef, filtered]);
-  const exportData = useMutation({
-    mutationFn: () =>
-      exportCsv("overwatch-sessions.csv", [
-        [
-          "Session",
-          "Agent",
-          "Project",
-          "Model",
-          "Tokens",
-          "Uncached input",
-          "Cached input",
-          "Cache writes",
-          "Output",
-          "Reasoning (included in output)",
-          "Started",
-          "Updated",
-          "Elapsed ms",
-        ],
-        ...filtered.map((session) => [
-          session.title,
-          agents[session.agent].name,
-          session.cwd,
-          session.model,
-          totalTokens(session.tokens),
-          session.tokens.input,
-          session.tokens.cacheRead,
-          session.tokens.cacheWrite,
-          session.tokens.output,
-          session.tokens.reasoning,
-          hasTimestamp(session.startedAt) ? new Date(session.startedAt).toISOString() : null,
-          hasTimestamp(session.updatedAt) ? new Date(session.updatedAt).toISOString() : null,
-          elapsed(session.startedAt, session.updatedAt),
-        ]),
-      ]),
-  });
+  const exportData = useMutation({ mutationFn: () => native(commands.exportSessions(query)) });
+  const changePage = (offset: number) => {
+    setOffset(offset);
+    scrollRef.current?.scrollTo({ top: 0 });
+  };
   return (
     <>
       {selected && (
@@ -155,7 +117,7 @@ export default function Sessions({
                 size="sm"
                 aria-label="Previous session"
                 disabled={!previous}
-                onClick={() => previous && openSession(previous, ordered)}
+                onClick={() => previous && openSession(previous, context)}
               >
                 <ChevronLeft />
                 Previous
@@ -165,7 +127,7 @@ export default function Sessions({
                   aria-live="polite"
                   className="min-w-16 text-center text-xs text-muted-foreground tabular-nums"
                 >
-                  {integer(position + 1)} of {integer(ordered.length)}
+                  {integer(position + 1)} of {integer(navigation.data?.total ?? 0)}
                 </span>
               )}
               <Button
@@ -173,13 +135,16 @@ export default function Sessions({
                 size="sm"
                 aria-label="Next session"
                 disabled={!next}
-                onClick={() => next && openSession(next, ordered)}
+                onClick={() => next && openSession(next, context)}
               >
                 Next
                 <ChevronRight />
               </Button>
             </div>
           </nav>
+          {navigation.error && (
+            <ErrorNotice error={navigation.error} retry={() => void navigation.refetch()} />
+          )}
           <ErrorBoundary key={selected}>
             <SessionReader id={selected} scrollRef={scrollRef} />
           </ErrorBoundary>
@@ -188,7 +153,7 @@ export default function Sessions({
       <div ref={list} hidden={!!selected}>
         <PageTitle
           title="Sessions"
-          description={`${integer(sessions.length)} conversations across your local history.`}
+          description={`${integer(page.data?.total ?? 0)} conversations across your local history.`}
           action={
             <Button
               variant="outline"
@@ -203,13 +168,19 @@ export default function Sessions({
         <div className="mb-5 flex flex-wrap gap-3">
           <SearchField
             value={search}
-            onChange={setSearch}
+            onChange={(value) => {
+              setSearch(value);
+              setOffset(0);
+            }}
             placeholder="Search sessions, projects, or models…"
           />
           <FilterSelect
             label="Session date range"
             value={range}
-            onChange={setRange}
+            onChange={(value) => {
+              setRange(value);
+              setOffset(0);
+            }}
             options={[
               { value: "all", label: "Any last activity" },
               { value: "7", label: "Active in last 7 days" },
@@ -242,18 +213,31 @@ export default function Sessions({
             <X />
           </Button>
         )}
-        <SessionTable
-          sessions={filtered}
-          scrollRef={scrollRef}
-          onOpen={(id, orderedIds) => {
-            place.current = {
-              page: scrollRef.current?.scrollTop ?? 0,
-              id,
-            };
-            openSession(id, orderedIds);
-          }}
-        />
-        <p className="mt-5 text-xs text-muted-foreground">{integer(filtered.length)} sessions</p>
+        {page.error && <ErrorNotice error={page.error} retry={() => void page.refetch()} />}
+        {page.isPending ? (
+          <Skeleton className="h-96 w-full" />
+        ) : (
+          <>
+            {page.data && <Pagination {...page.data} busy={page.isFetching} onPage={changePage} />}
+            <SessionTable
+              query={query}
+              onSort={(sort, descending) => {
+                setSort(sort);
+                setDescending(descending);
+                setOffset(0);
+              }}
+              sessions={filtered}
+              scrollRef={scrollRef}
+              onOpen={(id) => {
+                place.current = {
+                  page: scrollRef.current?.scrollTop ?? 0,
+                  id,
+                };
+                openSession(id, query);
+              }}
+            />
+          </>
+        )}
       </div>
     </>
   );

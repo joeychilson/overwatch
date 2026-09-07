@@ -1,15 +1,16 @@
 import { lazy, Suspense, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { historyScope, sessionOptions, sessionQuery, useUsage } from "@/lib/history";
+import { Pagination } from "@/lib/components/pagination";
 import { ArrowLeft } from "lucide-react";
 import { agentIds, agents } from "@/lib/agents";
-import type { Agent, Session } from "@/lib/bindings";
-import type { Model } from "@/lib/models/catalog";
-import { aggregate } from "@/lib/usage/analytics";
+import type { Agent, HistoryScope, SessionQuery } from "@/lib/bindings";
 import { knownCost } from "@/lib/usage/costs";
 import { compact, integer, money } from "@/lib/format";
 import { rowButton, whenPresent } from "@/lib/components/restore-focus";
 import { offeringProviderNames, usageGroups, type UsageGroup } from "@/lib/usage/groups";
 import { DataTable, type DataColumn } from "@/lib/components/data-table";
-import { FilterSelect, Metric, Section } from "@/lib/components/page";
+import { ErrorNotice, FilterSelect, Metric, Section } from "@/lib/components/page";
 import { ProviderMark } from "@/lib/components/provider-mark";
 import { SessionTable } from "@/lib/components/session-table";
 import { Button } from "@/lib/components/ui/button";
@@ -23,8 +24,7 @@ const SessionReader = lazy(() =>
 export function ModelDetail({
   group,
   scrollRef,
-  sessions,
-  models,
+  scope,
   start,
   end,
   now,
@@ -33,8 +33,7 @@ export function ModelDetail({
 }: {
   group: UsageGroup;
   scrollRef: RefObject<HTMLDivElement | null>;
-  sessions: Session[];
-  models: Model[];
+  scope: HistoryScope;
   start: number;
   end: number;
   now: number;
@@ -47,27 +46,21 @@ export function ModelDetail({
   const restoreSession = useRef<string | undefined>(undefined);
   const [provider, setProvider] = useState("all");
   const [agent, setAgent] = useState<Agent | "all">("all");
-  const matched = useMemo(() => {
-    const keys = new Set(
-      group.offerings
-        .filter((offering) => provider === "all" || offering.provider === provider)
-        .map((offering) => offering.key),
-    );
-    return sessions.flatMap((session) => {
-      if (agent !== "all" && session.agent !== agent) return [];
-      const usage = session.usage.filter(
-        (usage) =>
-          usage.timestamp >= start &&
-          usage.timestamp < end &&
-          keys.has(`${usage.provider}/${usage.model}`),
-      );
-      return usage.length ? [{ ...session, usage }] : [];
-    });
-  }, [group.offerings, provider, agent, sessions, start, end]);
-  const stats = useMemo(
-    () => aggregate(matched, models, start, end),
-    [matched, models, start, end],
-  );
+  const [offset, setOffset] = useState(0);
+  const [sort, setSort] = useState<SessionQuery["sort"]>("updatedAt");
+  const [descending, setDescending] = useState(true);
+  const selectedScope = historyScope({
+    ...scope,
+    start,
+    end,
+    agent: agent === "all" ? scope.agent : agent,
+    offerings: group.offerings
+      .filter((offering) => provider === "all" || offering.provider === provider)
+      .map((offering) => offering.key),
+  });
+  const { stats } = useUsage(selectedScope);
+  const query = sessionQuery(selectedScope, { usageOnly: true, offset, sort, descending });
+  const page = useQuery(sessionOptions(query));
   const providers = [
     ...new Map(
       group.offerings.map((offering) => [offering.provider, offering.providerName]),
@@ -220,7 +213,10 @@ export function ModelDetail({
           <FilterSelect
             label="Model provider filter"
             value={provider}
-            onChange={setProvider}
+            onChange={(value) => {
+              setProvider(value);
+              setOffset(0);
+            }}
             options={[
               { value: "all", label: "All providers" },
               ...providers.map(([value, label]) => ({ value, label })),
@@ -229,10 +225,16 @@ export function ModelDetail({
           <FilterSelect
             label="Model agent filter"
             value={agent}
-            onChange={setAgent}
+            onChange={(value) => {
+              setAgent(value);
+              setOffset(0);
+            }}
             options={[
               { value: "all", label: "All agents" },
-              ...agentIds.map((value) => ({ value, label: agents[value].name })),
+              ...(scope.agent ? [scope.agent] : agentIds).map((value) => ({
+                value,
+                label: agents[value].name,
+              })),
             ]}
           />
         </div>
@@ -251,12 +253,12 @@ export function ModelDetail({
                 : "Recorded costs and estimates"
             }
           />
-          <Metric label="Sessions" value={integer(matched.length)} detail="In selected period" />
           <Metric
-            label="Agents"
-            value={integer(new Set(matched.map((session) => session.agent)).size)}
-            detail="Coding agents"
+            label="Sessions"
+            value={integer(stats.sessionCount)}
+            detail="In selected period"
           />
+          <Metric label="Agents" value={integer(stats.agentCount)} detail="Coding agents" />
         </div>
         <UsageOverTime stats={stats} start={start} now={now} range={range} visible={!reading} />
         <Section title="Providers">
@@ -272,18 +274,31 @@ export function ModelDetail({
           title="Sessions"
           action={
             <span className="text-xs text-muted-foreground">
-              {integer(matched.length)} sessions
+              {integer(stats.sessionCount)} sessions
             </span>
           }
         >
-          <SessionTable
-            label="Model contributing sessions"
-            sessions={matched}
-            usageOnly
-            boxed
-            scrollRef={sessionScroll}
-            onOpen={openSession}
-          />
+          {page.error && <ErrorNotice error={page.error} retry={() => void page.refetch()} />}
+          {page.data && <Pagination {...page.data} busy={page.isFetching} onPage={setOffset} />}
+          {page.isPending ? (
+            <Skeleton className="h-64 w-full" />
+          ) : (
+            <SessionTable
+              query={query}
+              onSort={(sort, descending) => {
+                setSort(sort);
+                setDescending(descending);
+                setOffset(0);
+              }}
+              usage={page.data?.usage}
+              label="Model contributing sessions"
+              sessions={page.data?.sessions ?? []}
+              usageOnly
+              boxed
+              scrollRef={sessionScroll}
+              onOpen={openSession}
+            />
+          )}
           <p className="mt-5 text-xs text-muted-foreground">
             Tokens and responses include this model’s usage in the selected period. Open a session
             to read its full conversation.

@@ -1,13 +1,20 @@
 import { useMemo } from "react";
 import { addDays, eachDayOfInterval, formatDistanceStrict, startOfDay, subDays } from "date-fns";
 import { ArrowDownToLine, ArrowUpRight, TriangleAlert } from "lucide-react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { accountOptions } from "@/lib/queries";
 import { subscriptionForecasts, subscriptionWarnings } from "@/lib/usage/forecast";
 import { agents, agentIds } from "@/lib/agents";
-import type { Session } from "@/lib/bindings";
-import type { Model } from "@/lib/models/catalog";
-import { activity, aggregate, toolStats } from "@/lib/usage/analytics";
+import {
+  historyScope,
+  sessionOptions,
+  sessionQuery,
+  toolOptions,
+  useUsage,
+  logAllowanceOptions,
+} from "@/lib/history";
+import type { HistoryScope } from "@/lib/bindings";
+import { activity } from "@/lib/usage/analytics";
 import { knownCost } from "@/lib/usage/costs";
 import { compact, day, integer, money } from "@/lib/format";
 import { exportCsv } from "@/lib/export";
@@ -20,9 +27,8 @@ import { Metric, PageTitle, Section, Empty } from "@/lib/components/page";
 import { SessionTable } from "@/lib/components/session-table";
 
 type Props = {
-  sessions: Session[];
-  allSessions: Session[];
-  models: Model[];
+  scope: HistoryScope;
+  sessionCount: number;
   range: number;
   now: number;
   openSession: (id: string) => void;
@@ -34,9 +40,8 @@ type Props = {
 };
 
 export default function Overview({
-  sessions,
-  allSessions,
-  models,
+  scope,
+  sessionCount,
   range,
   now,
   openSession,
@@ -48,35 +53,28 @@ export default function Overview({
 }: Props) {
   const start = startOfDay(subDays(now, range - 1)).getTime();
   const accounts = useQuery(accountOptions);
+  const logs = useQuery(logAllowanceOptions);
   const quota = useMemo(
-    () => subscriptionForecasts(accounts.data, allSessions, now),
-    [accounts.data, allSessions, now],
+    () => subscriptionForecasts(accounts.data, [{ limits: logs.data ?? [] }], now),
+    [accounts.data, logs.data, now],
   );
   const warnings = subscriptionWarnings(quota, now);
   const end = addDays(startOfDay(now), 1).getTime();
-  const stats = useMemo(
-    () => aggregate(sessions, models, start, end),
-    [sessions, models, start, end],
-  );
-  const lifetime = useMemo(() => aggregate(sessions, models), [sessions, models]);
+  const { stats } = useUsage(historyScope({ ...scope, start, end }));
+  const { stats: lifetime } = useUsage(scope);
   const previousStart = subDays(start, range).getTime();
-  const previous = useMemo(
-    () => aggregate(sessions, models, previousStart, start),
-    [sessions, models, previousStart, start],
+  const { stats: previous } = useUsage(
+    historyScope({ ...scope, start: previousStart, end: start }),
   );
   const change = previous.total ? (stats.total / previous.total - 1) * 100 : null;
   const streak = activity(lifetime.days, new Date(now));
-  const recent = sessions.filter(
-    (session) => session.updatedAt >= start && session.updatedAt < end,
-  );
-  const usedSessionIds = new Set(stats.sessionIds);
-  const projectCount = new Set(
-    sessions
-      .filter((session) => usedSessionIds.has(session.id))
-      .map((session) => session.cwd)
-      .filter(Boolean),
-  ).size;
-  const tools = toolStats(recent);
+  const recent = useSuspenseQuery(
+    sessionOptions(sessionQuery(scope, { activityAfter: start, activityBefore: end, limit: 5 })),
+  ).data;
+  const scopedSessions = useSuspenseQuery(sessionOptions(sessionQuery(scope, { limit: 1 }))).data
+    .total;
+  const projectCount = stats.projectCount;
+  const { data: tools } = useSuspenseQuery(toolOptions(historyScope({ ...scope, start, end })));
   const days = eachDayOfInterval({ start, end: now });
   const exportData = useMutation({
     mutationFn: () =>
@@ -116,7 +114,7 @@ export default function Overview({
           <Button
             variant="outline"
             onClick={() => exportData.mutate()}
-            disabled={exportData.isPending || !sessions.length}
+            disabled={exportData.isPending || !scopedSessions}
           >
             <ArrowDownToLine />
             Export
@@ -162,11 +160,11 @@ export default function Overview({
           </Button>
         </div>
       )}
-      {!sessions.length ? (
+      {!scopedSessions ? (
         <Empty
-          title={allSessions.length ? "No sessions match this scope" : "Your workspace starts here"}
+          title={sessionCount ? "No sessions match this scope" : "Your workspace starts here"}
           action={
-            allSessions.length ? (
+            sessionCount ? (
               <Button onClick={clearScope}>Clear project and agent filters</Button>
             ) : (
               <Button onClick={() => navigate("connections")}>
@@ -176,7 +174,7 @@ export default function Overview({
             )
           }
         >
-          {allSessions.length
+          {sessionCount
             ? "Your local history is available. Choose another project or agent to see its usage."
             : "Connect your local agent folders to see sessions, token usage, and model insights."}
         </Empty>
@@ -223,7 +221,7 @@ export default function Overview({
             />
             <Metric
               label="Sessions with usage"
-              value={integer(stats.sessionIds.length)}
+              value={integer(stats.sessionCount)}
               detail={`${projectCount} ${projectCount === 1 ? "project" : "projects"} with recorded responses`}
             />
             <Metric
@@ -258,7 +256,7 @@ export default function Overview({
                 detail={`${streak.peak?.day ?? "No activity"} · lifetime`}
               />
             </div>
-            <ActivityHeatmap lifetime={lifetime} sessions={sessions} now={now} openDay={openDay} />
+            <ActivityHeatmap lifetime={lifetime} now={now} openDay={openDay} />
           </div>
           <div className="mb-10 grid grid-cols-1 gap-10 lg:grid-cols-2 lg:gap-12">
             <Section
@@ -312,7 +310,11 @@ export default function Overview({
               </Button>
             }
           >
-            <SessionTable sessions={recent.slice(0, 5)} boxed={false} onOpen={openSession} />
+            <SessionTable
+              sessions={recent.sessions}
+              boxed={false}
+              onOpen={(id) => openSession(id)}
+            />
           </Section>
           <p className="mt-8 text-xs leading-relaxed text-muted-foreground">
             API equivalent is a model-price estimate, not your subscription bill. Usage follows each

@@ -5,7 +5,7 @@ import { day } from "../format";
 import { usageGroups } from "./groups";
 
 export function usageChart(
-  stats: ReturnType<typeof aggregate>,
+  stats: Omit<ReturnType<typeof aggregate>, "sessionIds">,
   start: number,
   end: number,
   grouping: "agent" | "model" | "provider",

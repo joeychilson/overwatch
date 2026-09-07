@@ -23,13 +23,6 @@ export const queryClient = new QueryClient({
   },
 });
 
-export const snapshotOptions = queryOptions({
-  queryKey: ["snapshot"],
-  queryFn: () => native(commands.getSnapshot()),
-  enabled: isTauri(),
-  staleTime: Infinity,
-});
-
 export const catalogOptions = queryOptions({
   queryKey: ["catalog", "pricing"],
   queryFn: () => getCatalog(),

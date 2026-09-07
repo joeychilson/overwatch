@@ -1,20 +1,17 @@
 import { useId, useState } from "react";
 import { eachDayOfInterval, format, startOfWeek, subDays } from "date-fns";
 import { Tooltip } from "@base-ui/react/tooltip";
-import type { Session } from "@/lib/bindings";
-import type { aggregate } from "@/lib/usage/analytics";
-import { compact, day, duration, elapsed, integer } from "@/lib/format";
+import type { UsageStats } from "@/lib/history";
+import { compact, day, duration, integer } from "@/lib/format";
 import { ChartHoverCard } from "@/lib/components/ui/chart";
 import { Section } from "@/lib/components/page";
 
 export function ActivityHeatmap({
   lifetime,
-  sessions,
   now,
   openDay,
 }: {
-  lifetime: ReturnType<typeof aggregate>;
-  sessions: Session[];
+  lifetime: UsageStats;
   now: number;
   openDay: (day: string) => void;
 }) {
@@ -89,14 +86,8 @@ export function ActivityHeatmap({
         <span>{format(now, "MMM d, yyyy")}</span>
       </div>
       <p className="mt-3 text-xs text-muted-foreground">
-        {compact(lifetime.total)} lifetime tokens ·{" "}
-        {duration(
-          sessions.reduce<number | null>((longest, session) => {
-            const value = elapsed(session.startedAt, session.updatedAt);
-            return value == null ? longest : Math.max(longest ?? 0, value);
-          }, null),
-        )}{" "}
-        longest session
+        {compact(lifetime.total)} lifetime tokens · {duration(lifetime.longestSession)} longest
+        session
       </p>
     </Section>
   );

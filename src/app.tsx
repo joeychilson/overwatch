@@ -1,11 +1,11 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isTauri } from "@tauri-apps/api/core";
 import { Toaster } from "sonner";
-import { commands, type Agent } from "@/lib/bindings";
-import { emptyModels } from "@/lib/models/catalog";
+import { commands, type Agent, type SessionQuery } from "@/lib/bindings";
+import { historyOptions, historyScope, sessionQuery } from "@/lib/history";
 import { AppFailure, native } from "@/lib/errors";
-import { catalogOptions, snapshotOptions } from "@/lib/queries";
+import { catalogOptions } from "@/lib/queries";
 import { usePreferences } from "@/lib/hooks/use-preferences";
 import { useNativeEvents } from "@/lib/hooks/use-native-events";
 import { useNow } from "@/lib/hooks/use-now";
@@ -28,7 +28,7 @@ const Connections = lazy(() => import("@/pages/connections"));
 type Route =
   | { view: Exclude<View, "sessions" | "models"> }
   | { view: "models"; modelKey?: string }
-  | { view: "sessions"; id?: string; order?: string[]; day?: string; tool?: string };
+  | { view: "sessions"; id?: string; query?: SessionQuery; day?: string; tool?: string };
 
 export default function App() {
   const [route, setRoute] = useState<Route>({ view: "overview" });
@@ -43,7 +43,7 @@ export default function App() {
   const scroll = useRef<HTMLDivElement>(null);
   const now = useNow();
   const client = useQueryClient();
-  const snapshot = useQuery(snapshotOptions);
+  const snapshot = useQuery(historyOptions);
   const catalog = useQuery(catalogOptions);
   const {
     preferences,
@@ -54,8 +54,8 @@ export default function App() {
   } = usePreferences();
 
   const sync = useMutation({
-    mutationFn: () => native(commands.refreshIndex()),
-    onSuccess: (snapshot) => client.setQueryData(snapshotOptions.queryKey, snapshot),
+    mutationFn: () => native(commands.refreshHistory()),
+    onSuccess: (snapshot) => client.setQueryData(historyOptions.queryKey, snapshot),
   });
 
   useNativeEvents();
@@ -95,23 +95,11 @@ export default function App() {
     };
   }, []);
 
-  const sessions = snapshot.data?.sessions;
-
-  const filtered = useMemo(
-    () =>
-      (sessions ?? []).filter(
-        (session) =>
-          (project === "all" || session.cwd === project) &&
-          (agent === "all" || session.agent === agent),
-      ),
-    [sessions, project, agent],
-  );
-
-  const projects = [
-    ...new Map(sessions?.map((session) => [session.cwd, session.project])).entries(),
-  ]
-    .filter(([path]) => path)
-    .sort((a, b) => a[1].localeCompare(b[1]));
+  const scope = historyScope({
+    project: project === "all" ? null : project,
+    agent: agent === "all" ? null : agent,
+  });
+  const projects = snapshot.data?.projects ?? [];
 
   const navigate = (view: View) => {
     if (view === "models") setModelsVisit((visit) => visit + 1);
@@ -119,12 +107,12 @@ export default function App() {
     scroll.current?.scrollTo({ top: 0 });
   };
 
-  const openSession = (id: string, order = filtered.map((session) => session.id)) => {
+  const openSession = (id: string, query = sessionQuery(scope)) => {
     setRoute((route) => ({
       ...(route.view === "sessions" ? route : {}),
       view: "sessions",
       id,
-      order,
+      query,
     }));
     scroll.current?.scrollTo({ top: 0 });
   };
@@ -147,7 +135,7 @@ export default function App() {
           collapsed={collapsed}
           compactWindow={compactWindow}
           view={route.view}
-          sessionCount={sessions?.length}
+          sessionCount={snapshot.data?.sessionCount}
           agent={agent}
           snapshot={snapshot.data}
           saving={saving}
@@ -182,7 +170,7 @@ export default function App() {
             ref={scroll}
             data-slot="page-scroll"
             className={cn(
-              "min-h-0 flex-1 overflow-x-auto overflow-y-scroll px-9 pb-12 scrollbar-gutter-stable max-[1100px]:px-6 max-[800px]:px-4",
+              "min-h-0 flex-1 overflow-x-auto overflow-y-scroll [overflow-anchor:none] px-9 pb-12 scrollbar-gutter-stable max-[1100px]:px-6 max-[800px]:px-4",
               !readingSession && "pt-6",
             )}
           >
@@ -227,9 +215,8 @@ export default function App() {
                   <Suspense fallback={<Skeleton className="h-96 w-full rounded-xl" />}>
                     {route.view === "overview" && (
                       <Overview
-                        sessions={filtered}
-                        allSessions={sessions ?? []}
-                        models={catalog.data?.models ?? emptyModels}
+                        scope={scope}
+                        sessionCount={snapshot.data?.sessionCount ?? 0}
                         range={Number(range)}
                         now={now}
                         openSession={openSession}
@@ -255,9 +242,9 @@ export default function App() {
                     )}
                     {route.view === "sessions" && (
                       <Sessions
-                        sessions={filtered}
+                        scope={scope}
                         selected={route.id}
-                        order={route.order}
+                        selectedQuery={route.query}
                         scrollRef={scroll}
                         selectedDay={route.day}
                         selectedTool={route.tool}
@@ -272,16 +259,14 @@ export default function App() {
                       <Models
                         key={modelsVisit}
                         initialModelKey={route.modelKey}
-                        catalog={catalog.data}
-                        sessions={filtered}
+                        scope={scope}
+                        offerings={snapshot.data?.offerings ?? []}
                         range={Number(range)}
                         now={now}
                         scrollRef={scroll}
                       />
                     )}
-                    {route.view === "subscriptions" && (
-                      <Subscriptions sessions={sessions ?? []} now={now} />
-                    )}
+                    {route.view === "subscriptions" && <Subscriptions now={now} />}
                     {route.view === "connections" && (
                       <Connections
                         sources={snapshot.data?.sources ?? []}
@@ -297,15 +282,11 @@ export default function App() {
       </div>
       {searchOpen && (
         <CommandMenu
-          sessions={sessions ?? []}
           pages={navigation.map((page) => ({ label: page.label, select: () => navigate(page.id) }))}
           openSession={(id) => {
             setProject("all");
             setAgent("all");
-            openSession(
-              id,
-              (sessions ?? []).map((session) => session.id),
-            );
+            openSession(id, sessionQuery());
           }}
           onClose={() => setSearchOpen(false)}
         />

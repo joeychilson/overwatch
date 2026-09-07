@@ -5,13 +5,14 @@ import { KeyRound, RefreshCw, Trash2 } from "lucide-react";
 import { Line, LineChart, XAxis, YAxis, CartesianGrid, ReferenceLine, Tooltip } from "recharts";
 import { toast } from "sonner";
 import { agents } from "@/lib/agents";
-import { commands, type Agent, type Session } from "@/lib/bindings";
+import { commands, type Agent } from "@/lib/bindings";
 import { AppFailure, failure, native } from "@/lib/errors";
 import {
   subscriptionForecasts,
   reachesLimitBeforeReset,
   type Forecast,
 } from "@/lib/usage/forecast";
+import { logAllowanceOptions } from "@/lib/history";
 import { accountOptions } from "@/lib/queries";
 import { money, relative } from "@/lib/format";
 import { cn } from "cn";
@@ -71,7 +72,8 @@ function TokenForm({ agent, close }: { agent: Agent; close: () => void }) {
     </form>
   );
 }
-export default function Subscriptions({ sessions, now }: { sessions: Session[]; now: number }) {
+export default function Subscriptions({ now }: { now: number }) {
+  const logs = useQuery(logAllowanceOptions);
   const client = useQueryClient();
   const [agent, setAgent] = useState<Agent>("codex");
   const [connect, setConnect] = useState(false);
@@ -91,8 +93,8 @@ export default function Subscriptions({ sessions, now }: { sessions: Session[]; 
     },
   });
   const all = useMemo(
-    () => subscriptionForecasts(query.data, sessions, now),
-    [query.data, sessions, now],
+    () => subscriptionForecasts(query.data, [{ limits: logs.data ?? [] }], now),
+    [query.data, logs.data, now],
   );
   const windows = all.filter((forecast) => forecast.latest.agent === agent);
   const history = windows.find((window) => window.latest.bucket === historyBucket) ?? windows[0];
@@ -126,6 +128,7 @@ export default function Subscriptions({ sessions, now }: { sessions: Session[]; 
           </Button>
         ))}
       </div>
+      {logs.error && <ErrorNotice error={logs.error} retry={() => void logs.refetch()} />}
       {query.error && <ErrorNotice error={query.error} retry={() => void query.refetch()} />}
       {account?.error && (
         <>

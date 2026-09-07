@@ -14,7 +14,7 @@ export function UsageOverTime({
   range,
   visible = true,
 }: {
-  stats: ReturnType<typeof aggregate>;
+  stats: Omit<ReturnType<typeof aggregate>, "sessionIds">;
   start: number;
   now: number;
   range: number;

@@ -17,7 +17,15 @@ export function useNativeEvents() {
         .catch((error: unknown) => toast.error(failure(error).message));
     const subscriptions = [
       events.indexChanged.listen(() => {
-        void invalidate(["snapshot"]);
+        for (const key of [
+          "history",
+          "sessions",
+          "session-navigation",
+          "usage",
+          "tools",
+          "log-allowances",
+        ])
+          void invalidate([key]);
         void invalidate(["transcript"]);
         void invalidate(["events"]);
       }),

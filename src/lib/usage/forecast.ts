@@ -13,7 +13,7 @@ export type Forecast = {
 /** Assemble account history, its latest readings, and local log allowances in one place. */
 export function subscriptionForecasts(
   data: Accounts | undefined,
-  sessions: Session[],
+  sessions: Pick<Session, "limits">[],
   now: number,
 ) {
   const accounts = data?.accounts ?? [];

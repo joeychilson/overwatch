@@ -5,7 +5,8 @@ import { FolderOpen, RefreshCw } from "lucide-react";
 import { agents } from "@/lib/agents";
 import { commands, type Source, type SourcePreview, type SourceStatus } from "@/lib/bindings";
 import { native } from "@/lib/errors";
-import { accountOptions, snapshotOptions } from "@/lib/queries";
+import { historyOptions } from "@/lib/history";
+import { accountOptions } from "@/lib/queries";
 import { usePreferences } from "@/lib/hooks/use-preferences";
 import { AgentMark } from "@/lib/components/agent-mark";
 import { Button } from "@/lib/components/ui/button";
@@ -131,7 +132,7 @@ export default function Connections({
     onSuccess: async () => {
       setPending(null);
       await Promise.all([
-        client.invalidateQueries(snapshotOptions),
+        client.invalidateQueries(historyOptions),
         client.invalidateQueries(accountOptions),
       ]);
     },
@@ -153,8 +154,8 @@ export default function Connections({
     },
   });
   const refresh = useMutation({
-    mutationFn: () => native(commands.refreshIndex()),
-    onSuccess: (snapshot) => client.setQueryData(snapshotOptions.queryKey, snapshot),
+    mutationFn: () => native(commands.refreshHistory()),
+    onSuccess: (snapshot) => client.setQueryData(historyOptions.queryKey, snapshot),
   });
   return (
     <>
