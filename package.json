@@ -15,6 +15,7 @@
   },
   "type": "module",
   "scripts": {
+    "benchmark": "node scripts/benchmark.mjs",
     "dev": "vp dev",
     "build": "vp check && vp build",
     "preview": "vp preview",

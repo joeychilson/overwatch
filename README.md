@@ -74,6 +74,10 @@ provider authentication, Keychain prompts, and native dialogs need manual deskto
 testing. Keep test fixtures synthetic and exclude credentials and session exports
 from commits.
 
+Run `vp run benchmark` for repeatable small/large synthetic history benchmarks.
+See [the benchmark guide](docs/benchmarks.md) for workloads, measurement boundaries,
+and comparing results across revisions.
+
 The React frontend lives in `src/pages` and `src/lib`. Usage aggregation, model
 identity, transcript helpers, and the app shell have their own folders under
 `src/lib`. Native indexing, source adapters, and account operations live in
