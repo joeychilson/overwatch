@@ -37,13 +37,17 @@ test("header dropdowns open below their triggers with every option visible", asy
   await range.click();
   await page.getByRole("option", { name: "Last 7 days", exact: true }).click();
   await expect(range.locator('[data-slot="select-value"]')).toHaveText("Last 7 days");
+  await expect(range).toBeFocused();
   await range.press("ArrowDown");
   await expect(page.locator('[data-slot="select-content"][data-open]')).toBeVisible();
+  // The popup becomes visible before keyboard focus reaches the selected option.
+  await expect(page.getByRole("option", { name: "Last 7 days", exact: true })).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(page.getByRole("option", { name: "Last 30 days", exact: true })).toHaveAttribute(
     "data-highlighted",
     "",
   );
+  await expect(page.getByRole("option", { name: "Last 30 days", exact: true })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(range.locator('[data-slot="select-value"]')).toHaveText("Last 30 days");
 });
