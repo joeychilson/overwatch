@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
-import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Tooltip, XAxis, YAxis } from "recharts";
 import type { aggregate } from "@/lib/usage/analytics";
 import { usageChart } from "@/lib/usage/chart";
 import { compact, integer, money } from "@/lib/format";
 import { Button } from "./ui/button";
-import { ChartContainer, ChartHoverCard, ChartTooltip } from "./ui/chart";
+import { ChartContainer, ChartHoverCard } from "./ui/chart";
 import { FilterSelect, Section } from "./page";
 
 export function UsageOverTime({
@@ -68,9 +68,6 @@ export function UsageOverTime({
       {visible && (
         <ChartContainer
           aria-label={`Usage over time by ${grouping}`}
-          config={Object.fromEntries(
-            chart.series.map((item) => [item.dataKey, { label: item.label, color: item.color }]),
-          )}
           className="aspect-auto h-64 w-full min-w-0"
         >
           <BarChart
@@ -95,7 +92,7 @@ export function UsageOverTime({
               tickFormatter={display}
               tickMargin={10}
             />
-            <ChartTooltip
+            <Tooltip
               cursor={{ fill: "var(--muted)", fillOpacity: 0.5 }}
               content={({ active, payload }) => {
                 const point = payload?.[0]?.payload;

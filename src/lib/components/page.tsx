@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { AlertCircle, Search } from "lucide-react";
 import { cn } from "cn";
 import { Button } from "./ui/button";
@@ -107,18 +107,16 @@ export function SearchField({
   value,
   onChange,
   placeholder,
-  label = placeholder,
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
-  label?: string;
 }) {
   return (
     <div className="relative min-w-40 flex-1">
       <Search className="pointer-events-none absolute top-1/2 left-3 z-10 size-4 -translate-y-1/2 text-muted-foreground" />
       <Input
-        aria-label={label}
+        aria-label={placeholder}
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -169,7 +167,6 @@ export function Modal({
   onOpenChange,
   children,
   className,
-  finalFocus,
 }: {
   title: string;
   description?: string;
@@ -177,14 +174,10 @@ export function Modal({
   onOpenChange: (open: boolean) => void;
   children: ReactNode;
   className?: string;
-  finalFocus?: ComponentProps<typeof DialogContent>["finalFocus"];
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        finalFocus={finalFocus}
-        className={cn("max-h-[85dvh] overflow-auto sm:max-w-2xl", className)}
-      >
+      <DialogContent className={cn("max-h-[85dvh] overflow-auto sm:max-w-2xl", className)}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>

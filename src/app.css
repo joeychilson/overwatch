@@ -11,13 +11,10 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
-  --color-card-foreground: var(--foreground);
   --color-popover: var(--popover);
   --color-popover-foreground: var(--foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
@@ -27,13 +24,6 @@
   --color-input: var(--input);
   --color-ring: var(--primary);
   --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--foreground);
-  --color-sidebar-accent: var(--accent);
-  --color-sidebar-accent-foreground: var(--foreground);
-  --color-sidebar-primary: var(--primary);
-  --color-sidebar-primary-foreground: var(--primary-foreground);
-  --color-sidebar-border: var(--border);
-  --color-sidebar-ring: var(--primary);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-chart-1: var(--chart-1);
@@ -47,8 +37,6 @@
   --radius-lg: 0.625rem;
   --radius-xl: 0.75rem;
   --radius-2xl: 0.875rem;
-  --radius-3xl: 1rem;
-  --radius-4xl: 1.25rem;
 }
 :root {
   color-scheme: light;
@@ -58,7 +46,6 @@
   --popover: #ffffff;
   --primary: #404040;
   --primary-foreground: #ffffff;
-  --secondary: #eaeaea;
   --muted: #ededed;
   --muted-foreground: #737373;
   --accent: #e5e5e5;
@@ -84,7 +71,6 @@
   --popover: #262626;
   --primary: #e5e5e5;
   --primary-foreground: #202020;
-  --secondary: #2c2c2c;
   --muted: #2a2a2a;
   --muted-foreground: #a3a3a3;
   --accent: #303030;

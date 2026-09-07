@@ -2,7 +2,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format, formatDistanceStrict, isSameDay } from "date-fns";
 import { KeyRound, RefreshCw, Trash2 } from "lucide-react";
-import { Line, LineChart, XAxis, YAxis, CartesianGrid, ReferenceLine } from "recharts";
+import { Line, LineChart, XAxis, YAxis, CartesianGrid, ReferenceLine, Tooltip } from "recharts";
 import { toast } from "sonner";
 import { agents } from "@/lib/agents";
 import { commands, type Agent, type Session } from "@/lib/bindings";
@@ -14,7 +14,7 @@ import { cn } from "cn";
 import { Button } from "@/lib/components/ui/button";
 import { Input } from "@/lib/components/ui/input";
 import { Skeleton } from "@/lib/components/ui/skeleton";
-import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/lib/components/ui/chart";
+import { ChartContainer, ChartHoverCard } from "@/lib/components/ui/chart";
 import { AgentMark } from "@/lib/components/agent-mark";
 import { Empty, ErrorNotice, Modal, PageTitle } from "@/lib/components/page";
 
@@ -400,7 +400,6 @@ function UsageHistory({ forecast }: { forecast: Forecast }) {
     <>
       {samples.length > 1 ? (
         <ChartContainer
-          config={{ usedPercent: { label: "Used", color: "var(--chart-1)" } }}
           className="aspect-auto h-40 w-full"
           aria-label={`${latest.label} usage history`}
         >
@@ -425,19 +424,21 @@ function UsageHistory({ forecast }: { forecast: Forecast }) {
               tickLine={false}
             />
             <ReferenceLine y={100} stroke="var(--border)" strokeDasharray="3 3" />
-            <ChartTooltip
-              content={
-                <ChartTooltipContent
-                  labelFormatter={(value) =>
-                    typeof value === "number" ? format(value, "MMM d, HH:mm") : "Recorded usage"
-                  }
-                  formatter={(value) => (
-                    <span className="font-mono tabular-nums">
-                      {typeof value === "number" ? `${value.toFixed(1)}% used` : "—"}
-                    </span>
-                  )}
-                />
-              }
+            <Tooltip
+              content={({ active, payload }) => {
+                const value = payload?.[0]?.value;
+                if (!active || typeof value !== "number") return null;
+                return (
+                  <ChartHoverCard>
+                    <div className="font-medium">Recorded usage</div>
+                    <div className="grid gap-1.5">
+                      <div className="flex w-full flex-wrap items-center gap-2">
+                        <span className="font-mono tabular-nums">{value.toFixed(1)}% used</span>
+                      </div>
+                    </div>
+                  </ChartHoverCard>
+                );
+              }}
             />
             <Line
               dataKey="usedPercent"
