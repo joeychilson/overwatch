@@ -309,6 +309,8 @@ pub enum CatalogRequest {
     Stored,
     Refresh,
     Bundled,
+    Compact,
+    CompactBundled,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]

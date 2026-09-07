@@ -1,4 +1,7 @@
 import { lazy, Suspense, useMemo, useState, type RefObject } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { isTauri } from "@tauri-apps/api/core";
+import { fullCatalogOptions } from "@/lib/queries";
 import { addDays, startOfDay, subDays } from "date-fns";
 import { ArrowLeft } from "lucide-react";
 import type { Session } from "@/lib/bindings";
@@ -25,6 +28,7 @@ export default function Models({
   scrollRef: RefObject<HTMLDivElement | null>;
 }) {
   const [pricing, setPricing] = useState(false);
+  const details = useQuery({ ...fullCatalogOptions, enabled: pricing && isTauri() });
   const models = catalog?.models ?? emptyModels;
   const start = startOfDay(subDays(now, range - 1)).getTime();
   const end = addDays(startOfDay(now), 1).getTime();
@@ -32,6 +36,7 @@ export default function Models({
     () => aggregate(sessions, models, start, end),
     [sessions, models, start, end],
   );
+  if (pricing && details.error) throw details.error;
   return (
     <>
       <div hidden={pricing}>
@@ -58,7 +63,7 @@ export default function Models({
             Back to models
           </Button>
           <Suspense fallback={<Skeleton className="h-96 w-full" />}>
-            <PricingCatalog catalog={catalog} sessions={sessions} scrollRef={scrollRef} />
+            <PricingCatalog catalog={details.data} sessions={sessions} scrollRef={scrollRef} />
           </Suspense>
         </>
       )}

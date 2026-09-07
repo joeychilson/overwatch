@@ -5,7 +5,7 @@ import type { Session } from "@/lib/bindings";
 import { emptyModels, getCatalog, type Catalog, type Model } from "@/lib/models/catalog";
 import { tokenCost } from "@/lib/usage/costs";
 import { compact, integer, money } from "@/lib/format";
-import { catalogOptions } from "@/lib/queries";
+import { catalogOptions, fullCatalogOptions } from "@/lib/queries";
 import { usePreferences } from "@/lib/hooks/use-preferences";
 import { Button } from "@/lib/components/ui/button";
 import { Checkbox } from "@/lib/components/ui/checkbox";
@@ -121,7 +121,10 @@ export default function Models({
     mutationKey: ["catalog-refresh"],
     scope: { id: "catalog-refresh" },
     mutationFn: () => getCatalog(true),
-    onSuccess: (catalog) => client.setQueryData(catalogOptions.queryKey, catalog),
+    onSuccess: async (catalog) => {
+      client.setQueryData(fullCatalogOptions.queryKey, catalog);
+      await client.invalidateQueries(catalogOptions);
+    },
   });
   const refreshing = useIsMutating({ mutationKey: ["catalog-refresh"] }) > 0;
   const models = catalog?.models ?? emptyModels;

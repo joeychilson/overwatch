@@ -75,7 +75,7 @@ export type CatalogPayload = {
 	warning: AppError | null,
 };
 
-export type CatalogRequest = "stored" | "refresh" | "bundled";
+export type CatalogRequest = "stored" | "refresh" | "bundled" | "compact" | "compactbundled";
 
 export type CatalogSource = "bundled" | "cached" | "network";
 

@@ -31,8 +31,15 @@ export const snapshotOptions = queryOptions({
 });
 
 export const catalogOptions = queryOptions({
-  queryKey: ["catalog"],
+  queryKey: ["catalog", "pricing"],
   queryFn: () => getCatalog(),
+  enabled: isTauri(),
+  staleTime: Infinity,
+});
+
+export const fullCatalogOptions = queryOptions({
+  queryKey: ["catalog", "details"],
+  queryFn: () => getCatalog(false, true),
   enabled: isTauri(),
   staleTime: Infinity,
 });

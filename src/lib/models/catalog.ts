@@ -90,15 +90,19 @@ export function parseCatalog(value: unknown): Model[] {
   );
 }
 
-export async function getCatalog(refresh = false): Promise<Catalog> {
-  const payload = await native(commands.getCatalog(refresh ? "refresh" : "stored"));
+export async function getCatalog(refresh = false, details = false): Promise<Catalog> {
+  const payload = await native(
+    commands.getCatalog(refresh ? "refresh" : details ? "stored" : "compact"),
+  );
   try {
     const catalog = decode(payload);
     if (refresh) await native(commands.saveCatalog(payload));
     return catalog;
   } catch (error) {
     if (refresh || payload.source === "bundled") throw error;
-    const fallback = decode(await native(commands.getCatalog("bundled")));
+    const fallback = decode(
+      await native(commands.getCatalog(details ? "bundled" : "compactbundled")),
+    );
     return {
       ...fallback,
       warning: {

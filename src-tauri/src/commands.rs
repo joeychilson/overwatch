@@ -150,13 +150,13 @@ pub async fn get_catalog(
     index: State<'_, Arc<Index>>,
     request: CatalogRequest,
 ) -> Result<CatalogPayload> {
-    catalog::read(&index.directory, request).await
+    catalog::read(&index, request).await
 }
 #[tauri::command]
 #[specta::specta]
 pub async fn save_catalog(index: State<'_, Arc<Index>>, payload: CatalogPayload) -> Result<()> {
     let index = Arc::clone(&index);
-    blocking(move || catalog::save(&index.directory, &payload)).await
+    blocking(move || catalog::save(&index, &payload)).await
 }
 #[tauri::command]
 #[specta::specta]
