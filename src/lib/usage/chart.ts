@@ -15,8 +15,10 @@ export function usageChart(
   const ranked = usageGroups(stats.models, grouping === "provider" ? "provider" : "model").sort(
     (a, b) => b[metric] - a[metric] || a.key.localeCompare(b.key),
   );
-  const top = new Set(
-    ranked.slice(0, 5).flatMap((model) => model.offerings.map((offering) => offering.key)),
+  const offeringSeries = new Map(
+    ranked.flatMap((group, index) =>
+      group.offerings.map((offering) => [offering.key, Math.min(index, 5)] as const),
+    ),
   );
   const series =
     grouping === "agent"
@@ -87,25 +89,20 @@ export function usageChart(
     bucket.pricedCalls += point?.pricedCalls ?? 0;
     bucket.recordedCost += point?.recordedCost ?? 0;
     bucket.estimatedCost += point?.estimatedCost ?? 0;
-    series.forEach((item, index) => {
-      if (!point) return;
-      bucket.values[index] +=
-        grouping === "agent"
-          ? ((metric === "tokens" ? point.agents : point.agentCosts)[
+    if (point) {
+      if (grouping === "agent")
+        series.forEach((item, index) => {
+          bucket.values[index] +=
+            (metric === "tokens" ? point.agents : point.agentCosts)[
               item.key as keyof typeof agents
-            ] ?? 0)
-          : item.key === "__other"
-            ? Object.entries(point.models).reduce(
-                (sum, [model, values]) => sum + (top.has(model) ? 0 : values[metric]),
-                0,
-              )
-            : (ranked
-                .find((group) => group.key === item.key)
-                ?.offerings.reduce(
-                  (sum, offering) => sum + (point.models[offering.key]?.[metric] ?? 0),
-                  0,
-                ) ?? 0);
-    });
+            ] ?? 0;
+        });
+      else
+        for (const [offering, values] of Object.entries(point.models)) {
+          const index = offeringSeries.get(offering);
+          if (index !== undefined) bucket.values[index] += values[metric];
+        }
+    }
     buckets.set(key, bucket);
   }
   return {

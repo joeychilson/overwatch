@@ -97,6 +97,23 @@ describe("usage chart", () => {
         ).toBe(point.total);
     }
   });
+  it("does not confuse a provider named __other with the remainder series", () => {
+    const many = sessions.map((session, index) => ({
+      ...session,
+      usage: session.usage.map((usage) => ({
+        ...usage,
+        provider: index === 6 ? "__other" : `provider-${index}`,
+      })),
+    }));
+    const stats = aggregate(many, [], start, end);
+    const chart = usageChart(stats, start, end - 1, "provider", "tokens", false);
+    expect(chart.series[0].total).toBe(710);
+    expect(Reflect.get(chart.points[6], chart.series[0].dataKey)).toBe(710);
+    for (const point of chart.points)
+      expect(
+        chart.series.reduce((sum, item) => sum + Number(Reflect.get(point, item.dataKey)), 0),
+      ).toBe(point.total);
+  });
   it("excludes out-of-period usage and preserves empty days", () => {
     const stats = aggregate(sessions, [], start, addDays(start, 1).getTime());
     const chart = usageChart(stats, start, end - 1, "agent", "tokens", false);
