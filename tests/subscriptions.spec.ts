@@ -128,6 +128,19 @@ test("removing connection data requires confirmation and explains provider sign-
   ).toBeVisible();
 });
 
+test("a failed initial connection can be removed", async ({ page }) => {
+  await desktop(page, { accountErrorWithoutUsage: true });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Subscriptions", exact: true }).click();
+  await expect(page.getByText("Fixture provider unavailable", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Remove saved connection data" }).click();
+  await page
+    .getByRole("dialog", { name: "Remove Codex connection data?" })
+    .getByRole("button", { name: "Remove data", exact: true })
+    .click();
+  await expect(page.getByRole("button", { name: "Remove saved connection data" })).toHaveCount(0);
+});
+
 for (const state of ["collecting", "stale", "expired"] as const) {
   test(`subscription ${state} readings retain their usage and show the next action`, async ({
     page,

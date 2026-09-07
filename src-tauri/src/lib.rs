@@ -93,9 +93,7 @@ fn run_app() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     match quota::read(&index) {
                         Ok(state) => {
                             for account in state.accounts.into_iter().filter(|account| {
-                                account.usage.is_some()
-                                    && account.next_refresh_at
-                                        <= chrono::Utc::now().timestamp_millis()
+                                account.next_refresh_at <= chrono::Utc::now().timestamp_millis()
                             }) {
                                 match quotas
                                     .refresh(Arc::clone(&index), account.agent, false)

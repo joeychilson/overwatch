@@ -254,6 +254,7 @@ export async function desktop(
     undatedUsage?: boolean;
     undatedEvents?: "all" | "mixed";
     costCoverage?: "unknown" | "zero" | "mixed";
+    accountErrorWithoutUsage?: boolean;
   } = {},
 ) {
   const snapshot: Snapshot = {
@@ -402,31 +403,35 @@ export async function desktop(
     accounts: [
       {
         agent: "codex",
-        usage: {
-          accountKey: "fixture-account",
-          plan: "Pro",
-          updatedAt: readingTime,
-          source: "OpenAI account",
-          windows: options.singleAllowance
-            ? [weekly[weekly.length - 1]]
-            : [samples[samples.length - 1], weekly[weekly.length - 1]],
-          balances: [
-            {
-              label: "Credits",
-              used: null,
-              limit: null,
-              remaining: 240,
-              unit: "credits",
-              unlimited: false,
+        usage: options.accountErrorWithoutUsage
+          ? null
+          : {
+              accountKey: "fixture-account",
+              plan: "Pro",
+              updatedAt: readingTime,
+              source: "OpenAI account",
+              windows: options.singleAllowance
+                ? [weekly[weekly.length - 1]]
+                : [samples[samples.length - 1], weekly[weekly.length - 1]],
+              balances: [
+                {
+                  label: "Credits",
+                  used: null,
+                  limit: null,
+                  remaining: 240,
+                  unit: "credits",
+                  unlimited: false,
+                },
+              ],
             },
-          ],
-        },
-        error: null,
+        error: options.accountErrorWithoutUsage
+          ? { kind: "network", message: "Fixture provider unavailable" }
+          : null,
         lastAttempt: now,
         nextRefreshAt: now + 300000,
       },
     ],
-    samples: [...samples, ...weekly],
+    samples: options.accountErrorWithoutUsage ? [] : [...samples, ...weekly],
   };
   const preferences: Preferences = { theme: "dark", savedModels: [], sidebarCollapsed: false };
   await page.addInitScript(

@@ -167,7 +167,7 @@ export default function Subscriptions({ sessions, now }: { sessions: Session[]; 
             <KeyRound />
             Connect with token
           </Button>
-          {usage && (
+          {account && (
             <Button
               variant="ghost"
               size="icon"
