@@ -13,7 +13,7 @@ import { agents } from "@/lib/agents";
 import { useModelName } from "@/lib/hooks/use-model-name";
 import { type Session } from "@/lib/bindings";
 import { totalTokens } from "@/lib/usage/analytics";
-import { day, integer } from "@/lib/format";
+import { day, elapsed, hasTimestamp, integer } from "@/lib/format";
 import { exportCsv } from "@/lib/export";
 import { Button } from "@/lib/components/ui/button";
 import { FilterSelect, PageTitle, SearchField } from "@/lib/components/page";
@@ -140,9 +140,9 @@ export default function Sessions({
           session.tokens.cacheWrite,
           session.tokens.output,
           session.tokens.reasoning,
-          new Date(session.startedAt).toISOString(),
-          new Date(session.updatedAt).toISOString(),
-          session.updatedAt - session.startedAt,
+          hasTimestamp(session.startedAt) ? new Date(session.startedAt).toISOString() : null,
+          hasTimestamp(session.updatedAt) ? new Date(session.updatedAt).toISOString() : null,
+          elapsed(session.startedAt, session.updatedAt),
         ]),
       ]),
   });

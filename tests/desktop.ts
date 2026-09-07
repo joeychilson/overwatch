@@ -572,6 +572,8 @@ export async function desktop(
                 }
                 return null;
               case "export_file":
+                document.documentElement.dataset.exportedFile = JSON.stringify(args);
+                return true;
               case "export_session":
                 return true;
               case "open_session_source":

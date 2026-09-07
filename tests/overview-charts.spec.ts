@@ -133,3 +133,13 @@ test("undated responses remain inspectable without appearing in calendar totals"
   await expect(details.getByText("without usable timestamps", { exact: false })).toBeVisible();
   await expect(details.getByText("Uncached input", { exact: true })).toBeVisible();
 });
+
+test("session exports leave unknown dates and elapsed time blank", async ({ page }) => {
+  await desktop(page, { undatedEvents: "all" });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const exported = await page.locator("html").getAttribute("data-exported-file");
+  expect(JSON.parse(exported!).content).not.toContain("1970-01-01");
+  expect(JSON.parse(exported!).content).toContain('"","",""');
+});
