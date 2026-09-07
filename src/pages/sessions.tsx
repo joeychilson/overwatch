@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, type RefObject } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowDownToLine, ArrowLeft, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { startOfDay, subDays } from "date-fns";
-import { useWorkspaceField, useWorkspace } from "@/lib/shell/use-workspace";
+import { useWorkspaceField, useWorkspace } from "@/lib/hooks/use-workspace";
 import { useSessionSearch } from "@/lib/hooks/use-session-search";
 import { useDebounced } from "@/lib/hooks/use-debounced";
 import { sessionQuery, navigationOptions } from "@/lib/history";

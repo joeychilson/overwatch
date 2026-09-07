@@ -1,5 +1,5 @@
 import { lazy, Suspense, useLayoutEffect, useMemo, useRef, type RefObject } from "react";
-import { useWorkspaceField } from "@/lib/shell/use-workspace";
+import { useWorkspaceField } from "@/lib/hooks/use-workspace";
 import { historyScope, sessionQuery, useUsage } from "@/lib/history";
 import { useSessionFeed } from "@/lib/hooks/use-session-feed";
 import { ArrowLeft } from "lucide-react";

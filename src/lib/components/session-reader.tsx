@@ -17,7 +17,7 @@ import { aggregate, totalTokens } from "@/lib/usage/analytics";
 import { catalogOptions, eventPageOptions } from "@/lib/queries";
 import { useDebounced } from "@/lib/hooks/use-debounced";
 import { confirmExport } from "@/lib/export";
-import { useWorkspace } from "@/lib/shell/use-workspace";
+import { useWorkspace } from "@/lib/hooks/use-workspace";
 import { useModelName } from "@/lib/hooks/use-model-name";
 import { Button } from "./ui/button";
 import { ReaderSkeleton, MessagesSkeleton } from "./page-skeleton";

@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, type RefObject } from "react";
-import { useWorkspaceField } from "@/lib/shell/use-workspace";
+import { useWorkspaceField } from "@/lib/hooks/use-workspace";
 import type { HistoryScope } from "@/lib/bindings";
 import type { UsageStats } from "@/lib/history";
 import { knownCost } from "@/lib/usage/costs";

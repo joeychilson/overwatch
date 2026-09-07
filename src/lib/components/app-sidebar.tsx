@@ -1,7 +1,7 @@
 import { CircleHelp, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
 import { agentIds, agents } from "@/lib/agents";
 import type { Agent, HistoryStatus } from "@/lib/bindings";
-import { navigation, type View } from "./navigation";
+import { navigation, type View } from "@/lib/navigation";
 import { cn } from "cn";
 import { AgentMark } from "@/lib/components/agent-mark";
 import { Button } from "@/lib/components/ui/button";
