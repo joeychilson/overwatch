@@ -72,7 +72,7 @@ for (const coverage of ["unknown", "zero", "mixed"] as const) {
     }
     await page.getByRole("button", { name: "API equivalent", exact: true }).click();
     if (coverage === "unknown")
-      await expect(page.getByRole("status")).toContainText("Cost unavailable");
+      await expect(page.getByRole("status").filter({ hasText: "Cost unavailable" })).toBeVisible();
     if (coverage === "mixed")
       await expect(page.getByText(/USD · .* recorded · .* estimated/)).toBeVisible();
     await page.setViewportSize({ width: 900, height: 700 });

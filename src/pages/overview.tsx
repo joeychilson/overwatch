@@ -1,15 +1,14 @@
 import { useMemo } from "react";
-import { addDays, eachDayOfInterval, startOfDay, subDays } from "date-fns";
-import { ArrowDownToLine, ArrowUpRight } from "lucide-react";
+import { addDays, eachDayOfInterval, formatDistanceStrict, startOfDay, subDays } from "date-fns";
+import { ArrowDownToLine, ArrowUpRight, TriangleAlert } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { accountOptions } from "@/lib/queries";
-import { forecasts } from "@/lib/usage/forecast";
-import { AgentMark } from "@/lib/components/agent-mark";
+import { forecasts, subscriptionWarnings } from "@/lib/usage/forecast";
 import { agents, agentIds } from "@/lib/agents";
 import type { Session } from "@/lib/bindings";
 import type { Model } from "@/lib/models/catalog";
 import { activity, aggregate, knownCost, toolStats } from "@/lib/usage/analytics";
-import { compact, day, duration, integer, money, relative } from "@/lib/format";
+import { compact, day, integer, money } from "@/lib/format";
 import { exportCsv } from "@/lib/export";
 import { offeringProviderNames, usageGroups } from "@/lib/usage/groups";
 import { Button } from "@/lib/components/ui/button";
@@ -18,7 +17,6 @@ import { ActivityHeatmap } from "@/lib/components/activity-heatmap";
 import { RankedList } from "@/lib/components/ranked-list";
 import { Metric, PageTitle, Section, Empty } from "@/lib/components/page";
 import { SessionTable } from "@/lib/components/session-table";
-import { cn } from "cn";
 
 type Props = {
   sessions: Session[];
@@ -52,18 +50,17 @@ export default function Overview({
   const quota = useMemo(
     () =>
       forecasts(
-        [...(accounts.data?.samples ?? []), ...allSessions.flatMap((session) => session.limits)],
+        [
+          ...(accounts.data?.samples ?? []),
+          ...(accounts.data?.accounts.flatMap((account) => account.usage?.windows ?? []) ?? []),
+          ...allSessions.flatMap((session) => session.limits),
+        ],
         accounts.data?.accounts ?? [],
         now,
       ),
     [accounts.data, allSessions, now],
   );
-  const primaryQuota = agentIds
-    .flatMap((agent) => {
-      const reading = quota.find((reading) => reading.latest.agent === agent);
-      return reading ? [reading] : [];
-    })
-    .slice(0, 2);
+  const warnings = subscriptionWarnings(quota, now);
   const end = addDays(startOfDay(now), 1).getTime();
   const stats = useMemo(
     () => aggregate(sessions, models, start, end),
@@ -134,6 +131,45 @@ export default function Overview({
           </Button>
         }
       />
+      {warnings.length > 0 && (
+        <div
+          role="status"
+          aria-label="Subscription warnings"
+          className="mb-6 flex flex-wrap items-center gap-x-6 gap-y-3 rounded-lg border border-warning/20 bg-warning/5 px-4 py-3"
+        >
+          <div className="flex min-w-0 flex-1 items-start gap-3">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+            <div className="space-y-2">
+              {warnings.map(({ latest, exhaustionAt }) => (
+                <div key={latest.agent} className="text-xs leading-relaxed">
+                  <p>
+                    <span className="font-medium">
+                      {agents[latest.agent].name} · {latest.label}
+                    </span>
+                    <span className="text-warning">
+                      {" — "}
+                      {latest.usedPercent >= 100
+                        ? "Limit reached"
+                        : exhaustionAt != null && exhaustionAt <= now
+                          ? "May already be at the limit"
+                          : `May reach limit in ${formatDistanceStrict(exhaustionAt!, now)} at this pace`}
+                    </span>
+                  </p>
+                  <p className="text-muted-foreground">
+                    {Math.round(Math.max(0, Math.min(100, 100 - latest.usedPercent)))}% remaining
+                    {latest.resetsAt != null
+                      ? ` · Resets in ${formatDistanceStrict(latest.resetsAt, now)}`
+                      : " · Reset time unavailable"}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => navigate("subscriptions")}>
+            View subscriptions <ArrowUpRight />
+          </Button>
+        </div>
+      )}
       {!sessions.length ? (
         <Empty
           title={allSessions.length ? "No sessions match this scope" : "Your workspace starts here"}
@@ -206,67 +242,7 @@ export default function Overview({
               detail={`${compact(stats.tokens.cacheRead)} cached input tokens`}
             />
           </div>
-          <div
-            className={cn(
-              "grid gap-8",
-              primaryQuota.length > 0 && "grid-cols-[minmax(0,1fr)_230px] max-[1100px]:grid-cols-1",
-            )}
-          >
-            <UsageOverTime stats={stats} start={start} now={now} range={range} />
-            {primaryQuota.length > 0 && (
-              <Section
-                title="Subscriptions"
-                className="self-start rounded-xl bg-card p-5"
-                action={
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    aria-label="View subscriptions"
-                    onClick={() => navigate("subscriptions")}
-                  >
-                    <ArrowUpRight />
-                  </Button>
-                }
-              >
-                <div className="space-y-7">
-                  {primaryQuota.map(({ latest, state, exhaustionAt }) => (
-                    <button
-                      key={latest.agent}
-                      onClick={() => navigate("subscriptions")}
-                      className="block w-full text-left"
-                    >
-                      <span className="flex items-center gap-2 text-xs">
-                        <AgentMark agent={latest.agent} className="size-5" />
-                        {agents[latest.agent].name}
-                      </span>
-                      <span className="mt-4 block text-2xl tabular-nums">
-                        {state === "expired" ? "—" : `${Math.round(100 - latest.usedPercent)}%`}
-                        <span className="ml-2 text-xs text-muted-foreground">
-                          {state === "expired" ? "window ended" : "remaining"}
-                        </span>
-                      </span>
-                      <span className="mt-3 block h-1 overflow-hidden rounded-full bg-muted">
-                        <span
-                          className="block h-full rounded-full bg-primary"
-                          style={{ width: `${100 - latest.usedPercent}%` }}
-                        />
-                      </span>
-                      <span className="mt-3 block text-xs leading-relaxed text-muted-foreground">
-                        {latest.label} ·{" "}
-                        {state === "stale" || state === "expired"
-                          ? `Last read ${relative(latest.timestamp)}`
-                          : exhaustionAt == null
-                            ? "Collecting pace samples"
-                            : exhaustionAt > (latest.resetsAt ?? Infinity)
-                              ? "Resets before projected limit"
-                              : `${duration(Math.max(0, exhaustionAt - now))} at this pace`}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </Section>
-            )}
-          </div>
+          <UsageOverTime stats={stats} start={start} now={now} range={range} />
           <div className="my-10 grid grid-cols-[minmax(0,1fr)_220px] gap-10 max-[1100px]:grid-cols-1">
             <ActivityHeatmap lifetime={lifetime} sessions={sessions} now={now} openDay={openDay} />
             <div className="grid grid-cols-2 gap-x-5 gap-y-7 self-center">

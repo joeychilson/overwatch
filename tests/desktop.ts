@@ -245,6 +245,7 @@ export async function desktop(
     toolPreviews?: boolean;
     quotaState?: "collecting" | "stale" | "expired";
     singleAllowance?: boolean;
+    slowQuota?: boolean;
     longNames?: boolean;
     crossProvider?: boolean;
     manyModels?: boolean;
@@ -391,7 +392,8 @@ export async function desktop(
       bucket: "codex:secondary",
       label: "Weekly",
       windowMinutes: 10080,
-      usedPercent: options.quotaState === "collecting" ? 0 : 35 + index * 3.5,
+      usedPercent:
+        options.quotaState === "collecting" ? 0 : 35 + index * (options.slowQuota ? 0.1 : 3.5),
       resetsAt: options.quotaState === "expired" ? now - 60_000 : now + 6 * 86400000,
       timestamp: readingTime - (6 - index) * 1200000,
     }),

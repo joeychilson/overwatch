@@ -11,6 +11,38 @@ export type Forecast = {
   atReset: number | null;
 };
 
+export function reachesLimitBeforeReset(forecast: Forecast): boolean {
+  return (
+    forecast.state === "projected" &&
+    forecast.exhaustionAt != null &&
+    forecast.exhaustionAt < (forecast.latest.resetsAt ?? Infinity)
+  );
+}
+
+/** Warn only about current allowances reached or projected to run out within a day. */
+export function subscriptionWarnings(readings: Forecast[], now: number): Forecast[] {
+  const urgent = readings.filter(
+    (reading) =>
+      reading.state !== "stale" &&
+      reading.state !== "expired" &&
+      (reading.latest.usedPercent >= 100 ||
+        (reachesLimitBeforeReset(reading) && reading.exhaustionAt! <= now + 86_400_000)),
+  );
+  urgent.sort(
+    (a, b) =>
+      Number(b.latest.usedPercent >= 100) - Number(a.latest.usedPercent >= 100) ||
+      (a.exhaustionAt ?? now) - (b.exhaustionAt ?? now) ||
+      a.latest.agent.localeCompare(b.latest.agent) ||
+      a.latest.bucket.localeCompare(b.latest.bucket),
+  );
+  const seen = new Set<string>();
+  return urgent.filter(({ latest }) => {
+    if (seen.has(latest.agent)) return false;
+    seen.add(latest.agent);
+    return true;
+  });
+}
+
 function windowOrder(sample: QuotaSample): number {
   if (sample.windowMinutes > 0) return sample.windowMinutes;
   // Calendar-month allowances may not report an exact duration.

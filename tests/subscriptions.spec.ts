@@ -1,6 +1,42 @@
 import { test, expect } from "@playwright/test";
 import { desktop } from "./desktop";
 
+test("overview shows a compact warning above the stats for an imminent limit", async ({ page }) => {
+  await desktop(page);
+  await page.goto("/");
+  const warning = page.getByRole("status", { name: "Subscription warnings" });
+  await expect(warning).toContainText("Codex · Weekly");
+  await expect(warning).toContainText("44% remaining");
+  await expect(warning).toContainText("May reach limit in");
+  await expect(warning).toContainText("Resets in");
+  const stats = page.getByText("Total tokens", { exact: true });
+  expect((await warning.boundingBox())!.y).toBeLessThan((await stats.boundingBox())!.y);
+  await page.screenshot({
+    path: `test-results/subscription-warning-${test.info().project.name}.png`,
+  });
+  await page.setViewportSize({ width: 900, height: 640 });
+  await expect(warning).toBeVisible();
+  expect(
+    await page
+      .locator('[data-slot="page-scroll"]')
+      .evaluate((el) => el.scrollWidth <= el.clientWidth),
+  ).toBe(true);
+  await warning.getByRole("button", { name: "View subscriptions" }).click();
+  await expect(page.getByRole("heading", { name: "Subscriptions", exact: true })).toBeVisible();
+});
+
+for (const quotaState of ["collecting", "stale", "expired", undefined] as const) {
+  test(`overview hides subscription warnings for ${quotaState ?? "distant"} limits`, async ({
+    page,
+  }) => {
+    await desktop(page, { quotaState, slowQuota: true });
+    await page.goto("/");
+    await expect(page.getByText("Total tokens", { exact: true })).toBeVisible();
+    await expect(page.getByRole("status", { name: "Subscription warnings" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Subscriptions", exact: true })).toHaveCount(0);
+  });
+}
+
 test("a single allowance fills the summary row and has no redundant history selector", async ({
   page,
 }) => {
