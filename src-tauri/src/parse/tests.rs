@@ -81,6 +81,23 @@ fn incomplete_lines_wait_and_rewrites_invalidate_the_cursor() -> Result<()> {
     cursor.read(file.path())?;
     assert_eq!(cursor.data.events.len(), 1);
     assert_eq!(cursor.data.events[0].text, "Replacement is longer");
+
+    let first =
+        json!({"type":"message","id":"first","message":{"role":"user","content":"Original value"}});
+    let replacement =
+        json!({"type":"message","id":"first","message":{"role":"user","content":"Replaced value"}});
+    let tail = json!({"type":"message","id":"tail","message":{"role":"user","content":"Stable tail ".repeat(20)}});
+    std::fs::write(file.path(), format!("{first}\n{tail}\n"))?;
+    cursor.read(file.path())?;
+    assert_eq!(cursor.data.events[0].text, "Original value");
+    let rewritten = format!("{replacement}\n{tail}\n");
+    assert_eq!(
+        rewritten.len(),
+        std::fs::metadata(file.path())?.len() as usize
+    );
+    std::fs::write(file.path(), rewritten)?;
+    cursor.read(file.path())?;
+    assert_eq!(cursor.data.events[0].text, "Replaced value");
     Ok(())
 }
 #[test]

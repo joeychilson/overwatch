@@ -250,8 +250,10 @@ mod tests;
 pub struct Cursor {
     pub data: Accumulator,
     offset: u64,
+    length: u64,
     line: u64,
     identity: u128,
+    modified: Option<std::time::SystemTime>,
     anchor: Vec<u8>,
     malformed: u32,
     codex: codex::State,
@@ -262,8 +264,10 @@ impl Cursor {
         Self {
             data: Accumulator::new(agent, path, detailed),
             offset: 0,
+            length: 0,
             line: 0,
             identity: 0,
+            modified: None,
             anchor: vec![],
             malformed: 0,
             codex: codex::State::default(),
@@ -284,18 +288,24 @@ impl Cursor {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
+        let modified = meta.modified()?;
         let mut anchor = vec![0; self.anchor.len()];
         if meta.len() >= self.offset && self.offset > 0 {
             file.seek(SeekFrom::Start(self.offset - self.anchor.len() as u64))?;
             file.read_exact(&mut anchor)?;
         }
         if meta.len() < self.offset
+            || (self.offset > 0
+                && meta.len() == self.length
+                && self.modified.is_some_and(|previous| previous != modified))
             || (self.identity != 0 && identity != self.identity)
             || anchor != self.anchor
         {
             *self = Self::new(self.data.session.agent, path, self.data.detailed);
         }
         self.identity = identity;
+        self.length = meta.len();
+        self.modified = Some(modified);
         file.seek(SeekFrom::Start(self.offset))?;
         let mut reader = BufReader::new(file);
         let mut line = Vec::new();
