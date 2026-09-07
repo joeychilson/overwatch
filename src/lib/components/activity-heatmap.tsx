@@ -30,7 +30,7 @@ export function ActivityHeatmap({
   }));
   const maxHeat = Math.max(1, ...heatValues.map((value) => value.amount));
   return (
-    <Section title="Activity">
+    <Section title="Daily activity">
       <Tooltip.Provider delay={100}>
         <div className="overflow-x-auto pb-2">
           <div

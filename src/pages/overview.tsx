@@ -243,34 +243,30 @@ export default function Overview({
             />
           </div>
           <UsageOverTime stats={stats} start={start} now={now} range={range} />
-          <div className="my-10 grid grid-cols-[minmax(0,1fr)_220px] gap-10 max-[1100px]:grid-cols-1">
-            <ActivityHeatmap lifetime={lifetime} sessions={sessions} now={now} openDay={openDay} />
-            <div className="grid grid-cols-2 gap-x-5 gap-y-7 self-center">
-              <div>
-                <p className="text-2xl font-medium tabular-nums">
-                  {streak.current}
-                  <span className="ml-1 text-xs text-muted-foreground">days</span>
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">Current streak</p>
-              </div>
-              <div>
-                <p className="text-2xl font-medium tabular-nums">
-                  {streak.longest}
-                  <span className="ml-1 text-xs text-muted-foreground">days</span>
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">Longest streak</p>
-              </div>
-              <div>
-                <p className="text-xl tabular-nums">{streak.activeDays}</p>
-                <p className="mt-1 text-xs text-muted-foreground">Active days · lifetime</p>
-              </div>
-              <div>
-                <p className="text-xl tabular-nums">{compact(streak.peak?.total ?? 0)}</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Peak · {streak.peak?.day ?? "—"}
-                </p>
-              </div>
+          <div className="my-10">
+            <div className="mb-10 grid grid-cols-2 gap-6 xl:grid-cols-4">
+              <Metric
+                label="Current streak"
+                value={integer(streak.current)}
+                detail="Consecutive active days"
+              />
+              <Metric
+                label="Longest streak"
+                value={integer(streak.longest)}
+                detail="Consecutive active days · lifetime"
+              />
+              <Metric
+                label="Active days"
+                value={integer(streak.activeDays)}
+                detail="Days with usage · lifetime"
+              />
+              <Metric
+                label="Peak daily tokens"
+                value={compact(streak.peak?.total ?? 0)}
+                detail={`${streak.peak?.day ?? "No activity"} · lifetime`}
+              />
             </div>
+            <ActivityHeatmap lifetime={lifetime} sessions={sessions} now={now} openDay={openDay} />
           </div>
           <div className="mb-10 grid grid-cols-1 gap-10 lg:grid-cols-2 lg:gap-12">
             <Section

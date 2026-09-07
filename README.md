@@ -5,9 +5,9 @@
 
 A desktop app for exploring coding-agent sessions, token usage, model costs, and subscription allowances. Histories stay on your machine.
 
-| Overview                                                                                                                                         | Sessions                                                                                                                                      |
-| ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| [![Overview showing token usage, costs, subscription allowance, and activity history](.github/images/overview.png)](.github/images/overview.png) | [![Session detail showing conversation metrics, an event timeline, and transcript](.github/images/sessions.png)](.github/images/sessions.png) |
+| Overview                                                                                                                                      | Sessions                                                                                                                                      |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| [![Overview showing token usage, costs, subscription warnings, and daily activity](.github/images/overview.png)](.github/images/overview.png) | [![Session detail showing conversation metrics, an event timeline, and transcript](.github/images/sessions.png)](.github/images/sessions.png) |
 
 _Sample data. Click either screenshot to view it at full size._
 
