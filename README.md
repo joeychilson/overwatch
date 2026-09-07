@@ -5,11 +5,19 @@
 
 A desktop app for exploring coding-agent sessions, token usage, model costs, and subscription allowances. Histories stay on your machine.
 
-| Overview                                                                                                                                      | Sessions                                                                                                                                      |
-| --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| [![Overview showing token usage, costs, subscription warnings, and daily activity](.github/images/overview.png)](.github/images/overview.png) | [![Session detail showing conversation metrics, an event timeline, and transcript](.github/images/sessions.png)](.github/images/sessions.png) |
+| Overview                                                                                                         | Sessions                                                                                                                      |
+| ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| [![Overview showing activity, token usage, and costs](.github/images/overview.png)](.github/images/overview.png) | [![Sessions showing searchable local conversation history](.github/images/session-list.png)](.github/images/session-list.png) |
 
-_Sample data. Click either screenshot to view it at full size._
+| Session detail                                                                                                          | Models                                                                                               |
+| ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| [![Session detail showing metrics, timeline, and transcript](.github/images/sessions.png)](.github/images/sessions.png) | [![Models showing usage across coding agents](.github/images/models.png)](.github/images/models.png) |
+
+| Subscriptions                                                                                                                        | Connections                                                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| [![Subscriptions showing provider allowances and usage history](.github/images/subscriptions.png)](.github/images/subscriptions.png) | [![Connections showing local agent history sources](.github/images/connections.png)](.github/images/connections.png) |
+
+_Sample data. Click any screenshot to view it at full size._
 
 Built for macOS 13.3+ on Apple Silicon. Other platforms are not tested or released.
 
