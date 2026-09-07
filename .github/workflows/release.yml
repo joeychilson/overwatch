@@ -16,6 +16,7 @@ jobs:
     name: Build macOS release
     runs-on: macos-15
     timeout-minutes: 45
+    environment: release
     permissions:
       contents: write
     steps:
@@ -27,6 +28,16 @@ jobs:
           node-version: "26"
           cache: true
           run-install: false
+      - name: Require signing credentials and prepare stable updater configuration
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+        run: node scripts/prepare-release.mjs "$RUNNER_TEMP/overwatch-release.json"
       - name: Install dependencies
         run: vp install --frozen-lockfile
       - uses: dtolnay/rust-toolchain@stable
@@ -67,6 +78,8 @@ jobs:
           git diff --exit-code -- src/lib/bindings.ts
       - name: Test frontend accounting
         run: vp test run
+      - name: Test release configuration
+        run: node --test scripts/prepare-release.test.mjs
       - name: Install test browsers
         run: vp exec playwright install chromium webkit
       - name: Test UI workflows
@@ -75,15 +88,29 @@ jobs:
         uses: tauri-apps/tauri-action@action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tauriScript: vp run tauri
-          args: --target aarch64-apple-darwin -- --locked
+          args: --target aarch64-apple-darwin --config ${{ runner.temp }}/overwatch-release.json -- --locked
           tagName: ${{ github.ref_name }}
           releaseName: ${{ github.ref_name }}
           releaseDraft: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: false
           generateReleaseNotes: true
-          uploadUpdaterJson: false
+          uploadUpdaterJson: true
+      - name: Verify signed and notarized application
+        run: |
+          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Overwatch.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
       - name: Upload failed browser traces
         if: failure()
         uses: actions/upload-artifact@v4
