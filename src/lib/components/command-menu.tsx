@@ -29,7 +29,7 @@ export function CommandMenu({
   );
   const results = [
     ...pages
-      .filter((page) => page.label.toLowerCase().includes(query))
+      .filter((page) => page.label.toLowerCase().includes(search.toLowerCase()))
       .map((page) => ({ ...page, detail: "Navigate", agent: null })),
     ...(sessions.data?.sessions ?? []).map((session) => ({
       label: session.title,
@@ -39,7 +39,9 @@ export function CommandMenu({
     })),
   ];
   function select(index: number) {
-    if (!results[index] || search.toLowerCase() !== query || sessions.isPending) return;
+    if (!results[index]) return;
+    // Page navigation is local and immediate; only session results await search.
+    if (results[index].agent && (search.toLowerCase() !== query || sessions.isPending)) return;
     results[index].select();
     onClose();
   }
