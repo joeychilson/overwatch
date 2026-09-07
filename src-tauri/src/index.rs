@@ -130,6 +130,7 @@ impl Index {
             CREATE TABLE IF NOT EXISTS accounts(agent TEXT PRIMARY KEY,root TEXT NOT NULL,data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS samples(agent TEXT NOT NULL,identity TEXT NOT NULL,bucket TEXT NOT NULL,reset INTEGER NOT NULL,minute INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(agent,identity,bucket,reset,minute));")?;
         let sources = settings::initialize(&mut db, &directory, sources)?;
+        let invalid = crate::history::initialize(&mut db)?;
         Ok(Self {
             directory,
             db: Mutex::new(db),
@@ -148,7 +149,7 @@ impl Index {
             reader: Mutex::new(None),
             scanning: AtomicBool::new(false),
             scan_error: Mutex::new(None),
-            invalid_summaries: Mutex::new(HashSet::new()),
+            invalid_summaries: Mutex::new(invalid.into_iter().collect()),
         })
     }
     pub fn sources(&self) -> Result<Vec<Source>> {
@@ -487,6 +488,7 @@ impl Index {
                     session.updated_at,
                     serde_json::to_string(session)?
                 ])?;
+            crate::history::upsert(&tx, source, session)?;
         }
         tx.commit()?;
         let mut invalid = self.invalid_summaries.lock()?;

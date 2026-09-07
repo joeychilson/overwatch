@@ -3,6 +3,7 @@ mod commands;
 mod credentials;
 pub mod data;
 pub mod error;
+pub mod history;
 pub mod index;
 mod opencode;
 mod parse;
