@@ -79,10 +79,12 @@ Run `vp run benchmark` for repeatable small/large synthetic history benchmarks.
 See [the benchmark guide](docs/benchmarks.md) for workloads, measurement boundaries,
 and comparing results across revisions.
 
-The React frontend lives in `src/pages` and `src/lib`. Usage aggregation, model
-identity, transcript helpers, and the app shell have their own folders under
-`src/lib`. Native indexing, source adapters, and account operations live in
-`src-tauri/src`.
+The React frontend lives in `src/pages` and `src/lib`. `src/lib/usage` contains
+cost accounting, aggregation, charts, and subscription forecasts; `src/lib/models`
+contains catalog validation and model identity. Transcript helpers and the app
+shell also have their own folders under `src/lib`. Unit tests sit beside their
+modules. Native indexing, source adapters, and account operations live in
+`src-tauri/src`; cross-adapter indexing tests live in `src-tauri/tests`.
 
 After changing native commands or types, regenerate `src/lib/bindings.ts`:
 

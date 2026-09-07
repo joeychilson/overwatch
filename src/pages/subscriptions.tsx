@@ -7,7 +7,11 @@ import { toast } from "sonner";
 import { agents } from "@/lib/agents";
 import { commands, type Agent, type Session } from "@/lib/bindings";
 import { AppFailure, failure, native } from "@/lib/errors";
-import { forecasts, reachesLimitBeforeReset, type Forecast } from "@/lib/usage/forecast";
+import {
+  subscriptionForecasts,
+  reachesLimitBeforeReset,
+  type Forecast,
+} from "@/lib/usage/forecast";
 import { accountOptions } from "@/lib/queries";
 import { money, relative } from "@/lib/format";
 import { cn } from "cn";
@@ -86,18 +90,10 @@ export default function Subscriptions({ sessions, now }: { sessions: Session[]; 
       toast.success("Saved connection data removed");
     },
   });
-  const all = useMemo(() => {
-    const accounts = query.data?.accounts ?? [];
-    return forecasts(
-      [
-        ...(query.data?.samples ?? []),
-        ...accounts.flatMap((account) => account.usage?.windows ?? []),
-        ...sessions.flatMap((session) => session.limits),
-      ],
-      accounts,
-      now,
-    );
-  }, [query.data, sessions, now]);
+  const all = useMemo(
+    () => subscriptionForecasts(query.data, sessions, now),
+    [query.data, sessions, now],
+  );
   const windows = all.filter((forecast) => forecast.latest.agent === agent);
   const history = windows.find((window) => window.latest.bucket === historyBucket) ?? windows[0];
   const account = query.data?.accounts.find((account) => account.agent === agent);

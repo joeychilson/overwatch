@@ -1,4 +1,4 @@
-import type { AccountStatus, QuotaSample } from "../bindings";
+import type { Accounts, AccountStatus, QuotaSample, Session } from "../bindings";
 
 type Reading = QuotaSample & { usedPercent: number };
 
@@ -9,6 +9,24 @@ export type Forecast = {
   exhaustionAt: number | null;
   atReset: number | null;
 };
+
+/** Assemble account history, its latest readings, and local log allowances in one place. */
+export function subscriptionForecasts(
+  data: Accounts | undefined,
+  sessions: Session[],
+  now: number,
+) {
+  const accounts = data?.accounts ?? [];
+  return forecasts(
+    [
+      ...(data?.samples ?? []),
+      ...accounts.flatMap((account) => account.usage?.windows ?? []),
+      ...sessions.flatMap((session) => session.limits),
+    ],
+    accounts,
+    now,
+  );
+}
 
 export function reachesLimitBeforeReset(forecast: Forecast): boolean {
   return (

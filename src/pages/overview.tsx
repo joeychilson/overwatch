@@ -3,7 +3,7 @@ import { addDays, eachDayOfInterval, formatDistanceStrict, startOfDay, subDays }
 import { ArrowDownToLine, ArrowUpRight, TriangleAlert } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { accountOptions } from "@/lib/queries";
-import { forecasts, subscriptionWarnings } from "@/lib/usage/forecast";
+import { subscriptionForecasts, subscriptionWarnings } from "@/lib/usage/forecast";
 import { agents, agentIds } from "@/lib/agents";
 import type { Session } from "@/lib/bindings";
 import type { Model } from "@/lib/models/catalog";
@@ -49,16 +49,7 @@ export default function Overview({
   const start = startOfDay(subDays(now, range - 1)).getTime();
   const accounts = useQuery(accountOptions);
   const quota = useMemo(
-    () =>
-      forecasts(
-        [
-          ...(accounts.data?.samples ?? []),
-          ...(accounts.data?.accounts.flatMap((account) => account.usage?.windows ?? []) ?? []),
-          ...allSessions.flatMap((session) => session.limits),
-        ],
-        accounts.data?.accounts ?? [],
-        now,
-      ),
+    () => subscriptionForecasts(accounts.data, allSessions, now),
     [accounts.data, allSessions, now],
   );
   const warnings = subscriptionWarnings(quota, now);

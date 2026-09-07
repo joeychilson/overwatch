@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import { subscriptionWarnings, type Forecast } from "./forecast";
+import type { AccountStatus, QuotaSample, Session } from "../bindings";
+import { forecasts, subscriptionForecasts, subscriptionWarnings, type Forecast } from "./forecast";
 
 function reading(
   agent: Forecast["latest"]["agent"],
@@ -72,5 +73,113 @@ describe("subscription warnings", () => {
       expect(subscriptionWarnings([reading("codex", 100, { state })], 1000)).toEqual([]);
     }
     expect(subscriptionWarnings([], 1000)).toEqual([]);
+  });
+});
+
+describe("quota forecasts", () => {
+  const now = 1_800_000_000_000;
+  const sample = (timestamp: number, usedPercent: number, accountKey = "a"): QuotaSample => ({
+    agent: "codex",
+    accountKey,
+    bucket: "five-hour",
+    label: "5 hour",
+    usedPercent,
+    windowMinutes: 300,
+    resetsAt: now + 3600000,
+    timestamp,
+    source: "Account",
+  });
+  it("uses local readings until an account supplies its own history and current windows", () => {
+    const local = { ...sample(now, 95), accountKey: null, source: "Session log" };
+    const sessions = [{ limits: [local] }] as Session[];
+    expect(subscriptionForecasts(undefined, sessions, now)[0].latest).toEqual(local);
+    const latest = sample(now, 30);
+    const account: AccountStatus = {
+      agent: "codex",
+      usage: {
+        accountKey: "a",
+        plan: null,
+        source: "Account",
+        updatedAt: now,
+        windows: [latest],
+        balances: [],
+      },
+      error: null,
+      lastAttempt: now,
+      nextRefreshAt: now + 300000,
+    };
+    const history = [sample(now - 1800000, 10), sample(now - 900000, 20)];
+    const [result] = subscriptionForecasts(
+      { accounts: [account], samples: history },
+      sessions,
+      now,
+    );
+    expect(result.latest).toEqual(latest);
+    expect(result.samples).toEqual([...history, latest]);
+    expect(result.state).toBe("projected");
+    expect(subscriptionForecasts(undefined, [], now)).toEqual([]);
+  });
+  it("uses regression only with sufficient fresh observations", () => {
+    const points = [sample(now - 1800000, 10), sample(now - 900000, 20), sample(now, 30)];
+    const [forecast] = forecasts(points, [], now);
+    expect(forecast.state).toBe("projected");
+    expect(forecast.atReset).toBeCloseTo(70);
+    expect(forecasts(points.slice(1), [], now)[0].state).toBe("collecting");
+    expect(forecasts(points, [], now + 900001)[0].state).toBe("stale");
+  });
+  it("does not mix reset windows, quota decreases, or identities", () => {
+    const points = [sample(now - 1800000, 50), sample(now - 900000, 60), sample(now, 10)];
+    expect(forecasts(points, [], now)[0].state).toBe("collecting");
+    const current = sample(now, 20, "b");
+    const account: AccountStatus = {
+      agent: "codex",
+      usage: {
+        accountKey: "b",
+        plan: null,
+        source: "Account",
+        updatedAt: now,
+        windows: [current],
+        balances: [],
+      },
+      error: null,
+      lastAttempt: now,
+      nextRefreshAt: now + 300000,
+    };
+    expect(forecasts([...points, current], [account], now)[0].samples).toEqual([current]);
+  });
+  it("marks a finished window as expired even when the last reading is stale", () => {
+    const reading = { ...sample(now - 1_800_000, 42), resetsAt: now - 60_000 };
+    expect(forecasts([reading], [], now)[0].state).toBe("expired");
+  });
+  it("orders allowances shortest first, including monthly limits without a duration", () => {
+    const reading = (bucket: string, label: string, windowMinutes: number): QuotaSample => ({
+      ...sample(now, 20),
+      agent: "opencode",
+      bucket,
+      label,
+      windowMinutes,
+    });
+    const readings = [
+      reading("monthly", "Monthly", 0),
+      reading("other", "Other allowance", 0),
+      reading("weekly", "Weekly", 10080),
+      reading("review-b", "Code review · Weekly", 10080),
+      reading("rolling", "5 hour", 300),
+      reading("review-a", "Code review · Weekly", 10080),
+      { ...reading("codex-weekly", "Weekly", 10080), agent: "codex" as const },
+    ];
+    const order = (values: QuotaSample[]) =>
+      forecasts(values, [], now).map(({ latest }) => latest.bucket);
+    const expected = [
+      "rolling",
+      "codex-weekly",
+      "review-a",
+      "review-b",
+      "weekly",
+      "monthly",
+      "other",
+    ];
+    expect(order(readings)).toEqual(expected);
+    expect(order([...readings].reverse())).toEqual(expected);
   });
 });

@@ -5,9 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { aggregate, emptyTokens } from "./analytics";
 import { knownCost } from "./costs";
 import { parseCatalog } from "../models/catalog";
-import { csv } from "../export";
-import { forecasts } from "./forecast";
-import type { AccountStatus, QuotaSample, Session } from "../bindings";
+import type { Session } from "../bindings";
 
 const models = parseCatalog({
   lab: {
@@ -52,14 +50,6 @@ describe("usage accounting", () => {
       if (Intl.DateTimeFormat().resolvedOptions().timeZone === "America/Chicago")
         expect((end - start) / 3600000).toBe(month === 2 ? 23 : 25);
     }
-  });
-  it("validates catalog fields rather than accepting cast data", () => {
-    expect(() =>
-      parseCatalog({
-        lab: { name: "Lab", models: { bad: { id: "bad", name: "Bad", cost: { input: "2" } } } },
-      }),
-    ).toThrow("validation");
-    expect(() => parseCatalog({})).toThrow();
   });
   it("uses usage timestamps and retains explicitly reported zero cost", () => {
     const timestamp = new Date("2026-08-20T12:00:00").getTime();
@@ -144,89 +134,6 @@ describe("usage accounting", () => {
       expect(mixed.models.reduce((sum, row) => sum + row[field], 0)).toBe(mixed[field]);
     }
   });
-});
-
-describe("quota forecasts", () => {
-  const now = 1_800_000_000_000;
-  const sample = (timestamp: number, usedPercent: number, accountKey = "a"): QuotaSample => ({
-    agent: "codex",
-    accountKey,
-    bucket: "five-hour",
-    label: "5 hour",
-    usedPercent,
-    windowMinutes: 300,
-    resetsAt: now + 3600000,
-    timestamp,
-    source: "Account",
-  });
-  it("uses regression only with sufficient fresh observations", () => {
-    const points = [sample(now - 1800000, 10), sample(now - 900000, 20), sample(now, 30)];
-    const [forecast] = forecasts(points, [], now);
-    expect(forecast.state).toBe("projected");
-    expect(forecast.atReset).toBeCloseTo(70);
-    expect(forecasts(points.slice(1), [], now)[0].state).toBe("collecting");
-    expect(forecasts(points, [], now + 900001)[0].state).toBe("stale");
-  });
-  it("does not mix reset windows, quota decreases, or identities", () => {
-    const points = [sample(now - 1800000, 50), sample(now - 900000, 60), sample(now, 10)];
-    expect(forecasts(points, [], now)[0].state).toBe("collecting");
-    const current = sample(now, 20, "b");
-    const account: AccountStatus = {
-      agent: "codex",
-      usage: {
-        accountKey: "b",
-        plan: null,
-        source: "Account",
-        updatedAt: now,
-        windows: [current],
-        balances: [],
-      },
-      error: null,
-      lastAttempt: now,
-      nextRefreshAt: now + 300000,
-    };
-    expect(forecasts([...points, current], [account], now)[0].samples).toEqual([current]);
-  });
-  it("marks a finished window as expired even when the last reading is stale", () => {
-    const reading = { ...sample(now - 1_800_000, 42), resetsAt: now - 60_000 };
-    expect(forecasts([reading], [], now)[0].state).toBe("expired");
-  });
-  it("orders allowances shortest first, including monthly limits without a duration", () => {
-    const reading = (bucket: string, label: string, windowMinutes: number): QuotaSample => ({
-      ...sample(now, 20),
-      agent: "opencode",
-      bucket,
-      label,
-      windowMinutes,
-    });
-    const readings = [
-      reading("monthly", "Monthly", 0),
-      reading("other", "Other allowance", 0),
-      reading("weekly", "Weekly", 10080),
-      reading("review-b", "Code review · Weekly", 10080),
-      reading("rolling", "5 hour", 300),
-      reading("review-a", "Code review · Weekly", 10080),
-      { ...reading("codex-weekly", "Weekly", 10080), agent: "codex" as const },
-    ];
-    const order = (values: QuotaSample[]) =>
-      forecasts(values, [], now).map(({ latest }) => latest.bucket);
-    const expected = [
-      "rolling",
-      "codex-weekly",
-      "review-a",
-      "review-b",
-      "weekly",
-      "monthly",
-      "other",
-    ];
-    expect(order(readings)).toEqual(expected);
-    expect(order([...readings].reverse())).toEqual(expected);
-  });
-});
-it("escapes CSV formulas, quotes, and line breaks", () => {
-  expect(csv([["=SUM(A1)", "two\nlines", 'a"b', 12, -4]])).toBe(
-    '"\'=SUM(A1)","two\nlines","a""b","12","-4"',
-  );
 });
 
 it("retains undated usage in lifetime totals without inventing calendar activity", () => {
