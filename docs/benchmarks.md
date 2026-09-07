@@ -51,7 +51,8 @@ issues or a supposedly idle scan reporting changes fail the run.
 - **warmReaderSearch**: absent, sparse case-insensitive, broad, and second-page
   searches on an already-open transcript. Broad paging intentionally exposes
   repeated full-transcript search work.
-- **snapshotBytes / timelineBytes**: actual serialized payload sizes.
+- **sessionQuery / usageQuery**: bounded session-list and whole-history aggregate queries.
+- **snapshotBytes / timelineBytes / sessionPageBytes / usageReportBytes**: actual serialized payload sizes. The snapshot remains a benchmark-only comparison path.
 
 `frontend.json` is Vitest's benchmark report, with timings and statistical
 information for snapshot JSON parsing, lifetime and date-scoped aggregation,
@@ -67,8 +68,7 @@ cache is not flushed, so “cold” means an empty application index, not a cold
 Idle timings are wall time per explicit scan, not syscall counts, process CPU,
 battery estimates, or watcher wakeup frequency. Use Instruments/File Activity
 for those system-level measurements. No artificial polling sleeps are timed.
-There are no backend aggregate queries yet; the frontend measurements establish
-the baseline for their replacement.
+The frontend aggregation benchmarks retain the legacy path as a comparison; the application now uses backend queries.
 
 ## Comparing revisions
 
@@ -90,3 +90,11 @@ samples are too few for meaningful tail-percentile claims.
 There are intentionally no absolute timing assertions in CI: shared-runner load
 would turn them into flaky tests. Count assertions protect benchmark validity;
 performance decisions should use locally collected before/after results.
+
+## September 7, 2026 query and timeline results
+
+The large fixture now returns a 32,050-byte session page and a 173,188-byte whole-history usage report. The legacy snapshot is 40,763,263 bytes. The 50,000-event timeline returns 62,973 bytes, down from the original 5,113,891-byte timeline, while retaining exact event access through event pages.
+
+The latest native medians were 118.2 ms for a session query and 671.1 ms for the whole-history usage query. These results establish smaller payloads and bounded initial list work; they do **not** establish an overall CPU or end-to-end startup speedup. Whole-history aggregation still processes the response rows, and deserves further profiling for very large histories. Frontend benchmark wall times were affected by concurrent development work, so they are not presented as an equivalent before/after comparison.
+
+Reports: `/var/folders/3l/w3pvhw4j7hqch13n6fwltpjc0000gn/T/overwatch-benchmark-WmENzi`. The fixture, bytes, and medians above preserve the relevant results if temporary files are removed. Native filesystem delivery and recovery tests pass, but battery savings and idle wakeup counts still require an Instruments session on a normal installed build.
