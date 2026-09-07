@@ -25,9 +25,9 @@ export const commands = {
 	getAccounts: () => typedError<Accounts, AppError>(__TAURI_INVOKE("get_accounts")),
 	refreshAccount: (agent: Agent) => typedError<AccountStatus, AppError>(__TAURI_INVOKE("refresh_account", { agent })),
 	saveToken: (agent: Agent, token: string | null) => typedError<null, AppError>(__TAURI_INVOKE("save_token", { agent, token })),
-	exportFile: (filename: string, content: string) => typedError<boolean, AppError>(__TAURI_INVOKE("export_file", { filename, content })),
-	exportSessions: (query: SessionQuery) => typedError<boolean, AppError>(__TAURI_INVOKE("export_sessions", { query })),
-	exportSession: (id: string) => typedError<boolean, AppError>(__TAURI_INVOKE("export_session", { id })),
+	exportFile: (filename: string, content: string) => typedError<string | null, AppError>(__TAURI_INVOKE("export_file", { filename, content })),
+	exportSessions: (query: SessionQuery) => typedError<string | null, AppError>(__TAURI_INVOKE("export_sessions", { query })),
+	exportSession: (id: string) => typedError<string | null, AppError>(__TAURI_INVOKE("export_session", { id })),
 };
 
 /** Events */

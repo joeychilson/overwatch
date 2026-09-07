@@ -16,6 +16,7 @@ import { compact, duration, elapsed, hasTimestamp, integer, money } from "@/lib/
 import { aggregate, totalTokens } from "@/lib/usage/analytics";
 import { catalogOptions, eventPageOptions } from "@/lib/queries";
 import { useDebounced } from "@/lib/hooks/use-debounced";
+import { confirmExport } from "@/lib/export";
 import { useWorkspace } from "@/lib/shell/use-workspace";
 import { useModelName } from "@/lib/hooks/use-model-name";
 import { Button } from "./ui/button";
@@ -72,7 +73,10 @@ export function SessionReader({
     setMatch(next);
     log.current?.jumpTo(next, false);
   }
-  const exportData = useMutation({ mutationFn: () => native(commands.exportSession(id)) });
+  const exportData = useMutation({
+    mutationFn: () => native(commands.exportSession(id)),
+    onSuccess: confirmExport,
+  });
   const source = useMutation({ mutationFn: () => native(commands.openSessionSource(id)) });
   const catalog = useQuery(catalogOptions);
   const modelName = useModelName();

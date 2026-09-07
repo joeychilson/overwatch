@@ -246,7 +246,7 @@ pub async fn save_token(
         .map_err(|e| AppError::Internal(e.to_string()))?;
     Ok(())
 }
-fn save_file(app: &AppHandle, filename: &str, content: &str) -> Result<bool> {
+fn save_file(app: &AppHandle, filename: &str, content: &str) -> Result<Option<String>> {
     let name = std::path::Path::new(filename)
         .file_name()
         .and_then(|name| name.to_str())
@@ -263,15 +263,19 @@ fn save_file(app: &AppHandle, filename: &str, content: &str) -> Result<bool> {
         .add_filter("Overwatch export", &[extension])
         .blocking_save_file()
     else {
-        return Ok(false);
+        return Ok(None);
     };
     let path = path.into_path().map_err(|e| AppError::Io(e.to_string()))?;
-    std::fs::write(path, content)?;
-    Ok(true)
+    std::fs::write(&path, content)?;
+    Ok(Some(path.to_string_lossy().into_owned()))
 }
 #[tauri::command]
 #[specta::specta]
-pub async fn export_file(app: AppHandle, filename: String, content: String) -> Result<bool> {
+pub async fn export_file(
+    app: AppHandle,
+    filename: String,
+    content: String,
+) -> Result<Option<String>> {
     blocking(move || save_file(&app, &filename, &content)).await
 }
 #[tauri::command]
@@ -280,7 +284,7 @@ pub async fn export_sessions(
     index: State<'_, Arc<Index>>,
     app: AppHandle,
     query: SessionQuery,
-) -> Result<bool> {
+) -> Result<Option<String>> {
     let index = Arc::clone(&index);
     blocking(move || {
         save_file(
@@ -297,7 +301,7 @@ pub async fn export_session(
     index: State<'_, Arc<Index>>,
     app: AppHandle,
     id: String,
-) -> Result<bool> {
+) -> Result<Option<String>> {
     let index = Arc::clone(&index);
     blocking(move || save_file(&app, "overwatch-session.json", &index.export_session(&id)?)).await
 }

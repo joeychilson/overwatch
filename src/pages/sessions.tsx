@@ -7,6 +7,7 @@ import { useSessionSearch } from "@/lib/hooks/use-session-search";
 import { useDebounced } from "@/lib/hooks/use-debounced";
 import { sessionQuery, navigationOptions } from "@/lib/history";
 import { commands, type HistoryScope, type SessionQuery } from "@/lib/bindings";
+import { confirmExport } from "@/lib/export";
 import { integer } from "@/lib/format";
 import { native } from "@/lib/errors";
 import { SessionFilters } from "@/lib/components/session-filters";
@@ -128,6 +129,7 @@ export default function Sessions({
   ]);
   const exportData = useMutation({
     mutationFn: () => native(commands.exportSessions(query)),
+    onSuccess: confirmExport,
   });
   return (
     <>

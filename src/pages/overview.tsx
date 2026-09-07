@@ -17,7 +17,7 @@ import type { HistoryScope } from "@/lib/bindings";
 import { activity } from "@/lib/usage/analytics";
 import { knownCost } from "@/lib/usage/costs";
 import { compact, day, integer, money } from "@/lib/format";
-import { exportCsv } from "@/lib/export";
+import { exportCsv, confirmExport } from "@/lib/export";
 import { offeringProviderNames, usageGroups } from "@/lib/usage/groups";
 import { Button } from "@/lib/components/ui/button";
 import { UsageOverTime } from "@/lib/components/usage-over-time";
@@ -29,6 +29,8 @@ import { SessionTable } from "@/lib/components/session-table";
 type Props = {
   scope: HistoryScope;
   sessionCount: number;
+  scanning: boolean;
+  detectedSources: number;
   range: number;
   now: number;
   openSession: (id: string) => void;
@@ -42,6 +44,8 @@ type Props = {
 export default function Overview({
   scope,
   sessionCount,
+  scanning,
+  detectedSources,
   range,
   now,
   openSession,
@@ -77,6 +81,7 @@ export default function Overview({
   const { data: tools } = useSuspenseQuery(toolOptions(historyScope({ ...scope, start, end })));
   const days = eachDayOfInterval({ start, end: now });
   const exportData = useMutation({
+    onSuccess: confirmExport,
     mutationFn: () =>
       exportCsv("overwatch-daily-usage.csv", [
         [
@@ -162,9 +167,15 @@ export default function Overview({
       )}
       {!scopedSessions ? (
         <Empty
-          title={sessionCount ? "No sessions match this scope" : "Your workspace starts here"}
+          title={
+            scanning
+              ? "Reading local history…"
+              : sessionCount
+                ? "No sessions match this scope"
+                : "Your workspace starts here"
+          }
           action={
-            sessionCount ? (
+            sessionCount && !scanning ? (
               <Button onClick={clearScope}>Clear project and agent filters</Button>
             ) : (
               <Button onClick={() => navigate("connections")}>
@@ -174,9 +185,21 @@ export default function Overview({
             )
           }
         >
-          {sessionCount
-            ? "Your local history is available. Choose another project or agent to see its usage."
-            : "Connect your local agent folders to see sessions, token usage, and model insights."}
+          {scanning ? (
+            <span role="status">
+              {integer(sessionCount)} sessions indexed so far. You can keep using Overwatch while it
+              reads your folders.
+            </span>
+          ) : sessionCount ? (
+            "Your local history is available. Choose another project or agent to see its usage."
+          ) : (
+            `${detectedSources} local history ${detectedSources === 1 ? "folder detected" : "folders detected"}. Check your connections to choose which histories to read.`
+          )}
+          {(!sessionCount || scanning) && (
+            <span className="mt-3 block">
+              Your history stays on this device. Original files are never changed.
+            </span>
+          )}
         </Empty>
       ) : (
         <>

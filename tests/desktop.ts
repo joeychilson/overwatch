@@ -262,6 +262,9 @@ export async function desktop(
     undatedEvents?: "all" | "mixed";
     costCoverage?: "unknown" | "zero" | "mixed";
     accountErrorWithoutUsage?: boolean;
+    scanning?: boolean;
+    cancelExport?: boolean;
+    failExport?: boolean;
   } = {},
 ) {
   const snapshot: Snapshot = {
@@ -295,7 +298,7 @@ export async function desktop(
       sessions: sessions.filter((session) => session.agent === agent).length,
       issues: [],
     })),
-    scanning: false,
+    scanning: options.scanning ?? false,
   };
   if (options.sessions) snapshot.sessions = options.sessions;
   if (options.cachedSummaryIssue) {
@@ -465,6 +468,19 @@ export async function desktop(
         for (const callback of listeners.get(event) ?? [])
           callbacks.get(callback)?.({ event, payload });
       };
+      window.addEventListener("fixture-navigation", (event) =>
+        emit("navigation-requested", (event as CustomEvent).detail),
+      );
+      window.addEventListener("fixture-history-progress", (event) => {
+        const detail = (event as CustomEvent).detail;
+        state.snapshot.sessions = detail.sessions;
+        state.snapshot.scanning = detail.scanning;
+        emit("index-changed", { sessions: null, progress: detail.scanning });
+      });
+      const savedExport = (name: string) => {
+        if (options.failExport) throw { kind: "io", message: "Could not write this export." };
+        return options.cancelExport ? null : `/Users/demo/Downloads/${name}`;
+      };
       window.addEventListener("fixture-index-change", (event) =>
         emit("index-changed", (event as CustomEvent).detail),
       );
@@ -505,7 +521,7 @@ export async function desktop(
               ).historyFixture(command, args, state.snapshot, catalog);
               if (command === "export_sessions") {
                 document.documentElement.dataset.exportedFile = JSON.stringify(result);
-                return true;
+                return savedExport("overwatch-sessions.csv");
               }
               return result;
             }
@@ -711,9 +727,12 @@ export async function desktop(
                 return null;
               case "export_file":
                 document.documentElement.dataset.exportedFile = JSON.stringify(args);
-                return true;
+                return savedExport(String(args.filename));
               case "export_session":
-                return true;
+                return savedExport("overwatch-session.json");
+              case "plugin:opener|reveal_item_in_dir":
+                document.documentElement.dataset.revealedFile = JSON.stringify(args.paths);
+                return null;
               case "open_session_source":
                 document.documentElement.dataset.openedSessionSource = String(args.id);
                 return null;

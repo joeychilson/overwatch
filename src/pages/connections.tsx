@@ -161,6 +161,7 @@ export default function Connections({
     <>
       <PageTitle
         title="Connections"
+        description="Local history folders are detected automatically. Review their status below."
         action={
           <Button
             variant="outline"

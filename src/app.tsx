@@ -255,6 +255,12 @@ export default function App() {
                       <Overview
                         scope={scope}
                         sessionCount={snapshot.data?.sessionCount ?? 0}
+                        scanning={snapshot.data?.scanning ?? false}
+                        detectedSources={
+                          snapshot.data?.sources.filter(
+                            (source) => source.source.enabled && source.available,
+                          ).length ?? 0
+                        }
                         range={Number(range)}
                         now={now}
                         openSession={openSession}
