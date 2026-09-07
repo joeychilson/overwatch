@@ -1,8 +1,7 @@
 import { lazy, Suspense, useLayoutEffect, useMemo, useRef, type RefObject } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceField } from "@/lib/shell/use-workspace";
-import { historyScope, sessionOptions, sessionQuery, useUsage } from "@/lib/history";
-import { Pagination } from "@/lib/components/pagination";
+import { historyScope, sessionQuery, useUsage } from "@/lib/history";
+import { useSessionFeed } from "@/lib/hooks/use-session-feed";
 import { ArrowLeft } from "lucide-react";
 import { agentIds, agents } from "@/lib/agents";
 import type { Agent, HistoryScope, SessionQuery } from "@/lib/bindings";
@@ -73,7 +72,7 @@ export function ModelDetail({
   });
   const { stats } = useUsage(selectedScope);
   const query = sessionQuery(selectedScope, { usageOnly: true, offset, sort, descending });
-  const page = useQuery(sessionOptions(query));
+  const page = useSessionFeed(query);
   const providers = [
     ...new Map(
       group.offerings.map((offering) => [offering.provider, offering.providerName]),
@@ -291,8 +290,12 @@ export function ModelDetail({
             </span>
           }
         >
-          {page.error && <ErrorNotice error={page.error} retry={() => void page.refetch()} />}
-          {page.data && <Pagination {...page.data} busy={page.isFetching} onPage={setOffset} />}
+          {page.error && (
+            <ErrorNotice
+              error={page.error}
+              retry={() => void (page.isFetchNextPageError ? page.fetchNextPage() : page.refetch())}
+            />
+          )}
           {page.isPending ? (
             <Skeleton className="h-64 w-full" />
           ) : (
@@ -303,9 +306,12 @@ export function ModelDetail({
                 setDescending(descending);
                 setOffset(0);
               }}
-              usage={page.data?.usage}
+              usage={page.usage}
               label="Model contributing sessions"
-              sessions={page.data?.sessions ?? []}
+              sessions={page.sessions}
+              active={!reading}
+              onEndReached={page.loadMore}
+              hasMore={page.hasNextPage && !page.isFetchNextPageError}
               usageOnly
               boxed
               scrollRef={sessionScroll}

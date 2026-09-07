@@ -149,10 +149,10 @@ test("session model names remain searchable by name and original identifier", as
   await search.fill("GPT-6 Astra");
   const table = page.getByRole("table", { name: "Sessions", exact: true });
   await expect(table.getByText("GPT-6 Astra", { exact: false }).first()).toBeVisible();
-  const summary = page.getByText("16 sessions", { exact: true });
+  const summary = page.getByText("16 of 16 sessions", { exact: true });
   await expect(summary).toBeVisible();
   await search.fill("");
-  await expect(page.getByText("48 sessions", { exact: true })).toBeVisible();
+  await expect(page.getByText("48 of 48 sessions", { exact: true })).toBeVisible();
   await search.fill("gpt-6-astra");
   await expect(summary).toBeVisible();
   await table

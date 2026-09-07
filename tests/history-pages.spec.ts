@@ -8,33 +8,19 @@ const history = Array.from({ length: 123 }, (_, index) => ({
   updatedAt: Date.now() - index * 1000,
 }));
 
-test("session pages keep full-scope sorting, navigation and export", async ({ page }) => {
+test("infinite sessions load bounded batches and keep full-scope navigation and export", async ({
+  page,
+}) => {
   await desktop(page, { sessions: history });
   await page.goto("/");
   await page.getByRole("button", { name: "Sessions", exact: true }).click();
   const table = page.getByRole("table", { name: "Sessions", exact: true });
-  await expect(table.locator("tbody [data-row-id]")).toHaveCount(50);
-  await expect(page.getByRole("navigation", { name: "Session pages" })).toContainText(
-    "1–50 of 123 sessions",
-  );
-  await page.screenshot({ path: `test-results/session-pages-${test.info().project.name}.png` });
-  await page.getByRole("button", { name: "Next page", exact: true }).click();
-  await expect(
-    table.getByRole("button", { name: "History session 050", exact: true }),
-  ).toBeVisible();
-  await expect(table.locator("tbody [data-row-id]")).toHaveCount(50);
-  await table.getByRole("button", { name: "History session 099", exact: true }).click();
-  await expect(page.getByRole("navigation", { name: "Session navigation" })).toContainText(
-    "100 of 123",
-  );
-  await page.getByRole("button", { name: "Next session", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "History session 100", exact: true }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Back to sessions", exact: true }).click();
-  await expect(page.getByRole("navigation", { name: "Session pages" })).toContainText(
-    "51–100 of 123 sessions",
-  );
+  const scroll = page.locator('[data-slot="page-scroll"]');
+  await expect(page.getByRole("status").filter({ hasText: "50 of 123 sessions" })).toBeAttached();
+  expect(await table.locator("tbody [data-row-id]").count()).toBeLessThan(40);
+  await page.screenshot({
+    path: `/tmp/overwatch-ui-review/infinite-sessions-${test.info().project.name}.png`,
+  });
   await page.getByRole("button", { name: "Export", exact: true }).click();
   await expect
     .poll(async () => {
@@ -42,6 +28,31 @@ test("session pages keep full-scope sorting, navigation and export", async ({ pa
       return raw ? JSON.parse(raw).content.split("\r\n").length : 0;
     })
     .toBe(124);
+  await expect
+    .poll(async () => {
+      await scroll.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      return await table
+        .getByRole("button", { name: "History session 121", exact: true })
+        .isVisible();
+    })
+    .toBe(true);
+  await table.getByRole("button", { name: "History session 121", exact: true }).click();
+  await expect(page.getByRole("navigation", { name: "Session navigation" })).toContainText(
+    "122 of 123",
+  );
+  await page.getByRole("button", { name: "Next session", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "History session 122", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Back to sessions", exact: true }).click();
+  await expect(
+    table.getByRole("button", { name: "History session 121", exact: true }),
+  ).toBeFocused();
+  await scroll.evaluate((element) => {
+    element.scrollTop = 0;
+  });
   await table.getByRole("button", { name: "Session", exact: true }).click();
   await expect(table.getByRole("columnheader", { name: "Session", exact: true })).toHaveAttribute(
     "aria-sort",
@@ -53,13 +64,18 @@ test("session pages keep full-scope sorting, navigation and export", async ({ pa
   const requests = JSON.parse(
     (await page.locator("html").getAttribute("data-history-requests")) ?? "[]",
   );
-  expect(requests.some((request: { command: string }) => request.command === "get_sessions")).toBe(
-    true,
+  const lists = requests.filter(
+    (request: { command: string }) => request.command === "get_sessions",
   );
   expect(
-    requests
-      .filter((request: { command: string }) => request.command === "get_sessions")
-      .every((request: { args: { query: { limit: number } } }) => request.args.query.limit <= 50),
+    lists.every(
+      (request: { args: { query: { limit: number } } }) => request.args.query.limit <= 50,
+    ),
+  ).toBe(true);
+  expect(
+    lists.some(
+      (request: { args: { query: { offset: number } } }) => request.args.query.offset === 100,
+    ),
   ).toBe(true);
 });
 
@@ -114,4 +130,24 @@ test("history events refresh only the affected reader", async ({ page }) => {
     ),
   );
   await expect(page.locator("html")).toHaveAttribute("data-transcript-requests", "3");
+});
+
+test("Tab traversal reaches sessions beyond the first batch", async ({ page }) => {
+  await desktop(page, { sessions: history });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  const table = page.getByRole("table", { name: "Sessions", exact: true });
+  await table.getByRole("button", { name: "History session 000", exact: true }).focus();
+  for (let i = 0; i < 55; i++) {
+    await page.keyboard.press("Tab");
+    await expect(
+      table.getByRole("button", {
+        name: `History session ${String(i + 1).padStart(3, "0")}`,
+        exact: true,
+      }),
+    ).toBeFocused();
+  }
+  await expect(
+    table.getByRole("button", { name: "History session 055", exact: true }),
+  ).toBeFocused();
 });

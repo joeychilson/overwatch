@@ -1,17 +1,17 @@
-import { useMemo, useLayoutEffect, useRef, type RefObject } from "react";
+import { useLayoutEffect, useRef, type RefObject } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowDownToLine, ArrowLeft, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { startOfDay, subDays } from "date-fns";
 import { useWorkspaceField, useWorkspace } from "@/lib/shell/use-workspace";
 import { useSessionSearch } from "@/lib/hooks/use-session-search";
 import { useDebounced } from "@/lib/hooks/use-debounced";
-import { sessionQuery, sessionOptions, navigationOptions } from "@/lib/history";
+import { sessionQuery, navigationOptions } from "@/lib/history";
 import { commands, type HistoryScope, type SessionQuery } from "@/lib/bindings";
 import { integer } from "@/lib/format";
 import { native } from "@/lib/errors";
 import { SessionFilters } from "@/lib/components/session-filters";
 import { useModelName } from "@/lib/hooks/use-model-name";
-import { Pagination } from "@/lib/components/pagination";
+import { useSessionFeed } from "@/lib/hooks/use-session-feed";
 import { Skeleton } from "@/lib/components/ui/skeleton";
 import { Button } from "@/lib/components/ui/button";
 import { ErrorNotice, FilterSelect, PageTitle, SearchField } from "@/lib/components/page";
@@ -82,8 +82,8 @@ export default function Sessions({
     sort,
     descending,
   });
-  const page = useQuery(sessionOptions(query));
-  const filtered = useMemo(() => page.data?.sessions ?? [], [page.data]);
+  const page = useSessionFeed(query);
+  const filtered = page.sessions;
   const context = selectedQuery ?? query;
   const navigation = useQuery(navigationOptions(selected ?? "", context));
   const position = navigation.data?.position ?? -1;
@@ -107,17 +107,28 @@ export default function Sessions({
       if (table && !table.querySelector("tbody [data-row-id]")) return false;
       scrollRef.current?.scrollTo({ top: saved?.page ?? 0 });
       const button = saved ? rowButton(root, saved.id) : null;
-      if (saved && filtered.some((session) => session.id === saved.id) && !button) return false;
+      if (
+        saved &&
+        !button &&
+        (page.hasNextPage || filtered.some((session) => session.id === saved.id))
+      )
+        return false;
       button?.focus({ preventScroll: true });
       restoring.current = false;
       return true;
     });
-  }, [selected, scrollRef, filtered, restore.revision, controls.focus, controls.scroll]);
-  const exportData = useMutation({ mutationFn: () => native(commands.exportSessions(query)) });
-  const changePage = (offset: number) => {
-    setOffset(offset);
-    scrollRef.current?.scrollTo({ top: 0 });
-  };
+  }, [
+    selected,
+    scrollRef,
+    filtered,
+    restore.revision,
+    controls.focus,
+    controls.scroll,
+    page.hasNextPage,
+  ]);
+  const exportData = useMutation({
+    mutationFn: () => native(commands.exportSessions(query)),
+  });
   return (
     <>
       {selected && (
@@ -180,7 +191,7 @@ export default function Sessions({
       <div ref={list} hidden={!!selected}>
         <PageTitle
           title="Sessions"
-          description={`${integer(page.data?.total ?? 0)} conversations across your local history.`}
+          description={`${integer(page.total)} conversations across your local history.`}
           action={
             <Button
               variant="outline"
@@ -229,12 +240,6 @@ export default function Sessions({
             }}
           />
         </div>
-        <p className="mb-4 text-sm text-muted-foreground">
-          Dates filter sessions by their last activity. Tokens and elapsed time cover each entire
-          session.
-          {selectedDay &&
-            " The selected day matches sessions with usage or a start on that local day."}
-        </p>
         {(selectedDay || activeTool || model || failedOnly) && (
           <div className="mb-4 flex flex-wrap gap-2">
             {selectedDay && (
@@ -246,6 +251,7 @@ export default function Sessions({
                   setOffset(0);
                 }}
                 aria-label="Clear day filter"
+                title="Sessions with usage or a start on this local day"
               >
                 {selectedDay}
                 <X />
@@ -297,12 +303,16 @@ export default function Sessions({
             )}
           </div>
         )}
-        {page.error && <ErrorNotice error={page.error} retry={() => void page.refetch()} />}
+        {page.error && !page.isFetchNextPageError && (
+          <ErrorNotice
+            error={page.error}
+            retry={() => void (page.isFetchNextPageError ? page.fetchNextPage() : page.refetch())}
+          />
+        )}
         {page.isPending ? (
           <Skeleton className="h-96 w-full" />
         ) : (
           <>
-            {page.data && <Pagination {...page.data} busy={page.isFetching} onPage={changePage} />}
             <SessionTable
               query={query}
               onSort={(sort, descending) => {
@@ -311,6 +321,9 @@ export default function Sessions({
                 setOffset(0);
               }}
               sessions={filtered}
+              active={!selected}
+              onEndReached={page.loadMore}
+              hasMore={page.hasNextPage && !page.isFetchNextPageError}
               scrollRef={scrollRef}
               onOpen={(id) => {
                 place.current = {
@@ -325,6 +338,14 @@ export default function Sessions({
                 openSession(id, query);
               }}
             />
+            {page.isFetchNextPageError && (
+              <ErrorNotice error={page.error} retry={() => void page.fetchNextPage()} />
+            )}
+            <p role="status" className="mt-5 text-xs text-muted-foreground">
+              {page.isFetchingNextPage
+                ? "Loading more sessions…"
+                : `${integer(filtered.length)} of ${integer(page.total)} sessions`}
+            </p>
           </>
         )}
       </div>

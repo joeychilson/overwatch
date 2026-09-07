@@ -8,7 +8,9 @@ const history = Array.from({ length: 123 }, (_, index) => ({
   updatedAt: Date.now() - index * 1000,
 }));
 
-test("restart restores session pages, filters, sort and the reading position", async ({ page }) => {
+test("restart restores infinite list context, filters, sort and the reading position", async ({
+  page,
+}) => {
   await desktop(page, { sessions: history });
   await page.goto("/");
   await page.getByRole("button", { name: "Sessions", exact: true }).click();
@@ -17,8 +19,17 @@ test("restart restores session pages, filters, sort and the reading position", a
     .fill("Restored history");
   const table = page.getByRole("table", { name: "Sessions", exact: true });
   await table.getByRole("button", { name: "Session", exact: true }).click();
-  await page.getByRole("button", { name: "Next page", exact: true }).click();
-  await table.getByRole("button", { name: "Restored history 080", exact: true }).click();
+  await expect
+    .poll(async () => {
+      await page.locator('[data-slot="page-scroll"]').evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      return await table
+        .getByRole("button", { name: "Restored history 120", exact: true })
+        .isVisible();
+    })
+    .toBe(true);
+  await table.getByRole("button", { name: "Restored history 120", exact: true }).click();
   await page.getByRole("button", { name: "Jump to latest" }).click();
   await expect(page.locator('[data-event-index="19999"]')).toBeFocused();
   await expect
@@ -29,24 +40,27 @@ test("restart restores session pages, filters, sort and the reading position", a
       ),
     )
     .toBeGreaterThan(19980);
+  const bookmark = await page.evaluate(
+    () => window.history.state.overwatch.readers.at(-1).index as number,
+  );
   await page.reload();
   await expect(
-    page.getByRole("heading", { name: "Restored history 080", exact: true }),
+    page.getByRole("heading", { name: "Restored history 120", exact: true }),
   ).toBeVisible();
-  await expect(page.locator('[data-event-index="19999"]')).toBeInViewport();
+  await expect(page.locator(`[data-event-index="${bookmark}"]`)).toBeInViewport();
   await page.getByRole("button", { name: "Back to sessions" }).click();
   await expect(
     page.getByRole("textbox", { name: "Search sessions, projects, or models…" }),
   ).toHaveValue("Restored history");
-  await expect(page.getByRole("navigation", { name: "Session pages" })).toContainText(
-    "51–100 of 123 sessions",
+  await expect(page.getByRole("status").filter({ hasText: "sessions" })).toContainText(
+    "123 of 123 sessions",
   );
   await expect(table.getByRole("columnheader", { name: "Session", exact: true })).toHaveAttribute(
     "aria-sort",
     "ascending",
   );
   await expect(
-    table.getByRole("button", { name: "Restored history 080", exact: true }),
+    table.getByRole("button", { name: "Restored history 120", exact: true }),
   ).toBeFocused();
 });
 
@@ -58,7 +72,9 @@ test("back and forward restore view and query context without a history entry pe
   await page.getByRole("button", { name: "Sessions", exact: true }).click();
   const length = await page.evaluate(() => window.history.length);
   await page.getByRole("textbox", { name: "Search sessions, projects, or models…" }).fill("cache");
-  await expect(page.getByRole("navigation", { name: "Session pages" })).toContainText("8 sessions");
+  await expect(page.getByRole("status").filter({ hasText: "sessions" })).toContainText(
+    "8 of 8 sessions",
+  );
   expect(await page.evaluate(() => window.history.length)).toBe(length);
   await page
     .getByRole("table", { name: "Sessions", exact: true })

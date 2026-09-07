@@ -15,8 +15,8 @@ test("optional filters share their scope with counts and exports", async ({ page
     path: `test-results/session-filters-open-${test.info().project.name}.png`,
   });
   await page.getByRole("button", { name: "Close filters" }).click();
-  await expect(page.getByRole("navigation", { name: "Session pages" })).toContainText(
-    "10 sessions",
+  await expect(page.getByRole("status").filter({ hasText: "sessions" })).toContainText(
+    "10 of 10 sessions",
   );
   await page.screenshot({
     animations: "disabled",
@@ -30,15 +30,15 @@ test("optional filters share their scope with counts and exports", async ({ page
     })
     .toBe(11);
   await page.getByRole("button", { name: "Clear failure filter" }).click();
-  await expect(page.getByRole("navigation", { name: "Session pages" })).toContainText(
-    "48 sessions",
+  await expect(page.getByRole("status").filter({ hasText: "sessions" })).toContainText(
+    "48 of 48 sessions",
   );
   await page.getByRole("button", { name: "Filters (1)", exact: true }).click();
   await page.getByRole("combobox", { name: "Used model" }).click();
   await page.getByRole("option", { name: "Claude Opus 5", exact: true }).click();
   await page.getByRole("button", { name: "Close filters" }).click();
-  await expect(page.getByRole("navigation", { name: "Session pages" })).toContainText(
-    "16 sessions",
+  await expect(page.getByRole("status").filter({ hasText: "sessions" })).toContainText(
+    "16 of 16 sessions",
   );
 });
 
@@ -62,7 +62,7 @@ test("command search opens every match in Sessions", async ({ page }) => {
   await expect(
     page.getByRole("textbox", { name: "Search sessions, projects, or models…" }),
   ).toHaveValue("Shared discovery");
-  await expect(page.getByRole("navigation", { name: "Session pages" })).toContainText(
-    "1–50 of 75 sessions",
+  await expect(page.getByRole("status").filter({ hasText: "sessions" })).toContainText(
+    "50 of 75 sessions",
   );
 });

@@ -207,6 +207,7 @@ export function ModelUsage({
         <div ref={tableRoot}>
           <DataTable
             label="Model usage"
+            active={!detail}
             data={rows}
             sorting={{
               id: controls.ranking ?? "",
