@@ -49,7 +49,7 @@ export function ModelUsage({
   const restoreKey = useRef("");
   const allGroups = useMemo(() => usageGroups(lifetime.models, "model"), [lifetime.models]);
   const groups = useMemo(() => usageGroups(stats.models, "model"), [stats.models]);
-  const selected = allGroups.find((group) => group.key === modelKey);
+  const detail = allGroups.find((group) => group.key === modelKey);
   const setSelected = (group: UsageGroup | undefined) =>
     onRoute({ modelKey: group?.key, reading: undefined });
   const rows = useMemo(() => {
@@ -81,9 +81,6 @@ export function ModelUsage({
       return comparison * (controls.rankingDescending ? -1 : 1) || a.key.localeCompare(b.key);
     });
   }, [groups, search, controls.ranking, controls.rankingDescending]);
-  const detail = selected
-    ? (allGroups.find((group) => group.key === selected.key) ?? selected)
-    : undefined;
   const openModel = (group: UsageGroup) => {
     listPosition.current = scrollRef.current?.scrollTop ?? 0;
     setControls((previous) => ({ ...previous, provider: "all", agent: "all", offset: 0 }));
@@ -91,7 +88,7 @@ export function ModelUsage({
     scrollRef.current?.scrollTo({ top: 0 });
   };
   useLayoutEffect(() => {
-    if (selected || !restore.current) return;
+    if (detail || !restore.current) return;
     const root = tableRoot.current;
     if (!root) return;
     if (!rows.some((row) => row.key === restoreKey.current)) {
@@ -109,7 +106,7 @@ export function ModelUsage({
       restore.current = false;
       return true;
     });
-  }, [selected, scrollRef, rows]);
+  }, [detail, scrollRef, rows]);
   const columns: DataColumn<UsageGroup>[] = [
     {
       id: "model",

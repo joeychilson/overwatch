@@ -135,7 +135,8 @@ export default function Models({
       ),
     [models],
   );
-  const saved = new Set(preferences.savedModels);
+  const saved = useMemo(() => new Set(preferences.savedModels), [preferences.savedModels]);
+  const byKey = useMemo(() => new Map(models.map((model) => [model.key, model])), [models]);
   const filtered = useMemo(
     () =>
       models
@@ -143,20 +144,17 @@ export default function Models({
           (model) =>
             (provider === "all" || model.provider === provider) &&
             (capability === "all" || model[capability]) &&
-            (view === "all" ||
-              (view === "saved"
-                ? preferences.savedModels.includes(model.key)
-                : used.has(model.key))) &&
+            (view === "all" || (view === "saved" ? saved.has(model.key) : used.has(model.key))) &&
             `${model.name} ${model.id} ${model.providerName} ${model.family}`
               .toLowerCase()
               .includes(deferred),
         )
         .sort((a, b) => b.releaseDate.localeCompare(a.releaseDate) || a.name.localeCompare(b.name)),
-    [models, provider, capability, view, preferences.savedModels, used, deferred],
+    [models, provider, capability, view, saved, used, deferred],
   );
-  const detail = models.find((model) => model.key === selected);
+  const detail = selected ? byKey.get(selected) : undefined;
   const comparison = compare.flatMap((key) => {
-    const model = models.find((model) => model.key === key);
+    const model = byKey.get(key);
     return model ? [model] : [];
   });
   function toggleSaved(key: string) {
