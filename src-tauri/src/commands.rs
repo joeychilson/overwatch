@@ -3,6 +3,10 @@ use crate::{
     data::*,
     error::{AppError, Result},
     index::Index,
+    queries::{
+        self, HistoryScope, HistoryStatus, SessionNavigation, SessionPage, SessionQuery,
+        UsageReport,
+    },
     quota::{self, Quotas},
     settings,
 };
@@ -18,6 +22,69 @@ async fn blocking<T: Send + 'static>(
     tauri::async_runtime::spawn_blocking(work)
         .await
         .map_err(|_| AppError::Internal("A native task was interrupted.".into()))?
+}
+#[tauri::command]
+#[specta::specta]
+pub async fn get_history_status(index: State<'_, Arc<Index>>) -> Result<HistoryStatus> {
+    let index = Arc::clone(&index);
+    blocking(move || index.history_status()).await
+}
+#[tauri::command]
+#[specta::specta]
+pub async fn get_sessions(
+    index: State<'_, Arc<Index>>,
+    query: SessionQuery,
+) -> Result<SessionPage> {
+    let index = Arc::clone(&index);
+    blocking(move || queries::sessions(&index, &query)).await
+}
+#[tauri::command]
+#[specta::specta]
+pub async fn get_session_navigation(
+    index: State<'_, Arc<Index>>,
+    query: SessionQuery,
+    id: String,
+) -> Result<SessionNavigation> {
+    let index = Arc::clone(&index);
+    blocking(move || queries::navigation(&index, &query, &id)).await
+}
+#[tauri::command]
+#[specta::specta]
+pub async fn get_usage(index: State<'_, Arc<Index>>, scope: HistoryScope) -> Result<UsageReport> {
+    let index = Arc::clone(&index);
+    blocking(move || queries::usage(&index, &scope)).await
+}
+#[tauri::command]
+#[specta::specta]
+pub async fn get_tool_stats(
+    index: State<'_, Arc<Index>>,
+    scope: HistoryScope,
+) -> Result<Vec<ToolStats>> {
+    let index = Arc::clone(&index);
+    blocking(move || queries::tools(&index, &scope)).await
+}
+#[tauri::command]
+#[specta::specta]
+pub async fn get_log_allowances(index: State<'_, Arc<Index>>) -> Result<Vec<QuotaSample>> {
+    let index = Arc::clone(&index);
+    blocking(move || queries::allowances(&index)).await
+}
+#[tauri::command]
+#[specta::specta]
+pub async fn refresh_history(
+    index: State<'_, Arc<Index>>,
+    app: AppHandle,
+) -> Result<HistoryStatus> {
+    let index = Arc::clone(&index);
+    let status = blocking(move || {
+        index.scan()?;
+        index.history_status()
+    })
+    .await?;
+    IndexChanged
+        .emit(&app)
+        .map_err(|error| AppError::Internal(error.to_string()))?;
+    Ok(status)
 }
 #[tauri::command]
 #[specta::specta]
@@ -229,6 +296,23 @@ pub async fn export_file(app: AppHandle, filename: String, content: String) -> R
 }
 #[tauri::command]
 #[specta::specta]
+pub async fn export_sessions(
+    index: State<'_, Arc<Index>>,
+    app: AppHandle,
+    query: SessionQuery,
+) -> Result<bool> {
+    let index = Arc::clone(&index);
+    blocking(move || {
+        save_file(
+            &app,
+            "overwatch-sessions.csv",
+            &queries::export_sessions(&index, &query)?,
+        )
+    })
+    .await
+}
+#[tauri::command]
+#[specta::specta]
 pub async fn export_session(
     index: State<'_, Arc<Index>>,
     app: AppHandle,
@@ -241,6 +325,13 @@ pub async fn export_session(
 pub fn bindings() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::new()
         .commands(tauri_specta::collect_commands![
+            get_history_status,
+            get_sessions,
+            get_session_navigation,
+            get_usage,
+            get_tool_stats,
+            get_log_allowances,
+            refresh_history,
             get_snapshot,
             refresh_index,
             get_transcript,
@@ -257,6 +348,7 @@ pub fn bindings() -> tauri_specta::Builder<tauri::Wry> {
             refresh_account,
             save_token,
             export_file,
+            export_sessions,
             export_session
         ])
         .events(tauri_specta::collect_events![IndexChanged, AccountsChanged])

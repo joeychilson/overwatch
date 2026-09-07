@@ -41,7 +41,7 @@ pub async fn read(index: &Index, request: CatalogRequest) -> Result<CatalogPaylo
     Ok(stored(index, compact))
 }
 
-fn stored(index: &Index, compact: bool) -> CatalogPayload {
+pub(crate) fn stored(index: &Index, compact: bool) -> CatalogPayload {
     let result = (|| -> Result<Option<CatalogPayload>> {
         let key = if compact {
             "catalog/pricing"

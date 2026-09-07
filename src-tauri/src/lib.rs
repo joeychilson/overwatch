@@ -7,6 +7,7 @@ pub mod history;
 pub mod index;
 mod opencode;
 mod parse;
+pub mod queries;
 mod quota;
 mod settings;
 mod sources;

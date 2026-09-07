@@ -5,6 +5,13 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 
 /** Commands */
 export const commands = {
+	getHistoryStatus: () => typedError<HistoryStatus, AppError>(__TAURI_INVOKE("get_history_status")),
+	getSessions: (query: SessionQuery) => typedError<SessionPage, AppError>(__TAURI_INVOKE("get_sessions", { query })),
+	getSessionNavigation: (query: SessionQuery, id: string) => typedError<SessionNavigation, AppError>(__TAURI_INVOKE("get_session_navigation", { query, id })),
+	getUsage: (scope: HistoryScope) => typedError<UsageReport, AppError>(__TAURI_INVOKE("get_usage", { scope })),
+	getToolStats: (scope: HistoryScope) => typedError<ToolStats[], AppError>(__TAURI_INVOKE("get_tool_stats", { scope })),
+	getLogAllowances: () => typedError<QuotaSample[], AppError>(__TAURI_INVOKE("get_log_allowances")),
+	refreshHistory: () => typedError<HistoryStatus, AppError>(__TAURI_INVOKE("refresh_history")),
 	getSnapshot: () => typedError<Snapshot, AppError>(__TAURI_INVOKE("get_snapshot")),
 	refreshIndex: () => typedError<Snapshot, AppError>(__TAURI_INVOKE("refresh_index")),
 	getTranscript: (id: string) => typedError<Transcript, AppError>(__TAURI_INVOKE("get_transcript", { id })),
@@ -21,6 +28,7 @@ export const commands = {
 	refreshAccount: (agent: Agent) => typedError<AccountStatus, AppError>(__TAURI_INVOKE("refresh_account", { agent })),
 	saveToken: (agent: Agent, token: string | null) => typedError<null, AppError>(__TAURI_INVOKE("save_token", { agent, token })),
 	exportFile: (filename: string, content: string) => typedError<boolean, AppError>(__TAURI_INVOKE("export_file", { filename, content })),
+	exportSessions: (query: SessionQuery) => typedError<boolean, AppError>(__TAURI_INVOKE("export_sessions", { query })),
 	exportSession: (id: string) => typedError<boolean, AppError>(__TAURI_INVOKE("export_session", { id })),
 };
 
@@ -79,6 +87,11 @@ export type CatalogRequest = "stored" | "refresh" | "bundled" | "compact" | "com
 
 export type CatalogSource = "bundled" | "cached" | "network";
 
+export type ChartModel = {
+	tokens: number,
+	cost: number | null,
+};
+
 export type EventKind = "user" | "assistant" | "thinking" | "tool" | "compaction";
 
 export type EventPage = {
@@ -88,12 +101,43 @@ export type EventPage = {
 	matches: number[],
 };
 
+export type HistoryScope = {
+	agent: Agent | null,
+	project: string | null,
+	start: number | null,
+	end: number | null,
+	offerings: string[],
+};
+
+export type HistoryStatus = {
+	sources: SourceStatus[],
+	projects: ([string, string])[],
+	sessionCount: number,
+	scanning: boolean,
+	longestSession: number | null,
+	offerings: string[],
+};
+
 export type IndexChanged = null;
 
 export type Preferences = {
 	theme: Theme,
 	savedModels: string[],
 	sidebarCollapsed: boolean,
+};
+
+export type QueryTotals = {
+	tokens: Tokens,
+	total: number,
+	calls: number,
+	cost: number | null,
+	recordedCost: number | null,
+	estimatedCost: number | null,
+	pricedCalls: number,
+	unpricedCalls: number,
+	unpriced: number,
+	undatedCalls: number,
+	undatedTokens: number,
 };
 
 export type QuotaSample = {
@@ -140,6 +184,40 @@ export type SessionEvent = {
 	durationMs: number | null,
 	failed: boolean | null,
 };
+
+export type SessionNavigation = {
+	previous: string | null,
+	next: string | null,
+	position: number | null,
+	total: number,
+};
+
+export type SessionPage = {
+	sessions: Session[],
+	usage: { [key in string]: UsageSummary },
+	total: number,
+	offset: number,
+	limit: number,
+};
+
+export type SessionQuery = {
+	scope: HistoryScope,
+	search: string,
+	searchModels: string[],
+	activityAfter: number | null,
+	activityBefore: number | null,
+	day: string | null,
+	tool: string | null,
+	model: string | null,
+	failedOnly: boolean,
+	usageOnly: boolean,
+	offset: number,
+	limit: number,
+	sort: SessionSort,
+	descending: boolean,
+};
+
+export type SessionSort = "title" | "project" | "tokens" | "duration" | "responses" | "updatedAt";
 
 export type Snapshot = {
 	sessions: Session[],
@@ -209,6 +287,37 @@ export type Usage = {
 	provider: string,
 	tokens: Tokens,
 	reportedCost: number | null,
+};
+
+export type UsageDay = {
+	day: string,
+	totals: QueryTotals,
+	agents: Partial<{ [key in Agent]: number }>,
+	agentCosts: Partial<{ [key in Agent]: number | null }>,
+	agentPricedCalls: Partial<{ [key in Agent]: number }>,
+	models: { [key in string]: ChartModel },
+};
+
+export type UsageModel = {
+	model: string,
+	provider: string,
+	totals: QueryTotals,
+};
+
+export type UsageReport = {
+	totals: QueryTotals,
+	days: UsageDay[],
+	models: UsageModel[],
+	sessionCount: number,
+	projectCount: number,
+	agentCount: number,
+	longestSession: number | null,
+};
+
+export type UsageSummary = {
+	tokens: Tokens,
+	calls: number,
+	models: string[],
 };
 
 /* Tauri Specta runtime */

@@ -287,6 +287,31 @@ impl Index {
             scanning: self.scanning.load(Ordering::Relaxed),
         })
     }
+    pub fn history_status(&self) -> Result<crate::queries::HistoryStatus> {
+        if let Some(error) = self.scan_error.lock()?.as_ref() {
+            return Err(error.clone());
+        }
+        let mut sources = self.sources.lock()?.clone();
+        let invalid = self.invalid_summaries.lock()?.clone();
+        if !invalid.is_empty() {
+            let db = self.db.lock()?;
+            for key in invalid {
+                let agent: Option<String> = db
+                    .query_row(
+                        "SELECT agent FROM sessions WHERE source=?1",
+                        [&key],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if let Some(source) = sources.iter_mut().find(|source| {
+                    source.source.enabled && Some(source.source.agent.id()) == agent.as_deref()
+                }) {
+                    source.issues.push(format!("An unreadable cached session is excluded from totals: {key}. Rescan sources to rebuild it from the original history."));
+                }
+            }
+        }
+        crate::queries::status(self, sources, self.scanning.load(Ordering::Relaxed))
+    }
     pub fn scan(&self) -> Result<bool> {
         let result = self.scan_files();
         let mut error = self.scan_error.lock()?;

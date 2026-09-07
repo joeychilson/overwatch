@@ -1,6 +1,7 @@
 use overwatch_lib::{
     data::{Agent, Source},
     index::Index,
+    queries::{self, HistoryScope, SessionQuery},
 };
 use serde_json::{Value, json};
 use std::{
@@ -184,6 +185,22 @@ fn run(
     let index = Index::open(cache, sources)?;
     let transcript = index.transcript(&id)?;
     let timeline_bytes = serde_json::to_vec(&transcript.timeline)?.len();
+    let session_page = queries::sessions(&index, &SessionQuery::default())?;
+    let usage_report = queries::usage(&index, &HistoryScope::default())?;
+    assert_eq!(session_page.total as usize, sessions);
+    assert_eq!(session_page.sessions.len(), sessions.min(50));
+    assert_eq!(usage_report.totals.calls as usize, usage_count);
+    assert_eq!(usage_report.totals.total, usage_count as u64 * 180);
+    let session_page_bytes = serde_json::to_vec(&session_page)?.len();
+    let usage_report_bytes = serde_json::to_vec(&usage_report)?.len();
+    let session_query = measure(|| {
+        black_box(queries::sessions(&index, &SessionQuery::default())?);
+        Ok(())
+    })?;
+    let usage_query = measure(|| {
+        black_box(queries::usage(&index, &HistoryScope::default())?);
+        Ok(())
+    })?;
     let mut searches = serde_json::Map::new();
     for (label, query, offset, expected) in [
         ("no_match", "not-present-in-fixture", 0, 0),
@@ -209,6 +226,8 @@ fn run(
         "name":name, "sessions":sessions, "historyFiles":sessions, "historyBytes":bytes,
         "usageRecords":usage_count, "readerEvents":reader_turns * 2,
         "snapshotBytes":serialized.len(), "timelineBytes":timeline_bytes,
+        "sessionPageBytes":session_page_bytes,"usageReportBytes":usage_report_bytes,
+        "sessionQuery":session_query,"usageQuery":usage_query,
         "coldIndexToSnapshot":distribution(cold), "cachedOpenToSnapshot":cached_startup,
         "idleScan":idle, "snapshotRead":snapshot_read, "snapshotSerialize":serialize,
         "uncachedReaderOpen":distribution(reader_open),
