@@ -114,6 +114,7 @@ export function useWorkspaceOwner(scrollRef: RefObject<HTMLDivElement | null>): 
       saveTimer.current = undefined;
       const next = readWorkspace(event.state.overwatch);
       current.current = next;
+      persist(next);
       restoring.current = true;
       setState(next);
       setRestore((value) => ({ revision: value.revision + 1, scroll: next.scroll }));

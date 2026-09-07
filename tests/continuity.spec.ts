@@ -143,3 +143,32 @@ test("model detail, ranking sort and search survive restart", async ({ page }) =
     "ascending",
   );
 });
+
+test("history navigation persists the restored workspace before another interaction", async ({
+  page,
+}) => {
+  await desktop(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Connections", exact: true }).click();
+  await page.getByRole("button", { name: "Subscriptions", exact: true }).click();
+  await page.evaluate(() => window.history.back());
+  await expect(page.getByRole("heading", { name: "Connections", exact: true })).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (key) => JSON.parse(localStorage.getItem(key) ?? "{}").route?.view,
+        workspaceKey,
+      ),
+    )
+    .toBe("connections");
+  await page.evaluate(() => window.history.forward());
+  await expect(page.getByRole("heading", { name: "Subscriptions", exact: true })).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (key) => JSON.parse(localStorage.getItem(key) ?? "{}").route?.view,
+        workspaceKey,
+      ),
+    )
+    .toBe("subscriptions");
+});
