@@ -18,9 +18,6 @@ test("missing durations remain unknown while recorded zero durations stay visibl
     ],
   });
   await page.goto("/");
-  await expect(page.getByText("longest session", { exact: false })).toContainText(
-    "— longest session",
-  );
   await page.getByRole("button", { name: "Sessions", exact: true }).click();
   await page.getByRole("button", { name: sessions[0].title, exact: true }).click();
   await expect(

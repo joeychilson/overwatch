@@ -17,10 +17,16 @@ test("usage charts switch grouping and metric, retain provider colors, and fit s
     await expect(page.locator('[aria-label="Usage breakdown"]')).toContainText("GPT-6 Astra");
     await page.getByRole("button", { name: "API equivalent", exact: true }).click();
     await expect(page.locator('[aria-label="Usage breakdown"]')).toContainText("$");
-    await expect(page.getByText(/Not your subscription bill/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "API equivalent", exact: true })).toHaveAttribute(
+      "title",
+      /not your subscription bill/,
+    );
     await page.getByRole("combobox", { name: "Date range" }).click();
     await page.getByRole("option", { name: "Last year", exact: true }).click();
-    await expect(page.getByText(/Weekly totals/)).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Date range" })).toContainText("Last year");
+    await expect(
+      page.getByLabel("Usage over time by model", { exact: true }).locator(".recharts-bar").first(),
+    ).toBeVisible();
     await page.getByRole("button", { name: "Tokens", exact: true }).first().click();
     await page.getByRole("combobox", { name: "Group usage by" }).click();
     await page.getByRole("option", { name: "By agent", exact: true }).click();

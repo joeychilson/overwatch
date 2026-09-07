@@ -36,7 +36,10 @@ test("primary workflows remain usable at 200 percent browser zoom", async ({ bro
     const page = await context.newPage();
     await desktop(page, { longNames: true });
     await page.goto(process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:1420");
-    await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
+    // This separate browser starts with a cold module cache; wait for the lazy overview.
+    await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible({
+      timeout: 15000,
+    });
     const before = await page.evaluate(() => ({ width: innerWidth, ratio: devicePixelRatio }));
     const zoom = await worker.evaluate(async () => {
       // Chrome's native browser zoom, not CSS zoom or pinch emulation.

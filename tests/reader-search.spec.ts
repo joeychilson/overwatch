@@ -17,6 +17,9 @@ const events: SessionEvent[] = Array.from({ length: 245 }, (_, index) => ({
 test("match navigation crosses event pages and preserves keyboard focus and Markdown", async ({
   page,
 }) => {
+  // More than 100 real keypresses, including page loads and Markdown rendering,
+  // can exceed 30 seconds in WebKit on shared CI runners.
+  test.slow();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await desktop(page, { events });
