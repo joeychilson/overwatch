@@ -4,32 +4,13 @@ use crate::{
     error::{AppError, Result},
     index::Index,
     quota::{self, Quotas},
+    settings,
 };
-use serde::Serialize;
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
-use tauri_plugin_store::StoreExt;
 use tauri_specta::Event;
-
-fn store_json(app: &AppHandle, key: &str, value: impl Serialize) -> Result<()> {
-    let store = app
-        .store("settings.json")
-        .map_err(|e| AppError::Io(e.to_string()))?;
-    let previous = store.get(key);
-    store.set(key, serde_json::to_value(&value)?);
-    if let Err(error) = store.save() {
-        match previous {
-            Some(previous) => store.set(key, previous),
-            None => {
-                store.delete(key);
-            }
-        }
-        return Err(AppError::Io(error.to_string()));
-    }
-    Ok(())
-}
 
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T> + Send + 'static,
@@ -97,58 +78,45 @@ pub async fn save_sources(
     index: State<'_, Arc<Index>>,
     app: AppHandle,
     sources: Vec<Source>,
-) -> Result<Snapshot> {
+) -> Result<()> {
     let index = Arc::clone(&index);
-    let notify = app.clone();
-    let snapshot = blocking(move || {
-        crate::index::validate_sources(&sources)?;
-        let previous = index.sources()?;
+    blocking(move || {
         index.set_sources(sources)?;
-        let apply = (|| {
-            index.scan()?;
-            let snapshot = index.snapshot()?;
-            store_json(&app, "sources", &index.sources()?)?;
-            Ok(snapshot)
-        })();
-        match apply {
-            Ok(snapshot) => Ok(snapshot),
-            Err(error) => {
-                if let Err(rollback) = index.set_sources(previous).and_then(|()| index.scan()) {
-                    return Err(AppError::Internal(format!(
-                        "Source update failed: {error}. Restoring the previous sources also failed: {rollback}"
-                    )));
-                }
-                Err(error)
-            }
+        // Saving is atomic. A later scan failure is exposed by get_snapshot,
+        // not reported as a failed settings change after it has committed.
+        if let Err(error) = index.scan() {
+            eprintln!("Index scan failed after saving sources: {error}");
         }
+        Ok(())
     })
     .await?;
-    if let Err(error) = IndexChanged.emit(&notify) {
+    if let Err(error) = IndexChanged.emit(&app) {
         eprintln!("Index notification failed after saving sources: {error}");
     }
-    if let Err(error) = AccountsChanged.emit(&notify) {
+    if let Err(error) = AccountsChanged.emit(&app) {
         eprintln!("Account notification failed after saving sources: {error}");
     }
-    Ok(snapshot)
+    Ok(())
 }
 #[tauri::command]
 #[specta::specta]
-pub fn get_preferences(app: AppHandle) -> Result<Preferences> {
-    let store = app
-        .store("settings.json")
-        .map_err(|e| AppError::Io(e.to_string()))?;
-    store
-        .get("preferences")
-        .map(serde_json::from_value)
-        .transpose()
-        .map(|value| value.unwrap_or_default())
-        .map_err(Into::into)
+pub async fn get_preferences(index: State<'_, Arc<Index>>) -> Result<Preferences> {
+    let index = Arc::clone(&index);
+    blocking(move || Ok(settings::read(&*index.db.lock()?, "preferences")?.unwrap_or_default()))
+        .await
 }
 #[tauri::command]
 #[specta::specta]
-pub fn save_preferences(app: AppHandle, preferences: Preferences) -> Result<Preferences> {
-    store_json(&app, "preferences", &preferences)?;
-    Ok(preferences)
+pub async fn save_preferences(
+    index: State<'_, Arc<Index>>,
+    preferences: Preferences,
+) -> Result<Preferences> {
+    let index = Arc::clone(&index);
+    blocking(move || {
+        settings::write(&*index.db.lock()?, "preferences", &preferences)?;
+        Ok(preferences)
+    })
+    .await
 }
 #[tauri::command]
 #[specta::specta]

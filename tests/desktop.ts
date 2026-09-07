@@ -468,7 +468,7 @@ export async function desktop(
           invoke: async (command: string, args: Record<string, unknown> = {}) => {
             switch (command) {
               case "get_snapshot":
-                return state.snapshot;
+                return structuredClone(state.snapshot);
               case "refresh_index":
                 if (options.failRefresh) throw { kind: "io", message: "Fixture disk read failed" };
                 if (options.cachedSummaryIssue) state.snapshot.sources[0].issues = [];
@@ -557,7 +557,7 @@ export async function desktop(
                       (source) => source.agent === status.source.agent,
                     ) ?? status.source,
                 }));
-                return state.snapshot;
+                return null;
               case "save_catalog":
                 return null;
               case "save_token":

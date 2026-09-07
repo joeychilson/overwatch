@@ -7,10 +7,10 @@ pub mod index;
 mod opencode;
 mod parse;
 mod quota;
+mod settings;
 
 use std::sync::Arc;
 use tauri::Manager;
-use tauri_plugin_store::StoreExt;
 use tauri_specta::Event;
 
 pub fn export_bindings() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -41,19 +41,16 @@ fn run_app() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 eprintln!("Could not focus Overwatch: {error}");
             }
         }))
-        .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .invoke_handler(bindings.invoke_handler())
         .setup(move |app| {
             bindings.mount_events(app);
-            let settings = app.store("settings.json")?;
-            let sources = match settings.get("sources") {
-                Some(value) => serde_json::from_value(value)?,
-                None => index::default_sources()?,
-            };
-            let index = Arc::new(index::Index::open(app.path().app_data_dir()?, sources)?);
+            let index = Arc::new(index::Index::open(
+                app.path().app_data_dir()?,
+                index::default_sources()?,
+            )?);
             let quotas = Arc::new(quota::Quotas::new()?);
             app.manage(Arc::clone(&index));
             app.manage(Arc::clone(&quotas));

@@ -29,8 +29,9 @@ Overwatch reads original histories without modifying them. In Connections, revie
 the detected source folders and disable any you do not want indexed. Antigravity
 supports subscription allowances only; Pi supports session history only.
 
-On macOS, settings, the SQLite index, allowance history, and cached pricing live in
-`~/Library/Application Support/com.joeychilson.overwatch/`. The index includes
+On macOS, the SQLite database stores settings, session summaries, and allowance history in
+`~/Library/Application Support/com.joeychilson.overwatch/history.sqlite`; cached pricing
+lives beside it. Existing `settings.json` preferences are imported once. The index includes
 session titles, project paths, and usage summaries. Transcripts are read from the
 original histories on demand. JSON exports contain normalized transcript events;
 individual text and tool-output fields are limited to 60 KB, as in the reader.

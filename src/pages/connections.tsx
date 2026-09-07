@@ -132,10 +132,11 @@ export default function Connections({
           sources.map((status) => (status.source.agent === source.agent ? source : status.source)),
         ),
       ),
-    onSuccess: async (snapshot) => {
-      client.setQueryData(snapshotOptions.queryKey, snapshot);
-      await client.invalidateQueries(accountOptions);
-    },
+    onSuccess: () =>
+      Promise.all([
+        client.invalidateQueries(snapshotOptions),
+        client.invalidateQueries(accountOptions),
+      ]),
   });
   const refresh = useMutation({
     mutationFn: () => native(commands.refreshIndex()),

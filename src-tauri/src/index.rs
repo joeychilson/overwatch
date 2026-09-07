@@ -3,6 +3,7 @@ use crate::{
     error::{AppError, Result},
     opencode,
     parse::{Accumulator, Cursor},
+    settings,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{
@@ -122,12 +123,13 @@ impl Index {
     pub fn open(directory: PathBuf, sources: Vec<Source>) -> Result<Self> {
         validate_sources(&sources)?;
         std::fs::create_dir_all(&directory)?;
-        let db = Connection::open(directory.join("history.sqlite"))?;
+        let mut db = Connection::open(directory.join("history.sqlite"))?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=3000;
             CREATE TABLE IF NOT EXISTS sessions(source TEXT PRIMARY KEY, agent TEXT NOT NULL, id TEXT NOT NULL, stamp TEXT NOT NULL, updated INTEGER NOT NULL, data TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS session_id ON sessions(id,updated DESC);
             CREATE TABLE IF NOT EXISTS accounts(agent TEXT PRIMARY KEY,root TEXT NOT NULL,data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS samples(agent TEXT NOT NULL,identity TEXT NOT NULL,bucket TEXT NOT NULL,reset INTEGER NOT NULL,minute INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(agent,identity,bucket,reset,minute));")?;
+        let sources = settings::initialize(&mut db, &directory, sources)?;
         Ok(Self {
             directory,
             db: Mutex::new(db),
@@ -163,6 +165,7 @@ impl Index {
         let mut statuses = self.sources.lock()?;
         let mut db = self.db.lock()?;
         let tx = db.transaction()?;
+        settings::write(&tx, "sources", &sources)?;
         for source in &sources {
             if statuses
                 .iter()
