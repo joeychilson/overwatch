@@ -4,7 +4,7 @@ use crate::{
     error::{AppError, Result},
     index::Index,
     queries::{
-        self, HistoryScope, HistoryStatus, SessionNavigation, SessionPage, SessionQuery,
+        self, HistoryScope, HistoryStatus, SessionNavigation, SessionPage, SessionQuery, ToolUsage,
         UsageReport,
     },
     quota::{self, Quotas},
@@ -59,7 +59,7 @@ pub async fn get_usage(index: State<'_, Arc<Index>>, scope: HistoryScope) -> Res
 pub async fn get_tool_stats(
     index: State<'_, Arc<Index>>,
     scope: HistoryScope,
-) -> Result<Vec<ToolStats>> {
+) -> Result<Vec<ToolUsage>> {
     let index = Arc::clone(&index);
     blocking(move || queries::tools(&index, &scope)).await
 }

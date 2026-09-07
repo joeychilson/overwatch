@@ -1,5 +1,6 @@
 import { addDays, differenceInCalendarDays, startOfDay, subDays } from "date-fns";
-import type { Agent, Session, Tokens, ToolStats } from "../bindings";
+import { agentIds } from "../agents";
+import type { Agent, Session, Tokens, ToolUsage } from "../bindings";
 import type { Model } from "../models/catalog";
 import { modelIdentityLookup, type ModelIdentity } from "../models/identity";
 import { day, hasTimestamp } from "../format";
@@ -135,8 +136,8 @@ export function aggregate(sessions: Session[], models: Model[], start = 0, end =
   };
 }
 
-export function toolStats(sessions: Session[]): ToolStats[] {
-  const totals = new Map<string, ToolStats>();
+export function toolStats(sessions: Session[]): ToolUsage[] {
+  const totals = new Map<string, ToolUsage>();
   for (const session of sessions)
     for (const tool of session.tools) {
       const row = totals.get(tool.name) ?? {
@@ -146,7 +147,9 @@ export function toolStats(sessions: Session[]): ToolStats[] {
         completed: 0,
         timed: 0,
         durationMs: 0,
+        agents: [],
       };
+      if (!row.agents.includes(session.agent)) row.agents.push(session.agent);
       row.calls += tool.calls;
       row.failures += tool.failures;
       row.completed += tool.completed;
@@ -154,7 +157,9 @@ export function toolStats(sessions: Session[]): ToolStats[] {
       row.durationMs += tool.durationMs;
       totals.set(tool.name, row);
     }
-  return [...totals.values()].sort((a, b) => b.calls - a.calls);
+  return [...totals.values()]
+    .map((row) => ({ ...row, agents: agentIds.filter((agent) => row.agents.includes(agent)) }))
+    .sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name));
 }
 
 export function activity(days: Map<string, DailyUsage>, now = new Date()) {

@@ -9,7 +9,7 @@ export const commands = {
 	getSessions: (query: SessionQuery) => typedError<SessionPage, AppError>(__TAURI_INVOKE("get_sessions", { query })),
 	getSessionNavigation: (query: SessionQuery, id: string) => typedError<SessionNavigation, AppError>(__TAURI_INVOKE("get_session_navigation", { query, id })),
 	getUsage: (scope: HistoryScope) => typedError<UsageReport, AppError>(__TAURI_INVOKE("get_usage", { scope })),
-	getToolStats: (scope: HistoryScope) => typedError<ToolStats[], AppError>(__TAURI_INVOKE("get_tool_stats", { scope })),
+	getToolStats: (scope: HistoryScope) => typedError<ToolUsage[], AppError>(__TAURI_INVOKE("get_tool_stats", { scope })),
 	getLogAllowances: () => typedError<QuotaSample[], AppError>(__TAURI_INVOKE("get_log_allowances")),
 	refreshHistory: () => typedError<HistoryStatus, AppError>(__TAURI_INVOKE("refresh_history")),
 	getTranscript: (id: string) => typedError<Transcript, AppError>(__TAURI_INVOKE("get_transcript", { id })),
@@ -281,6 +281,10 @@ export type ToolStats = {
 	timed: number,
 	durationMs: number,
 };
+
+export type ToolUsage = {
+	agents: Agent[],
+} & ToolStats;
 
 export type Transcript = {
 	session: Session,

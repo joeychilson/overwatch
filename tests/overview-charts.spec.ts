@@ -150,3 +150,26 @@ test("session exports leave unknown dates and elapsed time blank", async ({ page
   expect(JSON.parse(exported!).content).not.toContain("1970-01-01");
   expect(JSON.parse(exported!).content).toContain('"","",""');
 });
+
+test("tool rankings show contributing agents and follow the agent filter", async ({ page }) => {
+  await desktop(page);
+  await page.goto("/");
+  const tools = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "Most used tools", exact: true }),
+  });
+  const exec = tools.getByRole("button", { name: "Find exec_command in sessions", exact: true });
+  await expect(exec).toContainText("Codex · Claude Code · OpenCode");
+  await expect(exec).not.toContainText("Antigravity");
+  await expect(exec).toHaveAccessibleDescription(/552 Codex · Claude Code · OpenCode/);
+  await page.evaluate(() => document.documentElement.classList.add("dark"));
+  await tools
+    .locator("..")
+    .screenshot({ path: `test-results/charts-with-agents-${test.info().project.name}.png` });
+  await page.getByRole("combobox", { name: "Agent scope" }).click();
+  await page.getByRole("option", { name: "Codex", exact: true }).click();
+  await expect(exec).toContainText("Codex");
+  await expect(exec).not.toContainText("Claude Code");
+  await expect(exec).not.toContainText("OpenCode");
+  await exec.click();
+  await expect(page.getByRole("heading", { name: "Sessions", exact: true })).toBeVisible();
+});

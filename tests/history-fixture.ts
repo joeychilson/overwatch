@@ -4,7 +4,7 @@ import type {
   SessionQuery,
   Session,
   UsageReport,
-  ToolStats,
+  ToolUsage,
 } from "../src/lib/bindings";
 import { aggregate, emptyTokens, toolStats, totalTokens } from "../src/lib/usage/analytics";
 import { parseCatalog } from "../src/lib/models/catalog";
@@ -111,7 +111,7 @@ export function historyFixture(
           (scope.start == null || session.updatedAt >= scope.start) &&
           (scope.end == null || session.updatedAt < scope.end),
       ),
-    ) satisfies ToolStats[];
+    ) satisfies ToolUsage[];
   if (command === "get_log_allowances") return sessions.flatMap((session) => session.limits);
   const query = args.query as SessionQuery;
   const lower = query.search.toLowerCase();

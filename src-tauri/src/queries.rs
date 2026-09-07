@@ -102,6 +102,14 @@ pub struct HistoryStatus {
     pub offerings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolUsage {
+    #[serde(flatten)]
+    pub stats: ToolStats,
+    pub agents: Vec<Agent>,
+}
+
 // Canonical sessions are chosen among enabled sources BEFORE any user filters.
 // Tie-breaking by source makes pagination stable even when copies have equal dates.
 const CANONICAL:&str = "WITH enabled AS (SELECT value AS agent FROM json_each(?1)), canonical AS MATERIALIZED (
@@ -566,25 +574,35 @@ pub fn usage(index: &Index, scope: &HistoryScope) -> Result<UsageReport> {
         .sort_by_key(|m| std::cmp::Reverse(m.totals.total));
     Ok(report)
 }
-pub fn tools(index: &Index, scope: &HistoryScope) -> Result<Vec<ToolStats>> {
+pub fn tools(index: &Index, scope: &HistoryScope) -> Result<Vec<ToolUsage>> {
     let agents = enabled(index)?;
     let db = index.db.lock()?;
     let raw = serde_json::to_string(scope)?;
-    let mut statement=db.prepare(&format!("{CANONICAL} SELECT t.name,SUM(t.calls),SUM(t.failures),SUM(t.completed),SUM(t.timed),SUM(t.duration) FROM history_tools t JOIN canonical r ON r.source=t.source WHERE {SCOPE}
+    let mut statement=db.prepare(&format!("{CANONICAL} SELECT t.name,SUM(t.calls),SUM(t.failures),SUM(t.completed),SUM(t.timed),SUM(t.duration),json_group_array(DISTINCT r.agent) FROM history_tools t JOIN canonical r ON r.source=t.source WHERE {SCOPE}
       AND (json_extract(?2,'$.start') IS NULL OR r.updated>=json_extract(?2,'$.start'))
       AND (json_extract(?2,'$.end') IS NULL OR r.updated<json_extract(?2,'$.end')) GROUP BY t.name ORDER BY SUM(t.calls) DESC,t.name"))?;
-    Ok(statement
+    let rows = statement
         .query_map(params![agents, raw], |row| {
-            Ok(ToolStats {
-                name: row.get(0)?,
-                calls: row.get(1)?,
-                failures: row.get(2)?,
-                completed: row.get(3)?,
-                timed: row.get(4)?,
-                duration_ms: unsigned(row, 5)?,
-            })
+            Ok((
+                ToolStats {
+                    name: row.get(0)?,
+                    calls: row.get(1)?,
+                    failures: row.get(2)?,
+                    completed: row.get(3)?,
+                    timed: row.get(4)?,
+                    duration_ms: unsigned(row, 5)?,
+                },
+                row.get::<_, String>(6)?,
+            ))
         })?
-        .collect::<std::result::Result<_, _>>()?)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    rows.into_iter()
+        .map(|(stats, raw)| {
+            let mut agents: Vec<Agent> = serde_json::from_str(&raw)?;
+            agents.sort();
+            Ok(ToolUsage { stats, agents })
+        })
+        .collect()
 }
 
 // Export under one database read lock so indexing cannot mix pages from different
@@ -968,6 +986,41 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn tool_agents_are_distinct_and_follow_the_same_scope_as_counts() -> Result<()> {
+        let (_root, index) = fixture()?;
+        for (id, agent, updated, cwd) in [
+            ("codex-one", Agent::Codex, 1000, "/project"),
+            ("codex-two", Agent::Codex, 1000, "/project"),
+            ("claude", Agent::Claude, 1000, "/project"),
+            ("old", Agent::Pi, 100, "/project"),
+            ("other", Agent::Opencode, 1000, "/other"),
+        ] {
+            let mut session = sample(id, updated);
+            session.agent = agent;
+            session.cwd = cwd.into();
+            session.tools.push(ToolStats {
+                name: "exec".into(),
+                calls: 2,
+                ..Default::default()
+            });
+            insert(&index, id, &session)?;
+        }
+        let mut scope = HistoryScope {
+            start: Some(500),
+            project: Some("/project".into()),
+            ..Default::default()
+        };
+        let rows = tools(&index, &scope)?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].stats.calls, 6);
+        assert_eq!(rows[0].agents, vec![Agent::Codex, Agent::Claude]);
+        scope.agent = Some(Agent::Claude);
+        let rows = tools(&index, &scope)?;
+        assert_eq!(rows[0].stats.calls, 2);
+        assert_eq!(rows[0].agents, vec![Agent::Claude]);
+        Ok(())
+    }
+    #[test]
     fn tool_and_activity_filters_do_not_reinterpret_usage_dates() -> Result<()> {
         let (_root, index) = fixture()?;
         let mut session = sample("tools", 2_000_000);
@@ -1021,7 +1074,10 @@ mod tests {
         };
         assert_eq!(usage(&index, &scope)?.totals.calls, 1);
         assert!(tools(&index, &scope)?.is_empty());
-        assert_eq!(tools(&index, &HistoryScope::default())?[0].failures, 1);
+        assert_eq!(
+            tools(&index, &HistoryScope::default())?[0].stats.failures,
+            1
+        );
         Ok(())
     }
 }

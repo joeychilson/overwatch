@@ -281,7 +281,7 @@ export default function Overview({
             </div>
             <ActivityHeatmap lifetime={lifetime} now={now} openDay={openDay} />
           </div>
-          <div className="mb-10 grid grid-cols-1 gap-10 lg:grid-cols-2 lg:gap-12">
+          <div className="mb-10 grid grid-cols-1 gap-10 lg:grid-cols-2 lg:gap-12 [&_section>div:first-child]:min-h-7">
             <Section
               title="Most used models"
               action={
@@ -300,27 +300,24 @@ export default function Overview({
                 title={(model) => `${model.label} · ${offeringProviderNames(model).join(", ")}`}
                 ariaLabel={(model) => `View ${model.label} usage`}
                 onSelect={(model) => openModel(model.key)}
-                label={(model) => (
-                  <>
-                    {model.label}
-                    <span className="ml-2 text-muted-foreground">
-                      {offeringProviderNames(model).join(", ")}
-                    </span>
-                  </>
-                )}
+                label={(model) => model.label}
+                description={(model) => offeringProviderNames(model).join(", ")}
               />
             </Section>
-            <Section title="Tool activity">
+            <Section title="Most used tools">
               <RankedList
                 items={tools.slice(0, 5)}
                 itemKey={(tool) => tool.name}
                 value={(tool) => tool.calls}
                 formatValue={(tool) => integer(tool.calls)}
-                title={(tool) => tool.name}
+                title={(tool) =>
+                  `${tool.name} · ${tool.agents.map((agent) => agents[agent].name).join(" · ")}`
+                }
                 ariaLabel={(tool) => `Find ${tool.name} in sessions`}
                 onSelect={(tool) => openTool(tool.name)}
-                labelClassName="truncate rounded text-left font-mono hover:text-primary hover:underline"
+                labelClassName="truncate text-left font-mono"
                 label={(tool) => tool.name}
+                description={(tool) => tool.agents.map((agent) => agents[agent].name).join(" · ")}
               />
             </Section>
           </div>
