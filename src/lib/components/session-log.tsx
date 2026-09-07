@@ -22,6 +22,7 @@ import {
 import { format } from "date-fns";
 import { toast } from "sonner";
 import type { EventPage, SessionEvent, TimelineEvent } from "@/lib/bindings";
+import { useScrollMargin } from "@/lib/hooks/use-scroll-margin";
 import { eventPageOptions } from "@/lib/queries";
 import { hasTimestamp, duration } from "@/lib/format";
 import { cn } from "cn";
@@ -54,7 +55,7 @@ export function SessionLog({
 }) {
   "use no memo";
   const container = useRef<HTMLDivElement>(null);
-  const [margin, setMargin] = useState<number | null>(null);
+  const margin = useScrollMargin(container, scrollRef);
   const [jump, setJump] = useState(() => ({
     ...initialPosition,
     index:
@@ -109,24 +110,6 @@ export function SessionLog({
   useImperativeHandle(ref, () => ({
     jumpTo: (index) => setJump({ index, focus: true }),
   }));
-  useLayoutEffect(() => {
-    const viewport = scrollRef.current;
-    const element = container.current;
-    if (!viewport || !element) return;
-    const measure = () =>
-      setMargin(
-        Math.round(
-          element.getBoundingClientRect().top -
-            viewport.getBoundingClientRect().top +
-            viewport.scrollTop,
-        ),
-      );
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(viewport);
-    if (viewport.firstElementChild) observer.observe(viewport.firstElementChild);
-    return () => observer.disconnect();
-  }, [scrollRef]);
   useLayoutEffect(() => {
     if (margin === null || !count || completedJump.current === jump) return;
     // Scrolling may synchronously notify the virtualizer. Run it after React's

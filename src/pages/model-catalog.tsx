@@ -3,7 +3,7 @@ import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-quer
 import { Brain, Check, Eye, GitCompareArrows, RefreshCw, Star, Wrench, X } from "lucide-react";
 import type { Session } from "@/lib/bindings";
 import { emptyModels, getCatalog, type Catalog, type Model } from "@/lib/models/catalog";
-import { aggregate, tokenCost } from "@/lib/usage/analytics";
+import { tokenCost } from "@/lib/usage/analytics";
 import { compact, integer, money } from "@/lib/format";
 import { catalogOptions } from "@/lib/queries";
 import { usePreferences } from "@/lib/hooks/use-preferences";
@@ -125,10 +125,12 @@ export default function Models({
   });
   const refreshing = useIsMutating({ mutationKey: ["catalog-refresh"] }) > 0;
   const models = catalog?.models ?? emptyModels;
-  const used = useMemo(
-    () => new Map(aggregate(sessions, models).models.map((model) => [model.key, model])),
-    [sessions, models],
-  );
+  const used = useMemo(() => {
+    const keys = new Set<string>();
+    for (const session of sessions)
+      for (const usage of session.usage) keys.add(`${usage.provider}/${usage.model}`);
+    return keys;
+  }, [sessions]);
   const providers = useMemo(
     () =>
       [...new Map(models.map((model) => [model.provider, model.providerName])).entries()].sort(

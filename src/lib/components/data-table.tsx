@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useRef, type ReactNode, type RefObject } from "react";
 import {
   createSortedRowModel,
   rowSortingFeature,
@@ -11,6 +11,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { cn } from "cn";
 import { Empty } from "./page";
+import { useScrollMargin } from "@/lib/hooks/use-scroll-margin";
 
 const features = tableFeatures({ rowSortingFeature, sortedRowModel: createSortedRowModel() });
 export type DataColumn<T extends RowData> = ColumnDef<typeof features, T> & {
@@ -48,29 +49,9 @@ export function DataTable<T extends RowData>({
   const localScroll = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const scroll = scrollRef ?? localScroll;
-  const [margin, setMargin] = useState(0);
+  const margin = useScrollMargin(root, scroll, page && data.length > 0) ?? 0;
   const table = useTable({ features, data, columns, getRowId: rowKey });
   const rows = table.getRowModel().rows;
-  useLayoutEffect(() => {
-    if (!page) return;
-    const viewport = scroll.current;
-    const element = root.current;
-    if (!viewport || !element) return;
-    const measure = () =>
-      setMargin(
-        Math.round(
-          element.getBoundingClientRect().top -
-            viewport.getBoundingClientRect().top +
-            viewport.scrollTop,
-        ),
-      );
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(viewport);
-    observer.observe(element);
-    if (viewport.firstElementChild) observer.observe(viewport.firstElementChild);
-    return () => observer.disconnect();
-  }, [page, scroll, data.length]);
   // Virtual owns a mutable viewport instance. Keep this component outside React Compiler.
   // oxlint-disable-next-line react/incompatible-library
   const virtual = useVirtualizer({

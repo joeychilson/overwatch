@@ -17,6 +17,7 @@ import { day, elapsed, hasTimestamp, integer } from "@/lib/format";
 import { exportCsv } from "@/lib/export";
 import { Button } from "@/lib/components/ui/button";
 import { FilterSelect, PageTitle, SearchField } from "@/lib/components/page";
+import { rowButton, whenPresent } from "@/lib/components/restore-focus";
 import { SessionTable } from "@/lib/components/session-table";
 import { SessionReader } from "@/lib/components/session-reader";
 import { ErrorBoundary } from "@/lib/components/error-boundary";
@@ -79,38 +80,20 @@ export default function Sessions({
   const next = position >= 0 ? ordered[position + 1] : undefined;
   useLayoutEffect(() => {
     if (selected || !restoring.current) return;
-    restoring.current = false;
+    const root = list.current;
+    if (!root) return;
     const saved = place.current;
-    let focusFrame = 0;
-    let restoreFrame = 0;
-    const table = list.current?.querySelector("table");
-    const restore = () => {
-      // A hidden virtual table first lays out its header, then measures and renders its rows.
-      if (table && !table.querySelector("tbody [data-row-id]")) return;
-      observer.disconnect();
+    return whenPresent(root, () => {
+      const table = root.querySelector("table");
+      if (table && !table.querySelector("tbody [data-row-id]")) return false;
       scrollRef.current?.scrollTo({ top: saved?.page ?? 0 });
-      focusFrame = requestAnimationFrame(() => {
-        const button = saved
-          ? list.current?.querySelector<HTMLButtonElement>(
-              `[data-row-id="${CSS.escape(saved.id)}"] button`,
-            )
-          : null;
-        button?.focus({ preventScroll: true });
-      });
-    };
-    // Restoring scroll can change virtual rows; do it after observer delivery.
-    const observer = new ResizeObserver(() => {
-      cancelAnimationFrame(restoreFrame);
-      restoreFrame = requestAnimationFrame(restore);
+      const button = saved ? rowButton(root, saved.id) : null;
+      if (saved && filtered.some((session) => session.id === saved.id) && !button) return false;
+      button?.focus({ preventScroll: true });
+      restoring.current = false;
+      return true;
     });
-    if (table) observer.observe(table);
-    restore();
-    return () => {
-      observer.disconnect();
-      cancelAnimationFrame(focusFrame);
-      cancelAnimationFrame(restoreFrame);
-    };
-  }, [selected, scrollRef]);
+  }, [selected, scrollRef, filtered]);
   const exportData = useMutation({
     mutationFn: () =>
       exportCsv("overwatch-sessions.csv", [
