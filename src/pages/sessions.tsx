@@ -13,7 +13,7 @@ import { native } from "@/lib/errors";
 import { SessionFilters } from "@/lib/components/session-filters";
 import { useModelName } from "@/lib/hooks/use-model-name";
 import { useSessionFeed } from "@/lib/hooks/use-session-feed";
-import { Skeleton } from "@/lib/components/ui/skeleton";
+import { TableSkeleton } from "@/lib/components/page-skeleton";
 import { Button } from "@/lib/components/ui/button";
 import { ErrorNotice, FilterSelect, PageTitle, SearchField } from "@/lib/components/page";
 import { rowButton, whenPresent } from "@/lib/components/restore-focus";
@@ -312,7 +312,7 @@ export default function Sessions({
           />
         )}
         {page.isPending ? (
-          <Skeleton className="h-96 w-full" />
+          <TableSkeleton />
         ) : (
           <>
             <SessionTable

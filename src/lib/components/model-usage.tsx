@@ -197,7 +197,7 @@ export function ModelUsage({
             </Button>
           }
         />
-        <div className="mb-4">
+        <div className="mb-5 flex flex-wrap gap-3">
           <SearchField
             value={search}
             onChange={setSearch}

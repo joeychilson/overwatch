@@ -8,7 +8,7 @@ import { useUsage, historyScope } from "@/lib/history";
 import type { HistoryScope } from "@/lib/bindings";
 import { ModelUsage } from "@/lib/components/model-usage";
 import { Button } from "@/lib/components/ui/button";
-import { Skeleton } from "@/lib/components/ui/skeleton";
+import { PageSkeleton } from "@/lib/components/page-skeleton";
 const PricingCatalog = lazy(() => import("./model-catalog"));
 
 export default function Models({
@@ -66,9 +66,13 @@ export default function Models({
             <ArrowLeft />
             Back to models
           </Button>
-          <Suspense fallback={<Skeleton className="h-96 w-full" />}>
-            <PricingCatalog catalog={details.data} offerings={offerings} scrollRef={scrollRef} />
-          </Suspense>
+          {details.isPending ? (
+            <PageSkeleton page="catalog" />
+          ) : (
+            <Suspense fallback={<PageSkeleton page="catalog" />}>
+              <PricingCatalog catalog={details.data} offerings={offerings} scrollRef={scrollRef} />
+            </Suspense>
+          )}
         </>
       )}
     </>

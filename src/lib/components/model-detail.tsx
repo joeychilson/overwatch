@@ -14,7 +14,7 @@ import { ErrorNotice, FilterSelect, Metric, Section } from "@/lib/components/pag
 import { ProviderMark } from "@/lib/components/provider-mark";
 import { SessionTable } from "@/lib/components/session-table";
 import { Button } from "@/lib/components/ui/button";
-import { Skeleton } from "@/lib/components/ui/skeleton";
+import { ReaderSkeleton, TableSkeleton } from "@/lib/components/page-skeleton";
 import { UsageOverTime } from "@/lib/components/usage-over-time";
 
 const SessionReader = lazy(() =>
@@ -208,7 +208,7 @@ export function ModelDetail({
             retained.
           </p>
           <div>
-            <Suspense fallback={<Skeleton className="h-64 w-full" />}>
+            <Suspense fallback={<ReaderSkeleton />}>
               <SessionReader key={reading} id={reading} scrollRef={scrollRef} />
             </Suspense>
           </div>
@@ -297,7 +297,7 @@ export function ModelDetail({
             />
           )}
           {page.isPending ? (
-            <Skeleton className="h-64 w-full" />
+            <TableSkeleton />
           ) : (
             <SessionTable
               query={query}

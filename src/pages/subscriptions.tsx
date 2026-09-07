@@ -18,7 +18,7 @@ import { money, relative } from "@/lib/format";
 import { cn } from "cn";
 import { Button } from "@/lib/components/ui/button";
 import { Input } from "@/lib/components/ui/input";
-import { Skeleton } from "@/lib/components/ui/skeleton";
+import { AllowancesSkeleton } from "@/lib/components/page-skeleton";
 import { ChartContainer, ChartHoverCard } from "@/lib/components/ui/chart";
 import { AgentMark } from "@/lib/components/agent-mark";
 import { Empty, ErrorNotice, Modal, PageTitle } from "@/lib/components/page";
@@ -123,7 +123,7 @@ export default function Subscriptions({ now }: { now: number }) {
               setHistoryBucket(null);
             }}
           >
-            <AgentMark agent={provider} className="size-5 bg-transparent" />
+            <AgentMark agent={provider} className="size-6 bg-transparent [&>img]:size-5" />
             {agents[provider].name}
           </Button>
         ))}
@@ -181,7 +181,7 @@ export default function Subscriptions({ now }: { now: number }) {
         </div>
       </div>
       {query.isPending && !windows.length ? (
-        <Skeleton className="h-52 rounded-xl" aria-label="Loading subscription usage" />
+        <AllowancesSkeleton />
       ) : !windows.length && !usage?.balances.length ? (
         <Empty
           title={usage ? "No allowance readings" : "Connect your subscription"}

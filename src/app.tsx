@@ -24,7 +24,7 @@ import { navigation, type View } from "@/lib/shell/navigation";
 import { cn } from "cn";
 import { AppHeader } from "@/lib/shell/header";
 import { AppSidebar } from "@/lib/shell/sidebar";
-import { Skeleton } from "@/lib/components/ui/skeleton";
+import { PageSkeleton, ReaderSkeleton } from "@/lib/components/page-skeleton";
 import { Empty, ErrorNotice, Modal } from "@/lib/components/page";
 import { CommandMenu } from "@/lib/components/command-menu";
 import { ErrorBoundary } from "@/lib/components/error-boundary";
@@ -160,6 +160,25 @@ export default function App() {
   const scoped = !["connections", "subscriptions"].includes(route.view) && !readingSession;
   const issues = snapshot.data?.sources.filter((source) => source.issues.length) ?? [];
   const nativeApp = isTauri();
+  const loading = readingSession ? (
+    <>
+      <div className="h-14" aria-hidden="true" />
+      <ReaderSkeleton />
+    </>
+  ) : (
+    <PageSkeleton
+      page={
+        route.view === "models"
+          ? route.pricing
+            ? "catalog"
+            : route.modelKey
+              ? "model-detail"
+              : "models"
+          : route.view
+      }
+      back={route.view === "models" && !!(route.pricing || route.modelKey)}
+    />
+  );
 
   return (
     <WorkspaceContext.Provider value={workspace}>
@@ -243,14 +262,10 @@ export default function App() {
                   <code className="font-mono">vp run tauri dev</code>.
                 </Empty>
               ) : snapshot.isPending ? (
-                <div className="space-y-6">
-                  <Skeleton className="h-10 w-48" />
-                  <Skeleton className="h-28 w-full" />
-                  <Skeleton className="h-72 w-full" />
-                </div>
+                loading
               ) : (
                 <ErrorBoundary key={route.view}>
-                  <Suspense fallback={<Skeleton className="h-96 w-full rounded-xl" />}>
+                  <Suspense fallback={loading}>
                     {route.view === "overview" && (
                       <Overview
                         scope={scope}

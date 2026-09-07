@@ -20,7 +20,7 @@ import { confirmExport } from "@/lib/export";
 import { useWorkspace } from "@/lib/shell/use-workspace";
 import { useModelName } from "@/lib/hooks/use-model-name";
 import { Button } from "./ui/button";
-import { Skeleton } from "./ui/skeleton";
+import { ReaderSkeleton, MessagesSkeleton } from "./page-skeleton";
 import { ErrorNotice, Metric, SearchField } from "./page";
 import { AgentMark } from "./agent-mark";
 import { Timeline } from "./timeline";
@@ -88,7 +88,7 @@ export function SessionReader({
     return transcript.error ? (
       <ErrorNotice error={transcript.error} retry={() => void transcript.refetch()} />
     ) : (
-      <Skeleton className="h-96 w-full rounded-xl" />
+      <ReaderSkeleton />
     );
   const { session, timeline } = transcript.data;
   function jumpTo(index: number) {
@@ -343,7 +343,7 @@ export function SessionReader({
           scrollRef={scrollRef}
         />
       ) : results.isPending ? (
-        <Skeleton className="h-52 w-full rounded-xl" />
+        <MessagesSkeleton />
       ) : null}
       <footer className="mt-8 flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2 pb-4 text-[11px] text-muted-foreground">
         <button
