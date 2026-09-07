@@ -50,6 +50,18 @@ export function useWorkspaceOwner(scrollRef: RefObject<HTMLDivElement | null>): 
   const current = useRef(state);
   const [restore, setRestore] = useState({ revision: 0, scroll: state.scroll });
   const restoring = useRef(state.scroll > 0);
+  const saveTimer = useRef<number | undefined>(undefined);
+  const flush = useCallback(() => {
+    window.clearTimeout(saveTimer.current);
+    saveTimer.current = undefined;
+    history.replaceState({ overwatch: current.current }, "");
+    persist(current.current);
+  }, []);
+  const scheduleSave = useCallback(() => {
+    // WebKit limits history writes. Share one bounded timer across scrolling,
+    // reader jumps and filter edits, while keeping the latest position in memory.
+    if (saveTimer.current === undefined) saveTimer.current = window.setTimeout(flush, 250);
+  }, [flush]);
   const change = useCallback<Change>(
     (update, push = false) => {
       const before = {
@@ -58,37 +70,42 @@ export function useWorkspaceOwner(scrollRef: RefObject<HTMLDivElement | null>): 
       };
       const after = update(before);
       if (push) {
+        window.clearTimeout(saveTimer.current);
+        saveTimer.current = undefined;
         history.replaceState({ overwatch: before }, "");
         after.scroll = 0;
         history.pushState({ overwatch: after }, "");
         restoring.current = false;
         setRestore((value) => ({ revision: value.revision + 1, scroll: -1 }));
-      } else history.replaceState({ overwatch: after }, "");
+      }
       current.current = after;
       setState(after);
+      if (push) persist(after);
+      else scheduleSave();
     },
-    [scrollRef],
+    [scrollRef, scheduleSave],
   );
-  const saveReader = useCallback((id: string, index: number) => {
-    const before = current.current;
-    if (before.readers.find((reader) => reader.id === id)?.index === index) return;
-    const after = {
-      ...before,
-      readers: [...before.readers.filter((reader) => reader.id !== id), { id, index }].slice(-20),
-    };
-    current.current = after;
-    history.replaceState({ overwatch: after }, "");
-    // No React render for every viewport movement; route changes read the latest ref.
-  }, []);
-  useEffect(() => {
-    const timer = window.setTimeout(() => persist(current.current), 250);
-    return () => window.clearTimeout(timer);
-  }, [state]);
+  const saveReader = useCallback(
+    (id: string, index: number) => {
+      const before = current.current;
+      if (before.readers.find((reader) => reader.id === id)?.index === index) return;
+      const after = {
+        ...before,
+        readers: [...before.readers.filter((reader) => reader.id !== id), { id, index }].slice(-20),
+      };
+      current.current = after;
+      scheduleSave();
+      // No React render for every viewport movement; route changes read the latest ref.
+    },
+    [scheduleSave],
+  );
   useEffect(() => {
     history.scrollRestoration = "manual";
     history.replaceState({ overwatch: current.current }, "");
     const pop = (event: PopStateEvent) => {
       if (!event.state?.overwatch) return;
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = undefined;
       const next = readWorkspace(event.state.overwatch);
       current.current = next;
       restoring.current = true;
@@ -115,7 +132,7 @@ export function useWorkspaceOwner(scrollRef: RefObject<HTMLDivElement | null>): 
         else history.forward();
       }
     };
-    const save = () => persist(current.current);
+    const save = () => flush();
     window.addEventListener("popstate", pop);
     window.addEventListener("keydown", keys);
     window.addEventListener("pagehide", save);
@@ -125,24 +142,20 @@ export function useWorkspaceOwner(scrollRef: RefObject<HTMLDivElement | null>): 
       window.removeEventListener("pagehide", save);
       save();
     };
-  }, []);
+  }, [flush]);
   useEffect(() => {
     const element = scrollRef.current;
     if (!element) return;
-    let timer: number | undefined;
     const scroll = () => {
       if (restoring.current) return;
       current.current = { ...current.current, scroll: Math.round(element.scrollTop) };
-      history.replaceState({ overwatch: current.current }, "");
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => persist(current.current), 250);
+      scheduleSave();
     };
     element.addEventListener("scroll", scroll, { passive: true });
     return () => {
       element.removeEventListener("scroll", scroll);
-      window.clearTimeout(timer);
     };
-  }, [scrollRef]);
+  }, [scrollRef, scheduleSave]);
   useEffect(() => {
     const element = scrollRef.current;
     if (!element) return;

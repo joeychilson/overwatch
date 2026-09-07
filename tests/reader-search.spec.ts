@@ -17,6 +17,8 @@ const events: SessionEvent[] = Array.from({ length: 245 }, (_, index) => ({
 test("match navigation crosses event pages and preserves keyboard focus and Markdown", async ({
   page,
 }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
   await desktop(page, { events });
   await page.goto("/");
   await page.getByRole("button", { name: "Sessions", exact: true }).click();
@@ -51,6 +53,7 @@ test("match navigation crosses event pages and preserves keyboard focus and Mark
   await timeline.focus();
   await page.keyboard.press("PageUp");
   await expect(log.locator('[data-event-index="0"]')).toBeFocused();
+  expect(errors).toEqual([]);
 });
 
 test("expanded tool input and results highlight and copy the original payload", async ({
