@@ -285,22 +285,28 @@ impl Index {
                 if status.source.agent == Agent::Opencode {
                     let path = root.join("opencode.db");
                     if path.exists() {
-                        match opencode::sessions(&path) {
-                            Ok(sessions) => {
-                                for (id, updated) in sessions {
-                                    let key = format!("{}#{id}", path.display());
-                                    found.insert(key.clone());
-                                    let stamp = updated.to_string();
-                                    if stamps.get(&key) == Some(&stamp) && !invalid.contains(&key) {
-                                        continue;
-                                    }
-                                    match opencode::read(&path, &id, false) {
-                                        Ok(data) => pending.push((key, stamp, data.summary())),
-                                        Err(error) => status.issues.push(error.to_string()),
-                                    }
+                        let result = (|| -> Result<()> {
+                            let database = opencode::Database::open(&path)?;
+                            for (id, updated) in database.sessions()? {
+                                let key = format!("{}#{id}", path.display());
+                                found.insert(key.clone());
+                                let stamp = updated.to_string();
+                                if stamps.get(&key) == Some(&stamp) && !invalid.contains(&key) {
+                                    continue;
+                                }
+                                match database.read(&id, false) {
+                                    Ok(data) => pending.push((key, stamp, data.summary())),
+                                    Err(error) => status.issues.push(error.to_string()),
+                                }
+                                if pending.len() >= 32 {
+                                    self.commit(&mut pending)?;
+                                    changed = true;
                                 }
                             }
-                            Err(error) => status.issues.push(error.to_string()),
+                            Ok(())
+                        })();
+                        if let Err(error) = result {
+                            status.issues.push(error.to_string());
                         }
                     } else {
                         status.issues.push(format!(
@@ -425,17 +431,15 @@ impl Index {
         let mut db = self.db.lock()?;
         let tx = db.transaction()?;
         for (source, stamp, session) in pending.iter() {
-            tx.execute(
-                "INSERT OR REPLACE INTO sessions VALUES(?1,?2,?3,?4,?5,?6)",
-                params![
+            tx.prepare_cached("INSERT OR REPLACE INTO sessions VALUES(?1,?2,?3,?4,?5,?6)")?
+                .execute(params![
                     source,
                     session.agent.id(),
                     session.id,
                     stamp,
                     session.updated_at,
                     serde_json::to_string(session)?
-                ],
-            )?;
+                ])?;
         }
         tx.commit()?;
         let mut invalid = self.invalid_summaries.lock()?;
@@ -485,7 +489,9 @@ impl Index {
         if cache.as_ref().is_none_or(|reader| reader.source != source) {
             let data = if agent == Agent::Opencode {
                 let (path, sid) = split_opencode_source(&source)?;
-                ReaderData::Sqlite(Box::new(opencode::read(Path::new(path), sid, true)?))
+                ReaderData::Sqlite(Box::new(
+                    opencode::Database::open(Path::new(path))?.read(sid, true)?,
+                ))
             } else {
                 let path = Path::new(&source);
                 let mut cursor = Cursor::new(agent, path, true);
@@ -509,7 +515,7 @@ impl Index {
                 ReaderData::Jsonl(cursor) => cursor.read(Path::new(&reader.source))?,
                 ReaderData::Sqlite(data) => {
                     let (path, sid) = split_opencode_source(&reader.source)?;
-                    **data = opencode::read(Path::new(path), sid, true)?;
+                    **data = opencode::Database::open(Path::new(path))?.read(sid, true)?;
                 }
             }
             reader.stamp = current;

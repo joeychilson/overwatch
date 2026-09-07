@@ -6,6 +6,51 @@ use serde_json::json;
 use std::io::Write;
 
 #[test]
+fn opencode_indexes_multiple_batches_and_reconciles_live_updates()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let db = rusqlite::Connection::open(root.path().join("opencode.db"))?;
+    db.execute_batch("PRAGMA journal_mode=WAL;
+        CREATE TABLE session_v2(id TEXT,title TEXT,directory TEXT,time_created INTEGER,time_updated INTEGER,parent_id TEXT);
+        CREATE TABLE session_message(id TEXT,session_id TEXT,type TEXT,time_created INTEGER,data TEXT,seq INTEGER);
+        WITH RECURSIVE ids(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM ids WHERE n<65)
+        INSERT INTO session_v2 SELECT 's'||n,'Session '||n,'/fixture',1700000000000,1700000001000,NULL FROM ids;
+        INSERT INTO session_message SELECT id,id,'assistant',time_updated,'{\"model\":{\"id\":\"example\",\"providerID\":\"lab\"},\"tokens\":{\"input\":10,\"output\":2}}',1 FROM session_v2;")?;
+    let sources = Agent::ALL
+        .into_iter()
+        .map(|agent| Source {
+            agent,
+            path: root.path().to_string_lossy().into_owned(),
+            enabled: agent == Agent::Opencode,
+        })
+        .collect();
+    let index = Index::open(root.path().join("index"), sources)?;
+    assert!(index.scan()?);
+    let snapshot = index.snapshot()?;
+    assert_eq!(snapshot.sessions.len(), 65);
+    assert_eq!(
+        snapshot
+            .sessions
+            .iter()
+            .map(|s| s.tokens.total())
+            .sum::<u64>(),
+        65 * 12
+    );
+    assert!(!index.scan()?);
+    db.execute_batch(
+        "UPDATE session_v2 SET title='Changed',time_updated=time_updated+1000 WHERE id='s65';
+        DELETE FROM session_v2 WHERE id='s1';",
+    )?;
+    assert!(index.scan()?);
+    let snapshot = index.snapshot()?;
+    assert_eq!(snapshot.sessions.len(), 64);
+    assert_eq!(snapshot.sessions[0].title, "Changed");
+    assert_eq!(index.transcript("opencode:s65")?.session.tokens.total(), 12);
+    assert!(!index.scan()?);
+    Ok(())
+}
+
+#[test]
 fn opencode_source_path_opens_the_database_and_respects_disabled_sources()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
