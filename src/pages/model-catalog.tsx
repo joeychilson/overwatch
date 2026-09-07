@@ -3,7 +3,7 @@ import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-quer
 import { Brain, Check, Eye, GitCompareArrows, RefreshCw, Star, Wrench, X } from "lucide-react";
 import type { Session } from "@/lib/bindings";
 import { emptyModels, getCatalog, type Catalog, type Model } from "@/lib/models/catalog";
-import { tokenCost } from "@/lib/usage/analytics";
+import { tokenCost } from "@/lib/usage/costs";
 import { compact, integer, money } from "@/lib/format";
 import { catalogOptions } from "@/lib/queries";
 import { usePreferences } from "@/lib/hooks/use-preferences";

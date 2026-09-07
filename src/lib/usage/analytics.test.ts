@@ -2,14 +2,8 @@
 import { addDays } from "date-fns";
 import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
-import {
-  aggregate,
-  emptyTokens,
-  knownCost,
-  priceLookup,
-  tokenCost,
-  totalTokens,
-} from "./analytics";
+import { aggregate, emptyTokens } from "./analytics";
+import { knownCost } from "./costs";
 import { parseCatalog } from "../models/catalog";
 import { csv } from "../export";
 import { forecasts } from "./forecast";
@@ -30,29 +24,6 @@ const models = parseCatalog({
 });
 
 describe("usage accounting", () => {
-  it("does not add reasoning twice and refuses missing cache prices", () => {
-    const tokens = { ...emptyTokens(), input: 1_000_000, output: 100_000, reasoning: 50_000 };
-    expect(totalTokens(tokens)).toBe(1_100_000);
-    expect(tokenCost(tokens, models[0])).toBeCloseTo(2.8);
-    expect(tokenCost({ ...tokens, cacheWrite: 1 }, models[0])).toBeNull();
-  });
-  it("never prices a known reseller using another provider's rates", () => {
-    expect(priceLookup(models)("test", "different-provider")).toBeUndefined();
-    expect(priceLookup(models)("test", "")).toBe(models[0]);
-  });
-  it("leaves ambiguous providers and unmatched versions unpriced regardless of catalog order", () => {
-    const reseller = { ...models[0], provider: "reseller", key: "reseller/test", inputPrice: 12 };
-    for (const catalog of [
-      [models[0], reseller],
-      [reseller, models[0]],
-    ]) {
-      const find = priceLookup(catalog);
-      expect(find("test", "")).toBeUndefined();
-      expect(find("test", "reseller")).toBe(reseller);
-      expect(find("test-20260820", "lab")).toBeUndefined();
-      expect(find("test-latest", "lab")).toBeUndefined();
-    }
-  });
   it("groups local calendar days across DST boundaries and out-of-order responses", () => {
     for (const month of [2, 10]) {
       const boundary = new Date(2026, month, month === 2 ? 8 : 1);

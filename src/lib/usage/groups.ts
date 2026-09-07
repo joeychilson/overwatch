@@ -1,7 +1,8 @@
 import type { ModelUsage } from "./analytics";
+import { emptyCosts, type CostTotals } from "./costs";
 import { modelColor, providerColor } from "../models/colors";
 
-export type UsageGroup = {
+export type UsageGroup = CostTotals & {
   key: string;
   label: string;
   detail: string;
@@ -9,12 +10,7 @@ export type UsageGroup = {
   resolved: boolean;
   offerings: ModelUsage[];
   tokens: number;
-  cost: number;
   calls: number;
-  pricedCalls: number;
-  unpricedCalls: number;
-  recordedCost: number;
-  estimatedCost: number;
 };
 
 export function usageGroups(rows: ModelUsage[], grouping: "model" | "provider"): UsageGroup[] {
@@ -23,6 +19,7 @@ export function usageGroups(rows: ModelUsage[], grouping: "model" | "provider"):
     const identity = row.identity;
     const key = grouping === "model" ? identity.key : row.provider;
     const group = groups.get(key) ?? {
+      ...emptyCosts(),
       key,
       label: grouping === "model" ? identity.name : row.providerName,
       detail: grouping === "model" ? identity.id : row.provider,
@@ -33,12 +30,7 @@ export function usageGroups(rows: ModelUsage[], grouping: "model" | "provider"):
       resolved: grouping === "provider" || identity.resolved,
       offerings: [],
       tokens: 0,
-      cost: 0,
       calls: 0,
-      pricedCalls: 0,
-      unpricedCalls: 0,
-      recordedCost: 0,
-      estimatedCost: 0,
     };
     group.offerings.push(row);
     for (const field of [

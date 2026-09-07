@@ -4,8 +4,9 @@ import { ArrowDownToLine, ArrowUpToLine, Download, ExternalLink } from "lucide-r
 import { format } from "date-fns";
 import { commands } from "@/lib/bindings";
 import { native } from "@/lib/errors";
+import { knownCost } from "@/lib/usage/costs";
 import { compact, duration, elapsed, hasTimestamp, integer, money } from "@/lib/format";
-import { aggregate, knownCost, totalTokens } from "@/lib/usage/analytics";
+import { aggregate, totalTokens } from "@/lib/usage/analytics";
 import { catalogOptions, eventPageOptions } from "@/lib/queries";
 import { useModelName } from "@/lib/hooks/use-model-name";
 import { Button } from "./ui/button";

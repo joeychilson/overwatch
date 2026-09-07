@@ -1,7 +1,8 @@
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { Session } from "@/lib/bindings";
 import type { Model } from "@/lib/models/catalog";
-import { aggregate, knownCost } from "@/lib/usage/analytics";
+import { aggregate } from "@/lib/usage/analytics";
+import { knownCost } from "@/lib/usage/costs";
 import { compact, integer, money } from "@/lib/format";
 import { rowButton, whenPresent } from "@/lib/components/restore-focus";
 import { offeringProviderNames, usageGroups, type UsageGroup } from "@/lib/usage/groups";
