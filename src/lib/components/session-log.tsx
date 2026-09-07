@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import type { EventPage, SessionEvent, TimelineEvent } from "@/lib/bindings";
+import type { EventPage, SessionEvent, TimelineSummary } from "@/lib/bindings";
 import { useScrollMargin } from "@/lib/hooks/use-scroll-margin";
 import { eventPageOptions } from "@/lib/queries";
 import { hasTimestamp, duration } from "@/lib/format";
@@ -30,10 +30,14 @@ import { toolPreview, type Snippet } from "@/lib/session/tool-preview";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
 import { ErrorNotice } from "./page";
+import { Highlight } from "./highlight";
 import { Markdown } from "./markdown";
 
+const estimate = (kind: string) =>
+  kind === "tool" ? 40 : kind === "user" || kind === "assistant" ? 240 : 48;
+
 export type SessionLogHandle = {
-  jumpTo: (index: number) => void;
+  jumpTo: (index: number, focus?: boolean) => void;
 };
 
 export function SessionLog({
@@ -47,7 +51,7 @@ export function SessionLog({
 }: {
   id: string;
   cwd: string;
-  timeline: TimelineEvent[];
+  timeline: TimelineSummary;
   view: { kind: "all" } | { kind: "search"; query: string; firstPage: EventPage };
   initialPosition: { index: number; focus: boolean };
   scrollRef: RefObject<HTMLDivElement | null>;
@@ -58,6 +62,7 @@ export function SessionLog({
   const margin = useScrollMargin(container, scrollRef);
   const [jump, setJump] = useState(() => ({
     ...initialPosition,
+    scroll: initialPosition.focus || initialPosition.index > 0,
     index:
       view.kind === "search"
         ? Math.max(0, view.firstPage.matches.indexOf(initialPosition.index))
@@ -66,7 +71,20 @@ export function SessionLog({
   const completedJump = useRef<typeof jump | null>(null);
   const [expanded, setExpanded] = useState<Map<number, boolean>>(() => new Map());
   const search = view.kind === "search" ? view.query : "";
-  const count = view.kind === "search" ? view.firstPage.total : timeline.length;
+  const exactKinds = useMemo(
+    () =>
+      new Map(
+        timeline.marks.filter((mark) => mark.count === 1).map((mark) => [mark.index, mark.kind]),
+      ),
+    [timeline],
+  );
+  const averageHeight = useMemo(
+    () =>
+      timeline.marks.reduce((sum, mark) => sum + estimate(mark.kind) * mark.count, 0) /
+      Math.max(1, timeline.count),
+    [timeline],
+  );
+  const count = view.kind === "search" ? view.firstPage.total : timeline.count;
   // Virtual owns a mutable viewport instance. Keep this component outside React Compiler.
   // oxlint-disable-next-line react/incompatible-library
   const virtual = useVirtualizer({
@@ -74,10 +92,8 @@ export function SessionLog({
     getScrollElement: () => scrollRef.current,
     getItemKey: (index) => index,
     estimateSize: (index) => {
-      const event = search ? undefined : timeline[index];
-      const kind = event?.kind;
-      if (kind === "tool") return 40;
-      return search || kind === "user" || kind === "assistant" ? 240 : 48;
+      const kind = search ? undefined : exactKinds.get(index);
+      return search ? 240 : kind ? estimate(kind) : averageHeight;
     },
     // Apply measured row heights outside the ResizeObserver delivery cycle.
     useAnimationFrameWithResizeObserver: true,
@@ -108,7 +124,7 @@ export function SessionLog({
   const targetRendered = items.some((item) => item.index === target);
 
   useImperativeHandle(ref, () => ({
-    jumpTo: (index) => setJump({ index, focus: true }),
+    jumpTo: (index, focus = true) => setJump({ index, focus, scroll: true }),
   }));
   useLayoutEffect(() => {
     if (margin === null || !count || completedJump.current === jump) return;
@@ -116,7 +132,7 @@ export function SessionLog({
     // layout effects so that notification can render the target without nesting
     // flushSync inside an active React commit.
     const frame = requestAnimationFrame(() => {
-      if (jump.focus || target > 0) virtual.scrollToIndex(target, { align: "start" });
+      if (jump.scroll) virtual.scrollToIndex(target, { align: "start" });
       if (!targetLoaded || !targetRendered) return;
       const element = container.current?.querySelector<HTMLElement>(`[data-index="${target}"]`);
       if (jump.focus) element?.focus({ preventScroll: true });
@@ -269,16 +285,22 @@ function ToolCall({
       </summary>
       <div className="space-y-4 px-4 pt-1 pb-4">
         <div>
-          <p className="mb-2 text-[11px] text-muted-foreground">INPUT</p>
+          <div className="mb-2 flex items-center justify-between">
+            <p className="text-[11px] text-muted-foreground">INPUT</p>
+            <CopyPayload text={event.text} label="Copy tool input" />
+          </div>
           <pre className="mt-2 max-h-80 overflow-auto rounded-lg bg-background/70 p-3 font-mono text-xs leading-relaxed wrap-break-word whitespace-pre-wrap">
-            {event.text}
+            <Highlight text={event.text} search={search} />
           </pre>
         </div>
         {event.output != null && (
           <div>
-            <p className="mb-2 text-[11px] text-muted-foreground">RESULT</p>
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-[11px] text-muted-foreground">RESULT</p>
+              <CopyPayload text={event.output} label="Copy tool result" />
+            </div>
             <pre className="mt-2 max-h-96 overflow-auto rounded-lg bg-background/70 p-3 font-mono text-xs leading-relaxed wrap-break-word whitespace-pre-wrap">
-              {event.output}
+              <Highlight text={event.output} search={search} />
             </pre>
           </div>
         )}
@@ -326,14 +348,14 @@ function Event({
           {event.kind === "thinking" ? "Recorded thinking summary" : "Context compacted"}
         </summary>
         <div className="mt-3">
-          <Markdown text={event.text || "No summary was recorded."} />
+          <Markdown text={event.text || "No summary was recorded."} search={search} />
         </div>
       </details>
     );
-  return <Message event={event} />;
+  return <Message event={event} search={search} />;
 }
 
-function Message({ event }: { event: SessionEvent }) {
+function Message({ event, search }: { event: SessionEvent; search: string }) {
   const copy = useMutation({
     mutationFn: () => navigator.clipboard.writeText(event.text),
     onSuccess: () => toast.success("Copied to clipboard"),
@@ -365,7 +387,19 @@ function Message({ event }: { event: SessionEvent }) {
           <Copy />
         </Button>
       </div>
-      <Markdown text={event.text} />
+      <Markdown text={event.text} search={search} />
     </article>
+  );
+}
+
+function CopyPayload({ text, label }: { text: string; label: string }) {
+  const copy = useMutation({
+    mutationFn: () => navigator.clipboard.writeText(text),
+    onSuccess: () => toast.success("Copied to clipboard"),
+  });
+  return (
+    <Button variant="ghost" size="icon-xs" aria-label={label} onClick={() => copy.mutate()}>
+      <Copy />
+    </Button>
   );
 }

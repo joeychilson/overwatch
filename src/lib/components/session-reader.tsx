@@ -1,6 +1,13 @@
-import { useDeferredValue, useMemo, useRef, useState, type RefObject } from "react";
+import { useMemo, useRef, useState, type RefObject } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowDownToLine, ArrowUpToLine, Download, ExternalLink } from "lucide-react";
+import {
+  ArrowDownToLine,
+  ArrowUpToLine,
+  Download,
+  ExternalLink,
+  ChevronUp,
+  ChevronDown,
+} from "lucide-react";
 import { format } from "date-fns";
 import { commands } from "@/lib/bindings";
 import { native } from "@/lib/errors";
@@ -8,6 +15,7 @@ import { knownCost } from "@/lib/usage/costs";
 import { compact, duration, elapsed, hasTimestamp, integer, money } from "@/lib/format";
 import { aggregate, totalTokens } from "@/lib/usage/analytics";
 import { catalogOptions, eventPageOptions } from "@/lib/queries";
+import { useDebounced } from "@/lib/hooks/use-debounced";
 import { useModelName } from "@/lib/hooks/use-model-name";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
@@ -25,9 +33,10 @@ export function SessionReader({
   scrollRef: RefObject<HTMLDivElement | null>;
 }) {
   const [search, setSearch] = useState("");
+  const [match, setMatch] = useState(0);
   const [titleExpanded, setTitleExpanded] = useState(false);
   const [position, setPosition] = useState({ index: 0, focus: false });
-  const deferred = useDeferredValue(search);
+  const deferred = useDebounced(search);
   const log = useRef<SessionLogHandle>(null);
   const transcript = useQuery({
     queryKey: ["transcript", id],
@@ -38,6 +47,15 @@ export function SessionReader({
     queryKey: ["events", id, "search", deferred],
     enabled: !!deferred,
   });
+  const matches = results.data?.total ?? 0;
+  const searching = search !== deferred || (!!deferred && results.isFetching);
+  const currentMatch = Math.max(0, Math.min(match, matches - 1));
+  function moveMatch(direction: number) {
+    if (searching || !matches) return;
+    const next = Math.max(0, Math.min(matches - 1, currentMatch + direction));
+    setMatch(next);
+    log.current?.jumpTo(next, false);
+  }
   const exportData = useMutation({ mutationFn: () => native(commands.exportSession(id)) });
   const source = useMutation({ mutationFn: () => native(commands.openSessionSource(id)) });
   const catalog = useQuery(catalogOptions);
@@ -196,16 +214,18 @@ export function SessionReader({
           {warning}
         </p>
       ))}
-      {timeline.length > 0 && (
+      {timeline.count > 0 && (
         <section aria-label="Timeline" className="mb-4">
           <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
             <h2 className="text-sm font-medium text-foreground">Timeline</h2>
-            <span className="ml-auto text-[11px]">Select an event to jump to its message</span>
+            <span className="ml-auto text-[11px]">Select a mark to jump to its message</span>
           </div>
-          <Timeline events={timeline} selected={position.index} onSelect={jumpTo} />
+          <Timeline id={id} overview={timeline} selected={position.index} onSelect={jumpTo} />
           <p className="mt-2 text-[11px] text-muted-foreground">
             Elapsed time includes idle gaps. Marks show recorded events and tool durations, not
             inference timings.
+            {timeline.marks.length < timeline.count &&
+              " Nearby marks are grouped. Arrow keys move one event at a time."}
           </p>
         </section>
       )}
@@ -214,41 +234,73 @@ export function SessionReader({
           value={search}
           onChange={(value) => {
             setSearch(value);
+            setMatch(0);
             setPosition({ index: 0, focus: false });
           }}
           placeholder="Search the entire transcript…"
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && deferred) {
+              event.preventDefault();
+              moveMatch(event.shiftKey ? -1 : 1);
+            }
+          }}
         />
         <span
           aria-live="polite"
           className="shrink-0 text-[11px] text-muted-foreground tabular-nums"
         >
-          {search !== deferred || (deferred && results.isPending)
+          {searching
             ? "Searching…"
             : deferred
-              ? `${integer(results.data?.total ?? 0)} matches`
-              : `${integer(timeline.length)} events`}
+              ? `${matches ? currentMatch + 1 : 0} of ${integer(matches)} matching events`
+              : `${integer(timeline.count)} events`}
         </span>
         <div className="flex shrink-0 items-center gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label="Jump to start"
-            disabled={!timeline.length}
-            onClick={() => jumpTo(0)}
-          >
-            <ArrowUpToLine />
-            Start
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label="Jump to latest"
-            disabled={!timeline.length}
-            onClick={() => jumpTo(timeline.length - 1)}
-          >
-            <ArrowDownToLine />
-            Latest
-          </Button>
+          {deferred ? (
+            <>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Previous match"
+                disabled={searching || !matches || currentMatch === 0}
+                onClick={() => moveMatch(-1)}
+              >
+                <ChevronUp />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Next match"
+                disabled={searching || !matches || currentMatch >= matches - 1}
+                onClick={() => moveMatch(1)}
+              >
+                <ChevronDown />
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label="Jump to start"
+                disabled={!timeline.count}
+                onClick={() => jumpTo(0)}
+              >
+                <ArrowUpToLine />
+                Start
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label="Jump to latest"
+                disabled={!timeline.count}
+                onClick={() => jumpTo(timeline.count - 1)}
+              >
+                <ArrowDownToLine />
+                Latest
+              </Button>
+            </>
+          )}
         </div>
       </div>
       {deferred && results.error && (

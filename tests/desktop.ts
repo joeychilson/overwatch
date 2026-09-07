@@ -243,6 +243,7 @@ export async function desktop(
   page: Page,
   options: {
     sessions?: Session[];
+    events?: SessionEvent[];
     failRefresh?: boolean;
     failSave?: boolean;
     invalidCatalog?: boolean;
@@ -444,16 +445,18 @@ export async function desktop(
   await page.addInitScript(
     ({ snapshot, catalog, transcript, previewTranscript, accounts, preferences, options, now }) => {
       const state = { snapshot, accounts, preferences };
-      const recorded = options.emptyTranscript
-        ? []
-        : options.toolPreviews
-          ? previewTranscript
-          : options.undatedEvents
-            ? transcript.map((event, index) => ({
-                ...event,
-                timestamp: options.undatedEvents === "all" || index === 0 ? 0 : event.timestamp,
-              }))
-            : transcript;
+      const recorded =
+        options.events ??
+        (options.emptyTranscript
+          ? []
+          : options.toolPreviews
+            ? previewTranscript
+            : options.undatedEvents
+              ? transcript.map((event, index) => ({
+                  ...event,
+                  timestamp: options.undatedEvents === "all" || index === 0 ? 0 : event.timestamp,
+                }))
+              : transcript);
       let failedEventRequests = 0;
       const callbacks = new Map<number, (value: unknown) => void>();
       let sequence = 0;
@@ -545,14 +548,67 @@ export async function desktop(
                 );
                 return {
                   session: state.snapshot.sessions.find((session) => session.id === args.id),
-                  timeline: recorded.map((event, index) => ({
-                    index,
-                    kind: event.kind,
-                    timestamp: event.timestamp,
-                    durationMs: event.durationMs,
-                    tool: event.tool,
-                    failed: event.failed,
-                  })),
+                  timeline: (() => {
+                    const undated = recorded.filter(
+                      (event) => event.timestamp <= 0 || event.timestamp > 8.64e15,
+                    ).length;
+                    const positions = recorded.map((event, index) =>
+                      undated ? index : event.timestamp,
+                    );
+                    const start = positions.length ? Math.min(...positions) : 0;
+                    const end = Math.max(
+                      start + 1,
+                      ...recorded.map(
+                        (event, index) =>
+                          positions[index] + (undated ? 0 : (event.durationMs ?? 0)),
+                      ),
+                    );
+                    const marks = new Map<
+                      string,
+                      {
+                        index: number;
+                        kind: SessionEvent["kind"];
+                        start: number;
+                        end: number;
+                        count: number;
+                        failures: number;
+                      }
+                    >();
+                    recorded.forEach((event, index) => {
+                      const bin =
+                        recorded.length <= 1600
+                          ? index
+                          : Math.min(
+                              319,
+                              Math.floor(((positions[index] - start) / (end - start)) * 320),
+                            );
+                      const key = `${bin}:${event.kind}`;
+                      const previous = marks.get(key);
+                      const finish = positions[index] + (undated ? 0 : (event.durationMs ?? 0));
+                      if (previous) {
+                        if (!previous.failures && event.failed) previous.index = index;
+                        previous.start = Math.min(previous.start, positions[index]);
+                        previous.end = Math.max(previous.end, finish);
+                        previous.count++;
+                        previous.failures += Number(event.failed === true);
+                      } else
+                        marks.set(key, {
+                          index,
+                          kind: event.kind,
+                          start: positions[index],
+                          end: finish,
+                          count: 1,
+                          failures: Number(event.failed === true),
+                        });
+                    });
+                    return {
+                      marks: [...marks.values()],
+                      count: recorded.length,
+                      start,
+                      end,
+                      undated,
+                    };
+                  })(),
                 };
               case "get_events": {
                 if (args.offset === options.failEventsAt && ++failedEventRequests <= 2)

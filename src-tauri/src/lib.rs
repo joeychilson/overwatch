@@ -11,6 +11,7 @@ pub mod queries;
 mod quota;
 mod settings;
 mod sources;
+mod timeline;
 mod watch;
 
 use std::sync::Arc;

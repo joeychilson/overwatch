@@ -175,7 +175,7 @@ fn run(
         let transcript = index.transcript(&id)?;
         black_box(&transcript);
         reader_open.push(start.elapsed().as_secs_f64() * 1000.0);
-        assert_eq!(transcript.timeline.len(), reader_turns * 2);
+        assert_eq!(transcript.timeline.count as usize, reader_turns * 2);
         let start = Instant::now();
         let page = index.events(&id, 0, "needle")?;
         black_box(&page);

@@ -221,7 +221,7 @@ fn index_survives_restart_skips_idle_writes_and_pages_full_search()
     assert_eq!(page.matches, (100..200).collect::<Vec<_>>());
     let result = index.events(id, 0, "Record 244")?;
     assert_eq!(result.matches, vec![244]);
-    assert_eq!(index.transcript(id)?.timeline.len(), 245);
+    assert_eq!(index.transcript(id)?.timeline.count as usize, 245);
     assert_eq!(
         index.events(id, u32::MAX, "RECORD")?.matches,
         (200..245).collect::<Vec<_>>()

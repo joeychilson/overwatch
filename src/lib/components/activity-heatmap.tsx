@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { eachDayOfInterval, format, startOfWeek, subDays } from "date-fns";
 import { Tooltip } from "@base-ui/react/tooltip";
 import type { UsageStats } from "@/lib/history";
@@ -17,6 +17,8 @@ export function ActivityHeatmap({
 }) {
   const [activityTooltip] = useState(() => Tooltip.createHandle<{ date: Date; amount: number }>());
   const activityTooltipId = useId();
+  const grid = useRef<HTMLDivElement>(null);
+  const [focusedDay, setFocusedDay] = useState(() => day(now));
   const heatDays = eachDayOfInterval({
     start: startOfWeek(subDays(now, 364), { weekStartsOn: 1 }),
     end: now,
@@ -25,18 +27,24 @@ export function ActivityHeatmap({
     date,
     amount: lifetime.days.get(day(date))?.total ?? 0,
   }));
+  const activeDay = heatValues.some((value) => day(value.date) === focusedDay)
+    ? focusedDay
+    : day(now);
   const maxHeat = Math.max(1, ...heatValues.map((value) => value.amount));
   return (
     <Section title="Daily activity">
       <Tooltip.Provider delay={100}>
         <div className="overflow-x-auto pb-2">
           <div
+            ref={grid}
+            role="group"
+            aria-label="Daily activity"
             className="grid h-32 min-w-full grid-flow-col grid-rows-7 gap-1.25"
             style={{
               gridTemplateColumns: `repeat(${Math.ceil(heatDays.length / 7)},minmax(9px,1fr))`,
             }}
           >
-            {heatValues.map(({ date, amount }) => (
+            {heatValues.map(({ date, amount }, index) => (
               <Tooltip.Trigger
                 key={day(date)}
                 handle={activityTooltip}
@@ -47,6 +55,40 @@ export function ActivityHeatmap({
                   />
                 )}
                 payload={{ date, amount }}
+                tabIndex={day(date) === activeDay ? 0 : -1}
+                data-day-index={index}
+                onFocus={() => setFocusedDay(day(date))}
+                onKeyDown={(event) => {
+                  let next: number;
+                  switch (event.key) {
+                    case "ArrowDown":
+                      next = index + 1;
+                      break;
+                    case "ArrowUp":
+                      next = index - 1;
+                      break;
+                    case "ArrowRight":
+                      next = index + 7;
+                      break;
+                    case "ArrowLeft":
+                      next = index - 7;
+                      break;
+                    case "Home":
+                      next = 0;
+                      break;
+                    case "End":
+                      next = heatValues.length - 1;
+                      break;
+                    default:
+                      return;
+                  }
+                  event.preventDefault();
+                  grid.current
+                    ?.querySelector<HTMLElement>(
+                      `[data-day-index="${Math.max(0, Math.min(heatValues.length - 1, next))}"]`,
+                    )
+                    ?.focus();
+                }}
                 aria-label={`${format(date, "MMMM d, yyyy")}: ${integer(amount)} tokens`}
                 onClick={() => openDay(day(date))}
                 className="min-w-2.25 rounded-[3px] transition-colors hover:ring-2 hover:ring-primary"

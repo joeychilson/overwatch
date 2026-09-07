@@ -245,13 +245,21 @@ export type SourceStatus = {
 
 export type Theme = "dark" | "light" | "system";
 
-export type TimelineEvent = {
+export type TimelineMark = {
 	index: number,
 	kind: EventKind,
-	timestamp: number,
-	durationMs: number | null,
-	tool: string | null,
-	failed: boolean | null,
+	start: number,
+	end: number,
+	count: number,
+	failures: number,
+};
+
+export type TimelineSummary = {
+	marks: TimelineMark[],
+	count: number,
+	undated: number,
+	start: number,
+	end: number,
 };
 
 export type Tokens = {
@@ -273,7 +281,7 @@ export type ToolStats = {
 
 export type Transcript = {
 	session: Session,
-	timeline: TimelineEvent[],
+	timeline: TimelineSummary,
 };
 
 export type Usage = {

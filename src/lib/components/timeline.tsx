@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
-import type { EventKind, TimelineEvent } from "@/lib/bindings";
-import { duration, hasTimestamp } from "@/lib/format";
+import { useQuery } from "@tanstack/react-query";
+import type { EventKind, TimelineSummary } from "@/lib/bindings";
+import { duration } from "@/lib/format";
+import { eventPageOptions } from "@/lib/queries";
 
 const lanes: { kind: EventKind; label: string; color: string }[] = [
   { kind: "user", label: "You", color: "var(--chart-4)" },
@@ -11,70 +13,73 @@ const lanes: { kind: EventKind; label: string; color: string }[] = [
 ];
 const width = 1000,
   labelWidth = 4,
-  plotWidth = width - labelWidth - 8;
+  plotWidth = 988;
 export function Timeline({
-  events,
+  id,
+  overview,
   selected,
   onSelect,
 }: {
-  events: TimelineEvent[];
+  id: string;
+  overview: TimelineSummary;
   selected: number;
   onSelect: (index: number) => void;
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  // A transcript can contain tens of thousands of events. Pointer movement should
-  // only look up a timestamp, never rebuild the SVG paths.
-  const { start, end, paths, ordered, undated } = useMemo(() => {
-    const undated = events.filter((event) => !hasTimestamp(event.timestamp)).length;
-    const position = (event: TimelineEvent, index: number) => (undated ? index : event.timestamp);
-    let start = Infinity,
-      end = 0;
-    events.forEach((event, index) => {
-      start = Math.min(start, position(event, index));
-      end = Math.max(end, position(event, index) + (undated ? 0 : (event.durationMs ?? 0)));
-    });
-    if (!events.length) start = 0;
-    end = Math.max(start + 1, end);
+  const { marks, count, start, end, undated } = overview;
+  const current = Math.max(0, Math.min(selected, count - 1));
+  // Share the exact event page with the reader; overview marks never determine
+  // the number of messages or limit keyboard access to an original event.
+  const page = useQuery({
+    ...eventPageOptions(id, "", Math.floor(current / 100) * 100),
+    enabled: count > 0,
+  });
+  const event = page.data?.events[current - page.data.offset];
+  const x = (at: number) => labelWidth + ((at - start) / Math.max(1, end - start)) * plotWidth;
+  const { paths, ordered } = useMemo(() => {
     const paths = new Map<EventKind, string[]>();
-    events.forEach((event, index) => {
-      const lane = lanes.findIndex((lane) => lane.kind === event.kind);
-      const parts = paths.get(event.kind) ?? [];
+    for (const mark of marks) {
+      const parts = paths.get(mark.kind) ?? [];
       parts.push(
-        `M${(labelWidth + ((position(event, index) - start) / (end - start)) * plotWidth).toFixed(1)},${lane * 25 + 12}h${Math.max(1.8, ((undated ? 0 : (event.durationMs ?? 0)) / (end - start)) * plotWidth).toFixed(1)}`,
+        `M${(labelWidth + ((mark.start - start) / Math.max(1, end - start)) * plotWidth).toFixed(1)},${lanes.findIndex((lane) => lane.kind === mark.kind) * 25 + 12}h${Math.max(1.8, ((mark.end - mark.start) / Math.max(1, end - start)) * plotWidth).toFixed(1)}`,
       );
-      paths.set(event.kind, parts);
-    });
+      paths.set(mark.kind, parts);
+    }
     return {
-      start,
-      end,
-      undated,
       paths: new Map([...paths].map(([kind, parts]) => [kind, parts.join(" ")])),
-      ordered: events
-        .map((event, index) => ({ timestamp: position(event, index), index }))
-        .sort((a, b) => a.timestamp - b.timestamp),
+      ordered: marks.map((mark, index) => ({ at: mark.start, index })).sort((a, b) => a.at - b.at),
     };
-  }, [events]);
-  if (!events.length) return null;
-  const x = (time: number) =>
-    labelWidth + ((time - start) / (end - start)) * (width - labelWidth - 8);
-  const inspected = events[Math.min(hover ?? selected, events.length - 1)];
-  const inspectedIndex = Math.min(hover ?? selected, events.length - 1);
-  const timing = undated ? "event order" : `${duration(inspected.timestamp - start)} from start`;
-  function nearest(time: number) {
+  }, [marks, start, end]);
+  if (!count || !marks.length) return null;
+  function nearest(at: number) {
     let low = 0,
       high = ordered.length - 1;
     while (low < high) {
       const middle = Math.floor((low + high) / 2);
-      if (ordered[middle].timestamp < time) low = middle + 1;
+      if (ordered[middle].at < at) low = middle + 1;
       else high = middle;
     }
     const previous = Math.max(0, low - 1);
     return ordered[
-      Math.abs(ordered[previous].timestamp - time) < Math.abs(ordered[low].timestamp - time)
-        ? previous
-        : low
+      Math.abs(ordered[previous].at - at) < Math.abs(ordered[low].at - at) ? previous : low
     ].index;
   }
+  const nearSelected = marks.reduce(
+    (best, mark) => (Math.abs(mark.index - current) < Math.abs(best.index - current) ? mark : best),
+    marks[0],
+  );
+  const inspected = hover === null ? null : marks[hover];
+  const at = inspected?.start ?? (undated ? current : (event?.timestamp ?? nearSelected.start));
+  const timing = undated
+    ? "event order"
+    : `${duration((event?.timestamp ?? nearSelected.start) - start)} from start`;
+  const pointerMark = (element: SVGSVGElement, clientX: number) => {
+    const box = element.getBoundingClientRect();
+    return nearest(
+      start +
+        ((((clientX - box.left) / box.width) * width - labelWidth) / plotWidth) * (end - start),
+    );
+  };
   return (
     <div className="py-2">
       <div className="flex items-start gap-3">
@@ -94,52 +99,42 @@ export function Timeline({
           tabIndex={0}
           aria-label="Session activity timeline"
           aria-valuemin={1}
-          aria-valuemax={events.length}
-          aria-valuenow={Math.min(selected + 1, events.length)}
-          aria-valuetext={`${inspected.kind}, event ${inspected.index + 1}, ${timing}`}
+          aria-valuemax={count}
+          aria-valuenow={current + 1}
+          aria-valuetext={`${event?.kind ?? nearSelected.kind}, event ${current + 1}, ${timing}`}
           onKeyDown={(event) => {
             let next: number;
             switch (event.key) {
               case "ArrowRight":
-                next = Math.min(events.length - 1, selected + 1);
+                next = current + 1;
                 break;
               case "ArrowLeft":
-                next = Math.max(0, selected - 1);
+                next = current - 1;
+                break;
+              case "PageDown":
+                next = current + 100;
+                break;
+              case "PageUp":
+                next = current - 100;
                 break;
               case "Home":
                 next = 0;
                 break;
               case "End":
-                next = events.length - 1;
+                next = count - 1;
                 break;
               default:
                 return;
             }
             event.preventDefault();
-            onSelect(next);
+            setHover(null);
+            onSelect(Math.max(0, Math.min(count - 1, next)));
           }}
-          onPointerMove={(event) => {
-            const box = event.currentTarget.getBoundingClientRect();
-            setHover(
-              nearest(
-                start +
-                  ((((event.clientX - box.left) / box.width) * width - labelWidth) /
-                    (width - labelWidth - 8)) *
-                    (end - start),
-              ),
-            );
-          }}
+          onPointerMove={(event) => setHover(pointerMark(event.currentTarget, event.clientX))}
           onPointerLeave={() => setHover(null)}
           onClick={(event) => {
-            const box = event.currentTarget.getBoundingClientRect();
-            onSelect(
-              nearest(
-                start +
-                  ((((event.clientX - box.left) / box.width) * width - labelWidth) /
-                    (width - labelWidth - 8)) *
-                    (end - start),
-              ),
-            );
+            onSelect(marks[pointerMark(event.currentTarget, event.clientX)].index);
+            setHover(null);
           }}
         >
           {lanes.map((lane) => (
@@ -152,8 +147,8 @@ export function Timeline({
             />
           ))}
           <line
-            x1={x(undated ? inspectedIndex : inspected.timestamp)}
-            x2={x(undated ? inspectedIndex : inspected.timestamp)}
+            x1={x(at)}
+            x2={x(at)}
             y1="0"
             y2="126"
             stroke="var(--foreground)"
@@ -164,7 +159,7 @@ export function Timeline({
       </div>
       <div className="mt-2 ml-23 flex justify-between text-[11px] text-muted-foreground tabular-nums">
         <span>{undated ? "Event 1" : "0s"}</span>
-        <span>{undated ? `Event ${events.length}` : duration(end - start)}</span>
+        <span>{undated ? `Event ${count}` : duration(end - start)}</span>
       </div>
       {undated > 0 && (
         <p className="mt-3 text-xs text-muted-foreground">
@@ -173,10 +168,23 @@ export function Timeline({
         </p>
       )}
       <p className="mt-2 h-4 truncate text-[11px] text-muted-foreground">
-        {inspected.tool ?? lanes.find((lane) => lane.kind === inspected.kind)?.label} · event{" "}
-        {inspected.index + 1} · {timing}
-        {inspected.durationMs != null ? ` · ${duration(inspected.durationMs)} elapsed` : ""}
-        {inspected.failed ? " · Failed" : ""}
+        {inspected ? (
+          <>
+            {lanes.find((lane) => lane.kind === inspected.kind)?.label} ·{" "}
+            {inspected.count === 1
+              ? `event ${inspected.index + 1}`
+              : `${inspected.count} nearby events`}
+            {inspected.failures > 0 ? ` · ${inspected.failures} failed` : ""}
+          </>
+        ) : (
+          <>
+            {event?.tool ??
+              lanes.find((lane) => lane.kind === (event?.kind ?? nearSelected.kind))?.label}{" "}
+            · event {current + 1} · {timing}
+            {event?.durationMs != null ? ` · ${duration(event.durationMs)} elapsed` : ""}
+            {event?.failed ? " · Failed" : ""}
+          </>
+        )}
       </p>
     </div>
   );

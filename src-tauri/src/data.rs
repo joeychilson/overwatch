@@ -198,20 +198,30 @@ impl Default for Preferences {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct TimelineEvent {
+pub struct TimelineMark {
     pub index: u32,
     pub kind: EventKind,
-    pub timestamp: i64,
-    pub duration_ms: Option<u64>,
-    pub tool: Option<String>,
-    pub failed: Option<bool>,
+    pub start: i64,
+    pub end: i64,
+    pub count: u32,
+    pub failures: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineSummary {
+    pub marks: Vec<TimelineMark>,
+    pub count: u32,
+    pub undated: u32,
+    pub start: i64,
+    pub end: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Transcript {
     pub session: Session,
-    pub timeline: Vec<TimelineEvent>,
+    pub timeline: TimelineSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

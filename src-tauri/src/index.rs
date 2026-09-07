@@ -815,19 +815,7 @@ impl Index {
             let data = &reader.data;
             Ok(Transcript {
                 session: data.summary(),
-                timeline: data
-                    .events()
-                    .iter()
-                    .enumerate()
-                    .map(|(index, event)| TimelineEvent {
-                        index: index as u32,
-                        kind: event.kind,
-                        timestamp: event.timestamp,
-                        duration_ms: event.duration_ms,
-                        tool: event.tool.clone(),
-                        failed: event.failed,
-                    })
-                    .collect(),
+                timeline: crate::timeline::summarize(data.events()),
             })
         })
     }

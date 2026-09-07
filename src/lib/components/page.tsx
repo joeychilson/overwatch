@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactNode, KeyboardEventHandler } from "react";
 import { AlertCircle, Search } from "lucide-react";
 import { cn } from "cn";
 import { Button } from "./ui/button";
@@ -107,10 +107,12 @@ export function SearchField({
   value,
   onChange,
   placeholder,
+  onKeyDown,
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
+  onKeyDown?: KeyboardEventHandler<HTMLInputElement>;
 }) {
   return (
     <div className="relative min-w-40 flex-1">
@@ -119,6 +121,7 @@ export function SearchField({
         aria-label={placeholder}
         placeholder={placeholder}
         value={value}
+        onKeyDown={onKeyDown}
         onChange={(e) => onChange(e.target.value)}
         className="pl-9"
       />

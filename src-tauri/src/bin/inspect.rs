@@ -35,10 +35,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for session in &snapshot.sessions {
             let transcript = index.transcript(&session.id)?;
             let page = index.events(&session.id, 0, "")?;
-            if transcript.timeline.len() != page.total as usize {
+            if transcript.timeline.count as usize != page.total as usize {
                 return Err("Transcript timeline and page counts differ".into());
             }
-            events += transcript.timeline.len();
+            events += transcript.timeline.count as usize;
         }
         println!(
             "Read {} transcripts, {events} events ({:.2?})",
