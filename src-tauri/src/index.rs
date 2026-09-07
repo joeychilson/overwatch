@@ -125,7 +125,6 @@ impl Index {
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=3000;
             CREATE TABLE IF NOT EXISTS sessions(source TEXT PRIMARY KEY, agent TEXT NOT NULL, id TEXT NOT NULL, stamp TEXT NOT NULL, updated INTEGER NOT NULL, data TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS session_id ON sessions(id,updated DESC);
-            CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS accounts(agent TEXT PRIMARY KEY,root TEXT NOT NULL,data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS samples(agent TEXT NOT NULL,identity TEXT NOT NULL,bucket TEXT NOT NULL,reset INTEGER NOT NULL,minute INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(agent,identity,bucket,reset,minute));")?;
         Ok(Self {
@@ -230,16 +229,9 @@ impl Index {
                 .filter(|s| s.agent == source.source.agent)
                 .count() as u32;
         }
-        let indexed_at = db
-            .query_row("SELECT value FROM metadata WHERE key='indexed'", [], |r| {
-                r.get(0)
-            })
-            .optional()?
-            .unwrap_or(0);
         Ok(Snapshot {
             sessions,
             sources,
-            indexed_at,
             scanning: self.scanning.load(Ordering::Relaxed),
         })
     }
@@ -441,10 +433,6 @@ impl Index {
                 ],
             )?;
         }
-        tx.execute(
-            "INSERT OR REPLACE INTO metadata VALUES('indexed',?1)",
-            [chrono::Utc::now().timestamp_millis()],
-        )?;
         tx.commit()?;
         let mut invalid = self.invalid_summaries.lock()?;
         for (source, _, _) in pending.iter() {

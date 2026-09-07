@@ -142,7 +142,6 @@ export type SessionEvent = {
 export type Snapshot = {
 	sessions: Session[],
 	sources: SourceStatus[],
-	indexedAt: number,
 	scanning: boolean,
 };
 

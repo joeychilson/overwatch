@@ -102,7 +102,6 @@ fn index_survives_restart_skips_idle_writes_and_pages_full_search()
     let snapshot = index.snapshot()?;
     assert_eq!(snapshot.sessions.len(), 1);
     assert!(!index.scan()?);
-    assert_eq!(index.snapshot()?.indexed_at, snapshot.indexed_at);
     let id = &snapshot.sessions[0].id;
     let page = index.events(id, 100, "")?;
     assert_eq!(page.events.len(), 100);

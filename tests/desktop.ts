@@ -288,7 +288,6 @@ export async function desktop(
       sessions: sessions.filter((session) => session.agent === agent).length,
       issues: [],
     })),
-    indexedAt: now,
     scanning: false,
   };
   if (options.cachedSummaryIssue) {

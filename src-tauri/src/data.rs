@@ -156,7 +156,6 @@ pub struct SourceStatus {
 pub struct Snapshot {
     pub sessions: Vec<Session>,
     pub sources: Vec<SourceStatus>,
-    pub indexed_at: i64,
     pub scanning: bool,
 }
 
