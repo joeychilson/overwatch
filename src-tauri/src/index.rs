@@ -112,6 +112,11 @@ fn history_stamp(agent: Agent, path: &Path) -> Result<String> {
     }
     Ok(current)
 }
+fn split_opencode_source(source: &str) -> Result<(&str, &str)> {
+    source
+        .rsplit_once('#')
+        .ok_or_else(|| AppError::InvalidData("Invalid OpenCode source".into()))
+}
 impl Index {
     pub fn open(directory: PathBuf, sources: Vec<Source>) -> Result<Self> {
         validate_sources(&sources)?;
@@ -473,10 +478,7 @@ impl Index {
     pub fn source_path(&self, id: &str) -> Result<PathBuf> {
         let session = self.indexed_session(id)?;
         if session.agent == Agent::Opencode {
-            let (path, _) = session
-                .source_path
-                .rsplit_once('#')
-                .ok_or_else(|| AppError::InvalidData("Invalid OpenCode source".into()))?;
+            let (path, _) = split_opencode_source(&session.source_path)?;
             Ok(PathBuf::from(path))
         } else {
             Ok(PathBuf::from(session.source_path))
@@ -495,10 +497,7 @@ impl Index {
             .is_none_or(|reader| reader.source != session.source_path)
         {
             let data = if session.agent == Agent::Opencode {
-                let (path, sid) = session
-                    .source_path
-                    .rsplit_once('#')
-                    .ok_or_else(|| AppError::InvalidData("Invalid OpenCode source".into()))?;
+                let (path, sid) = split_opencode_source(&session.source_path)?;
                 ReaderData::Sqlite(Box::new(opencode::read(Path::new(path), sid, true)?))
             } else {
                 let path = Path::new(&session.source_path);
@@ -519,10 +518,7 @@ impl Index {
             match &mut reader.data {
                 ReaderData::Jsonl(cursor) => cursor.read(Path::new(&reader.source))?,
                 ReaderData::Sqlite(data) => {
-                    let (path, sid) = reader
-                        .source
-                        .rsplit_once('#')
-                        .ok_or_else(|| AppError::InvalidData("Invalid OpenCode source".into()))?;
+                    let (path, sid) = split_opencode_source(&reader.source)?;
                     **data = opencode::read(Path::new(path), sid, true)?;
                 }
             }
