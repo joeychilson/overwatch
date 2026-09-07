@@ -2,7 +2,7 @@ use crate::{
     data::*,
     error::{AppError, Result},
     opencode,
-    parse::{Accumulator, Cursor},
+    parse::{self, Accumulator, Cursor},
     settings,
 };
 use rusqlite::{Connection, OptionalExtension, params};
@@ -104,7 +104,7 @@ fn stamp(path: &Path) -> Result<String> {
     Ok(format!("{}:{modified}", meta.len()))
 }
 fn history_stamp(agent: Agent, path: &Path) -> Result<String> {
-    let mut current = stamp(path)?;
+    let mut current = format!("{}:{}", parse::VERSION, stamp(path)?);
     if agent == Agent::Grok {
         let summary = path.with_file_name("summary.json");
         if summary.try_exists()? {
@@ -290,7 +290,7 @@ impl Index {
                             for (id, updated) in database.sessions()? {
                                 let key = format!("{}#{id}", path.display());
                                 found.insert(key.clone());
-                                let stamp = updated.to_string();
+                                let stamp = format!("{}:{updated}", parse::VERSION);
                                 if stamps.get(&key) == Some(&stamp) && !invalid.contains(&key) {
                                     continue;
                                 }

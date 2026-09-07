@@ -1,5 +1,46 @@
 import { test, expect } from "@playwright/test";
-import { captureRuntimeErrors, desktop, longNames } from "./desktop";
+import { captureRuntimeErrors, desktop, longNames, sessions } from "./desktop";
+
+test("missing durations remain unknown while recorded zero durations stay visible", async ({
+  page,
+}) => {
+  await desktop(page, {
+    sessions: [
+      {
+        ...sessions[0],
+        startedAt: 0,
+        tools: [
+          { name: "unknown", calls: 1, completed: 1, failures: 0, timed: 0, durationMs: 0 },
+          { name: "instant", calls: 1, completed: 1, failures: 0, timed: 1, durationMs: 0 },
+          { name: "measured", calls: 1, completed: 1, failures: 0, timed: 1, durationMs: 600 },
+        ],
+      },
+    ],
+  });
+  await page.goto("/");
+  await expect(page.getByText("longest session", { exact: false })).toContainText(
+    "— longest session",
+  );
+  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  await page.getByRole("button", { name: sessions[0].title, exact: true }).click();
+  await expect(
+    page
+      .locator("p")
+      .filter({ hasText: /^Elapsed$/ })
+      .locator(".."),
+  ).toContainText("—");
+  await page.getByRole("button", { name: "Tool calls breakdown" }).click();
+  const tools = page.getByRole("table", { name: "Session tool activity" });
+  await expect(
+    tools.getByRole("row").filter({ hasText: "unknown" }).getByRole("cell").last(),
+  ).toHaveText("—");
+  await expect(
+    tools.getByRole("row").filter({ hasText: "instant" }).getByRole("cell").last(),
+  ).toHaveText("0 ms");
+  await expect(
+    tools.getByRole("row").filter({ hasText: "measured" }).getByRole("cell").last(),
+  ).toHaveText("600 ms");
+});
 
 test("continuous session view exposes counts, source opening, and timeline navigation", async ({
   page,

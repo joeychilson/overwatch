@@ -3,7 +3,7 @@ import { eachDayOfInterval, format, startOfWeek, subDays } from "date-fns";
 import { Tooltip } from "@base-ui/react/tooltip";
 import type { Session } from "@/lib/bindings";
 import type { aggregate } from "@/lib/usage/analytics";
-import { compact, day, duration, integer } from "@/lib/format";
+import { compact, day, duration, elapsed, integer } from "@/lib/format";
 import { ChartHoverCard } from "@/lib/components/ui/chart";
 import { Section } from "@/lib/components/page";
 
@@ -91,10 +91,10 @@ export function ActivityHeatmap({
       <p className="mt-3 text-xs text-muted-foreground">
         {compact(lifetime.total)} lifetime tokens ·{" "}
         {duration(
-          sessions.reduce(
-            (longest, session) => Math.max(longest, session.updatedAt - session.startedAt),
-            0,
-          ),
+          sessions.reduce<number | null>((longest, session) => {
+            const value = elapsed(session.startedAt, session.updatedAt);
+            return value == null ? longest : Math.max(longest ?? 0, value);
+          }, null),
         )}{" "}
         longest session
       </p>

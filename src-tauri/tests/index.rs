@@ -37,6 +37,19 @@ fn opencode_indexes_multiple_batches_and_reconciles_live_updates()
         65 * 12
     );
     assert!(!index.scan()?);
+    // Parser changes must rebuild an unchanged database's cached summaries.
+    index.db.lock().unwrap().execute_batch(
+        "UPDATE sessions SET stamp='1700000001000',data=json_set(data,'$.title','Stale summary') WHERE id='opencode:s65'",
+    )?;
+    assert!(index.scan()?);
+    assert!(
+        index
+            .snapshot()?
+            .sessions
+            .iter()
+            .all(|s| s.title != "Stale summary")
+    );
+    assert!(!index.scan()?);
     db.execute_batch(
         "UPDATE session_v2 SET title='Changed',time_updated=time_updated+1000 WHERE id='s65';
         DELETE FROM session_v2 WHERE id='s1';",
@@ -46,6 +59,59 @@ fn opencode_indexes_multiple_batches_and_reconciles_live_updates()
     assert_eq!(snapshot.sessions.len(), 64);
     assert_eq!(snapshot.sessions[0].title, "Changed");
     assert_eq!(index.transcript("opencode:s65")?.session.tokens.total(), 12);
+    assert!(!index.scan()?);
+    Ok(())
+}
+
+#[test]
+fn outdated_jsonl_summaries_rebuild_only_when_the_source_is_available()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let directory = root.path().join("history");
+    std::fs::create_dir_all(directory.join("sessions"))?;
+    let path = directory.join("sessions/test.jsonl");
+    let original = format!(
+        "{}\n",
+        json!({"type":"message","id":"user",
+        "message":{"role":"user","content":"Original title"}})
+    );
+    std::fs::write(&path, &original)?;
+    let sources = Agent::ALL
+        .into_iter()
+        .map(|agent| Source {
+            agent,
+            path: directory.to_string_lossy().into_owned(),
+            enabled: agent == Agent::Pi,
+        })
+        .collect();
+    let index = Index::open(root.path().join("index"), sources)?;
+    index.scan()?;
+    let metadata = path.metadata()?;
+    let old_stamp = format!(
+        "{}:{}",
+        metadata.len(),
+        metadata
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    );
+    index.db.lock().unwrap().execute(
+        "UPDATE sessions SET stamp=?1,data=json_set(data,'$.title','Cached title')",
+        [old_stamp],
+    )?;
+    let offline = root.path().join("offline");
+    std::fs::rename(&directory, &offline)?;
+    index.scan()?;
+    assert_eq!(index.snapshot()?.sessions[0].title, "Cached title");
+    // A restart also retains the old summary until rebuilding can succeed.
+    let sources = index.sources()?;
+    drop(index);
+    let index = Index::open(root.path().join("index"), sources)?;
+    assert_eq!(index.snapshot()?.sessions[0].title, "Cached title");
+    std::fs::rename(&offline, &directory)?;
+    assert!(index.scan()?);
+    assert_eq!(index.snapshot()?.sessions[0].title, "Original title");
+    assert_eq!(std::fs::read_to_string(path)?, original);
     assert!(!index.scan()?);
     Ok(())
 }

@@ -109,7 +109,7 @@ impl Database {
                         );
                         data.result(
                             &id,
-                            message["time"]["completed"].as_i64().unwrap_or(timestamp),
+                            message["time"]["completed"].as_i64().unwrap_or(0),
                             content(&message["output"]),
                             message["exit"].as_i64().map(|n| n != 0),
                         );
@@ -235,7 +235,7 @@ fn part(data: &mut Accumulator, id: &str, timestamp: i64, value: &Value, role: E
                 let end = value["time"]["completed"]
                     .as_i64()
                     .or(state["time"]["end"].as_i64())
-                    .unwrap_or(start);
+                    .unwrap_or(0);
                 let output = state
                     .get("content")
                     .or(state.get("output"))
@@ -252,6 +252,31 @@ mod tests {
     use super::*;
     use rusqlite::params;
     use serde_json::json;
+
+    #[test]
+    fn completed_tools_keep_missing_duration_distinct_from_recorded_zero() {
+        let start = 1_700_000_000_000i64;
+        for modern in [false, true] {
+            for end in [None, Some(start), Some(start + 400)] {
+                let mut data = Accumulator::new(Agent::Opencode, Path::new("fixture.db"), true);
+                let mut tool = json!({"type":"tool","id":"call","name":"read",
+                    "state":{"status":"completed","input":"file","output":"Read successfully"}});
+                if modern {
+                    tool["time"] = json!({"ran": start, "completed": end});
+                } else {
+                    tool["state"]["time"] = json!({"start": start, "end": end});
+                }
+                part(&mut data, "part", start, &tool, EventKind::Assistant);
+                let duration = end.map(|end| (end - start) as u64);
+                assert_eq!(data.events[0].duration_ms, duration);
+                assert_eq!(data.events[0].output.as_deref(), Some("Read successfully"));
+                let summary = data.summary();
+                assert_eq!(summary.tools[0].completed, 1);
+                assert_eq!(summary.tools[0].timed, u32::from(end.is_some()));
+                assert_eq!(summary.tools[0].duration_ms, duration.unwrap_or(0));
+            }
+        }
+    }
 
     #[test]
     fn both_database_generations_preserve_reasoning_cost_and_tool_results() -> Result<()> {
@@ -287,6 +312,15 @@ mod tests {
             assert_eq!(summary.tools[0].failures, 1);
             assert_eq!(summary.tools[0].duration_ms, 400);
             assert_eq!(result.events[0].output.as_deref(), Some("Missing file"));
+            if modern {
+                db.execute("INSERT INTO session_message VALUES('shell','session','shell',1700000000000,?1,2)",
+                    [json!({"command":"pwd","output":"/fixture","exit":0}).to_string()])?;
+                let data = database.read("session", true)?;
+                let shell = data.events.last().unwrap();
+                assert_eq!(shell.tool.as_deref(), Some("shell"));
+                assert_eq!(shell.failed, Some(false));
+                assert_eq!(shell.duration_ms, None);
+            }
             db.execute_batch(&format!("UPDATE {table} SET title='Updated';
                 INSERT INTO {table} VALUES('second','Empty session','/other/project',1700000000000,1700000001000,NULL)"))?;
             assert_eq!(database.sessions()?.len(), 2);

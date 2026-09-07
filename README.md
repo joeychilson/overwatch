@@ -90,6 +90,10 @@ After changing native commands or types, regenerate `src/lib/bindings.ts`:
 cargo run --manifest-path src-tauri/Cargo.toml --locked --bin bindings
 ```
 
+When changing normalized session data, increment `parse::VERSION` in
+`src-tauri/src/parse/mod.rs`. Scanning rebuilds outdated summaries from their
+original histories; unavailable sources retain their cached summaries.
+
 ## Build
 
 ```text

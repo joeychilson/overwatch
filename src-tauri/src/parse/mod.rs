@@ -3,6 +3,9 @@ mod codex;
 mod grok;
 mod pi;
 
+// Bump when normalized session data changes so unchanged histories are reindexed.
+pub const VERSION: u32 = 1;
+
 use crate::{data::*, error::Result};
 use serde_json::Value;
 use std::{

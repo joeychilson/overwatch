@@ -237,6 +237,7 @@ const previewTranscript: SessionEvent[] = [
 export async function desktop(
   page: Page,
   options: {
+    sessions?: Session[];
     failRefresh?: boolean;
     failSave?: boolean;
     invalidCatalog?: boolean;
@@ -290,6 +291,7 @@ export async function desktop(
     })),
     scanning: false,
   };
+  if (options.sessions) snapshot.sessions = options.sessions;
   if (options.cachedSummaryIssue) {
     snapshot.sources[0].issues = [
       "An unreadable cached session is excluded from totals: /fixtures/codex/damaged.jsonl. Rescan sources to rebuild it from the original history.",

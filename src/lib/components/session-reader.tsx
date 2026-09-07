@@ -174,7 +174,7 @@ export function SessionReader({
                     <td className="text-right tabular-nums">{integer(tool.calls)}</td>
                     <td className="text-right tabular-nums">{tool.failures || "—"}</td>
                     <td className="text-right whitespace-nowrap tabular-nums">
-                      {duration(tool.durationMs)}
+                      {duration(tool.timed > 0 ? tool.durationMs : null)}
                     </td>
                   </tr>
                 ))}
