@@ -29,6 +29,7 @@ struct Reader {
     source: String,
     stamp: String,
     data: ReaderData,
+    search: Option<(String, Vec<u32>)>,
 }
 enum ReaderData {
     Jsonl(Box<Cursor>),
@@ -441,68 +442,66 @@ impl Index {
         pending.clear();
         Ok(())
     }
-    fn indexed_session(&self, id: &str) -> Result<Session> {
-        let session: Session = {
+    fn indexed_source(&self, id: &str) -> Result<(Agent, String, String)> {
+        let (agent, source, stamp): (String, String, String) = {
             let db = self.db.lock()?;
-            let raw: String = db
-                .query_row(
-                    "SELECT data FROM sessions WHERE id=?1 ORDER BY updated DESC LIMIT 1",
-                    [id],
-                    |r| r.get(0),
-                )
-                .optional()?
-                .ok_or_else(|| AppError::NotFound("This session is no longer indexed.".into()))?;
-            serde_json::from_str(&raw)?
+            db.query_row(
+                "SELECT agent,source,stamp FROM sessions WHERE id=?1 ORDER BY updated DESC LIMIT 1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?
+            .ok_or_else(|| AppError::NotFound("This session is no longer indexed.".into()))?
         };
-        if !self
-            .sources()?
+        let agent = self
+            .sources
+            .lock()?
             .iter()
-            .any(|s| s.agent == session.agent && s.enabled)
-        {
-            return Err(AppError::NotFound("This source is disabled.".into()));
-        }
-        Ok(session)
+            .find(|s| s.source.agent.id() == agent && s.source.enabled)
+            .map(|s| s.source.agent)
+            .ok_or_else(|| AppError::NotFound("This source is disabled.".into()))?;
+        Ok((agent, source, stamp))
     }
     pub fn source_path(&self, id: &str) -> Result<PathBuf> {
-        let session = self.indexed_session(id)?;
-        if session.agent == Agent::Opencode {
-            let (path, _) = split_opencode_source(&session.source_path)?;
+        let (agent, source, _) = self.indexed_source(id)?;
+        if agent == Agent::Opencode {
+            let (path, _) = split_opencode_source(&source)?;
             Ok(PathBuf::from(path))
         } else {
-            Ok(PathBuf::from(session.source_path))
+            Ok(PathBuf::from(source))
         }
     }
-    fn with_reader<T>(&self, id: &str, read: impl FnOnce(&ReaderData) -> Result<T>) -> Result<T> {
-        let session = self.indexed_session(id)?;
+    fn with_reader<T>(&self, id: &str, read: impl FnOnce(&mut Reader) -> Result<T>) -> Result<T> {
+        let (agent, source, stamp) = self.indexed_source(id)?;
         let mut cache = self.reader.lock()?;
-        let current = if session.agent == Agent::Opencode {
-            session.updated_at.to_string()
+        let current = if agent == Agent::Opencode {
+            stamp
         } else {
-            history_stamp(session.agent, Path::new(&session.source_path))?
+            history_stamp(agent, Path::new(&source))?
         };
-        if cache
-            .as_ref()
-            .is_none_or(|reader| reader.source != session.source_path)
-        {
-            let data = if session.agent == Agent::Opencode {
-                let (path, sid) = split_opencode_source(&session.source_path)?;
+        if cache.as_ref().is_none_or(|reader| reader.source != source) {
+            let data = if agent == Agent::Opencode {
+                let (path, sid) = split_opencode_source(&source)?;
                 ReaderData::Sqlite(Box::new(opencode::read(Path::new(path), sid, true)?))
             } else {
-                let path = Path::new(&session.source_path);
-                let mut cursor = Cursor::new(session.agent, path, true);
+                let path = Path::new(&source);
+                let mut cursor = Cursor::new(agent, path, true);
                 cursor.read(path)?;
                 ReaderData::Jsonl(Box::new(cursor))
             };
             *cache = Some(Reader {
-                source: session.source_path,
+                source,
                 stamp: current.clone(),
                 data,
+                search: None,
             });
         }
         let reader = cache
             .as_mut()
             .ok_or_else(|| AppError::Internal("Transcript cache is unavailable".into()))?;
         if reader.stamp != current {
+            // Tool results and rewrites can change existing events, not just append new ones.
+            reader.search = None;
             match &mut reader.data {
                 ReaderData::Jsonl(cursor) => cursor.read(Path::new(&reader.source))?,
                 ReaderData::Sqlite(data) => {
@@ -512,10 +511,11 @@ impl Index {
             }
             reader.stamp = current;
         }
-        read(&reader.data)
+        read(reader)
     }
     pub fn transcript(&self, id: &str) -> Result<Transcript> {
-        self.with_reader(id, |data| {
+        self.with_reader(id, |reader| {
+            let data = &reader.data;
             Ok(Transcript {
                 session: data.summary(),
                 timeline: data
@@ -535,53 +535,53 @@ impl Index {
         })
     }
     pub fn events(&self, id: &str, offset: u32, search: &str) -> Result<EventPage> {
-        self.with_reader(id, |data| {
+        self.with_reader(id, |reader| {
+            let events = reader.data.events();
             let search = search.to_lowercase();
-            if search.is_empty() {
-                let total = data.events().len() as u32;
-                let offset = offset.min(total.saturating_sub(1) / 100 * 100);
-                return Ok(EventPage {
-                    events: data
-                        .events()
-                        .iter()
-                        .skip(offset as usize)
-                        .take(100)
-                        .cloned()
-                        .collect(),
-                    offset,
-                    total,
-                    matches: vec![],
-                });
+            if !search.is_empty()
+                && reader
+                    .search
+                    .as_ref()
+                    .is_none_or(|(query, _)| *query != search)
+            {
+                let matches = events
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, event)| {
+                        event.text.to_lowercase().contains(&search)
+                            || event
+                                .output
+                                .as_ref()
+                                .is_some_and(|s| s.to_lowercase().contains(&search))
+                            || event
+                                .tool
+                                .as_ref()
+                                .is_some_and(|s| s.to_lowercase().contains(&search))
+                    })
+                    .map(|(i, _)| i as u32)
+                    .collect();
+                // Retain only the current query's indices; bodies stay in the existing reader.
+                reader.search = Some((search.clone(), matches));
             }
-            let matches: Vec<u32> = data
-                .events()
-                .iter()
-                .enumerate()
-                .filter(|(_, event)| {
-                    event.text.to_lowercase().contains(&search)
-                        || event
-                            .output
-                            .as_ref()
-                            .is_some_and(|s| s.to_lowercase().contains(&search))
-                        || event
-                            .tool
-                            .as_ref()
-                            .is_some_and(|s| s.to_lowercase().contains(&search))
-                })
-                .map(|(i, _)| i as u32)
-                .collect();
-            let total = matches.len() as u32;
+            let matches = reader
+                .search
+                .as_ref()
+                .filter(|_| !search.is_empty())
+                .map(|(_, matches)| matches);
+            let total = matches.map_or(events.len(), Vec::len) as u32;
             let offset = offset.min(total.saturating_sub(1) / 100 * 100);
-            let page_matches: Vec<u32> = matches
-                .iter()
-                .skip(offset as usize)
-                .take(100)
-                .copied()
-                .collect();
-            let events = page_matches
-                .iter()
-                .map(|i| data.events()[*i as usize].clone())
-                .collect();
+            let end = (offset.saturating_add(100)).min(total) as usize;
+            let page_matches = matches
+                .map(|matches| matches[offset as usize..end].to_vec())
+                .unwrap_or_default();
+            let events = if matches.is_some() {
+                page_matches
+                    .iter()
+                    .map(|i| events[*i as usize].clone())
+                    .collect()
+            } else {
+                events[offset as usize..end].to_vec()
+            };
             Ok(EventPage {
                 events,
                 offset,
@@ -591,7 +591,8 @@ impl Index {
         })
     }
     pub fn export_session(&self, id: &str) -> Result<String> {
-        self.with_reader(id, |data| {
+        self.with_reader(id, |reader| {
+            let data = &reader.data;
             Ok(serde_json::to_string_pretty(
                 &serde_json::json!({"session": data.summary(), "events": data.events()}),
             )?)

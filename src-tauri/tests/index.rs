@@ -111,6 +111,39 @@ fn index_survives_restart_skips_idle_writes_and_pages_full_search()
     let result = index.events(id, 0, "Record 244")?;
     assert_eq!(result.matches, vec![244]);
     assert_eq!(index.transcript(id)?.timeline.len(), 245);
+    assert_eq!(
+        index.events(id, u32::MAX, "RECORD")?.matches,
+        (200..245).collect::<Vec<_>>()
+    );
+    assert_eq!(index.events(id, u32::MAX, "record")?.offset, 200);
+    assert_eq!(index.events(id, 0, "absent")?.total, 0);
+    assert_eq!(index.events(id, 0, "")?.total, 245);
+    // The active reader sees appends without waiting for the background index scan.
+    writeln!(
+        file,
+        "{}",
+        json!({"id":"tool","type":"message","timestamp":1700000300000i64,"message":{"role":"assistant","content":[{"type":"toolCall","id":"call","name":"shell","arguments":"pwd"}]}})
+    )?;
+    assert_eq!(index.events(id, 0, "absent")?.total, 0);
+    assert_eq!(index.events(id, 0, "SHELL")?.matches, vec![245]);
+    assert_eq!(index.events(id, 0, "résultat")?.total, 0);
+    // A result changes an existing event without increasing the event count.
+    writeln!(
+        file,
+        "{}",
+        json!({"id":"result","type":"message","timestamp":1700000301000i64,"message":{"role":"toolResult","toolCallId":"call","content":"RÉSULTAT"}})
+    )?;
+    assert_eq!(index.events(id, 0, "résultat")?.matches, vec![245]);
+    assert_eq!(index.events(id, 0, "")?.total, 246);
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n",
+            json!({"id":"replacement","type":"message","message":{"role":"user","content":"Replacement"}})
+        ),
+    )?;
+    assert_eq!(index.events(id, 0, "résultat")?.total, 0);
+    assert_eq!(index.events(id, 0, "replacement")?.matches, vec![0]);
     let missing = directory.join("hidden-sessions");
     std::fs::rename(directory.join("sessions"), &missing)?;
     assert!(index.scan()?);
