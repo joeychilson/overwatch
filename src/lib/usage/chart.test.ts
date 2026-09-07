@@ -52,7 +52,6 @@ describe("usage chart", () => {
           expect(chart.points.reduce((sum, point) => sum + point.total, 0)).toBe(
             metric === "tokens" ? stats.total : stats.cost,
           );
-          expect(chart.points.reduce((sum, point) => sum + point.unpriced, 0)).toBe(710);
           for (const field of [
             "recordedCost",
             "estimatedCost",

@@ -20,7 +20,6 @@ function reading(
     },
     samples: [],
     state: "collecting",
-    percentPerHour: null,
     exhaustionAt: null,
     atReset: null,
     ...overrides,

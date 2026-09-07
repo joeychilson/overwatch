@@ -192,7 +192,6 @@ describe("quota forecasts", () => {
     const points = [sample(now - 1800000, 10), sample(now - 900000, 20), sample(now, 30)];
     const [forecast] = forecasts(points, [], now);
     expect(forecast.state).toBe("projected");
-    expect(forecast.percentPerHour).toBeCloseTo(40);
     expect(forecast.atReset).toBeCloseTo(70);
     expect(forecasts(points.slice(1), [], now)[0].state).toBe("collecting");
     expect(forecasts(points, [], now + 900001)[0].state).toBe("stale");

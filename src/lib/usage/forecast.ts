@@ -6,7 +6,6 @@ export type Forecast = {
   latest: Reading;
   samples: Reading[];
   state: "stale" | "expired" | "collecting" | "steady" | "projected";
-  percentPerHour: number | null;
   exhaustionAt: number | null;
   atReset: number | null;
 };
@@ -98,7 +97,6 @@ export function forecasts(
         latest,
         samples: points,
         state: "collecting",
-        percentPerHour: null,
         exhaustionAt: null,
         atReset: null,
       };
@@ -120,7 +118,6 @@ export function forecasts(
       return {
         ...result,
         state: "projected",
-        percentPerHour: slope,
         exhaustionAt:
           latest.timestamp + (Math.max(0, 100 - latest.usedPercent) / slope) * 3_600_000,
         atReset: Math.min(

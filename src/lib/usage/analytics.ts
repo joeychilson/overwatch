@@ -73,7 +73,6 @@ export type ModelUsage = {
   identity: ModelIdentity;
   tokens: number;
   cost: number;
-  unpriced: number;
   unpricedCalls: number;
   recordedCost: number;
   estimatedCost: number;
@@ -127,7 +126,6 @@ export function aggregate(sessions: Session[], models: Model[], start = 0, end =
         identity: identity(usage.model, usage.provider),
         tokens: 0,
         cost: 0,
-        unpriced: 0,
         unpricedCalls: 0,
         pricedCalls: 0,
         recordedCost: 0,
@@ -136,7 +134,6 @@ export function aggregate(sessions: Session[], models: Model[], start = 0, end =
       };
       row.tokens += count;
       row.cost += price ?? 0;
-      row.unpriced += price == null ? count : 0;
       row.calls++;
       const recorded = usage.reportedCost != null ? (price ?? 0) : 0;
       const estimated = usage.reportedCost == null ? (price ?? 0) : 0;

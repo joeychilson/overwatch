@@ -61,7 +61,6 @@ export function usageChart(
       date: string;
       label: string;
       total: number;
-      unpriced: number;
       unpricedCalls: number;
       pricedCalls: number;
       recordedCost: number;
@@ -76,7 +75,6 @@ export function usageChart(
       date: format(date, "MMM d"),
       label: format(date, "MMM d, yyyy"),
       total: 0,
-      unpriced: 0,
       unpricedCalls: 0,
       pricedCalls: 0,
       recordedCost: 0,
@@ -85,7 +83,6 @@ export function usageChart(
     };
     if (weekly) bucket.label = `${bucket.date} – ${format(date, "MMM d, yyyy")}`;
     bucket.total += (metric === "tokens" ? point?.total : point?.cost) ?? 0;
-    bucket.unpriced += point?.unpriced ?? 0;
     bucket.unpricedCalls += point?.unpricedCalls ?? 0;
     bucket.pricedCalls += point?.pricedCalls ?? 0;
     bucket.recordedCost += point?.recordedCost ?? 0;

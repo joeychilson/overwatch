@@ -15,7 +15,6 @@ export type UsageGroup = {
   unpricedCalls: number;
   recordedCost: number;
   estimatedCost: number;
-  unpriced: number;
 };
 
 export function usageGroups(rows: ModelUsage[], grouping: "model" | "provider"): UsageGroup[] {
@@ -40,7 +39,6 @@ export function usageGroups(rows: ModelUsage[], grouping: "model" | "provider"):
       unpricedCalls: 0,
       recordedCost: 0,
       estimatedCost: 0,
-      unpriced: 0,
     };
     group.offerings.push(row);
     for (const field of [
@@ -51,7 +49,6 @@ export function usageGroups(rows: ModelUsage[], grouping: "model" | "provider"):
       "unpricedCalls",
       "recordedCost",
       "estimatedCost",
-      "unpriced",
     ] as const)
       group[field] += row[field];
     groups.set(key, group);

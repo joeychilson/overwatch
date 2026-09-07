@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { agents } from "@/lib/agents";
 import { commands, type Agent, type Session } from "@/lib/bindings";
 import { AppFailure, failure, native } from "@/lib/errors";
-import { forecasts, type Forecast } from "@/lib/usage/forecast";
+import { forecasts, reachesLimitBeforeReset, type Forecast } from "@/lib/usage/forecast";
 import { accountOptions } from "@/lib/queries";
 import { money, relative } from "@/lib/format";
 import { cn } from "cn";
@@ -314,10 +314,7 @@ function Allowance({ forecast, now }: { forecast: Forecast; now: number }) {
   const expired = state === "expired";
   const stale = state === "stale";
   const remaining = Math.max(0, 100 - latest.usedPercent);
-  const runsOut =
-    state === "projected" &&
-    forecast.exhaustionAt != null &&
-    forecast.exhaustionAt < (latest.resetsAt ?? Infinity);
+  const runsOut = reachesLimitBeforeReset(forecast);
   const pace = expired
     ? "Refresh to read the new allowance window."
     : stale
