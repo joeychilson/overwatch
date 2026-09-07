@@ -10,7 +10,7 @@ import { compact, integer, money } from "@/lib/format";
 import { rowButton, whenPresent } from "@/lib/components/restore-focus";
 import { offeringProviderNames, usageGroups, type UsageGroup } from "@/lib/usage/groups";
 import { DataTable, type DataColumn } from "@/lib/components/data-table";
-import { ErrorNotice, FilterSelect, Metric, Section } from "@/lib/components/page";
+import { ErrorNotice, PageHeader, FilterSelect, Metric, Section } from "@/lib/components/page";
 import { ProviderMark } from "@/lib/components/provider-mark";
 import { SessionTable } from "@/lib/components/session-table";
 import { Button } from "@/lib/components/ui/button";
@@ -168,17 +168,17 @@ export function ModelDetail({
               Models
             </Button>
           </nav>
-          <div className="mb-7 flex items-start gap-4">
-            <ProviderMark provider={group.offerings[0].identity.owner} className="mt-1 size-10" />
-            <div className="min-w-0 flex-1">
-              <h1 className="text-2xl leading-snug font-semibold tracking-tight">{group.label}</h1>
-              <p className="mt-2 text-xs text-muted-foreground">
+          <PageHeader
+            icon={<ProviderMark provider={group.offerings[0].identity.owner} className="size-10" />}
+            title={group.label}
+            description={
+              <>
                 {offeringProviderNames(group).join(" · ")}
                 <span className="mx-2">/</span>
                 {new Date(start).toLocaleDateString()} – {new Date(end - 1).toLocaleDateString()}
-              </p>
-            </div>
-          </div>
+              </>
+            }
+          />
         </>
       )}
       {reading && (

@@ -1,3 +1,4 @@
+import { Layers3 } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, type RefObject } from "react";
 import { useWorkspaceField } from "@/lib/hooks/use-workspace";
 import type { HistoryScope } from "@/lib/bindings";
@@ -8,7 +9,7 @@ import { rowButton, whenPresent } from "@/lib/components/restore-focus";
 import { offeringProviderNames, usageGroups, type UsageGroup } from "@/lib/usage/groups";
 import { DataTable, type DataColumn } from "@/lib/components/data-table";
 import { ModelDetail } from "@/lib/components/model-detail";
-import { Empty, PageTitle, SearchField } from "@/lib/components/page";
+import { Empty, PageHeader, SearchField } from "@/lib/components/page";
 import { ProviderMark } from "@/lib/components/provider-mark";
 import { Button } from "@/lib/components/ui/button";
 
@@ -185,7 +186,8 @@ export function ModelUsage({
   return (
     <>
       <div ref={listRoot} hidden={!!detail}>
-        <PageTitle
+        <PageHeader
+          icon={<Layers3 />}
           title="Models"
           description={`${integer(groups.length)} models across your coding agents.`}
           action={

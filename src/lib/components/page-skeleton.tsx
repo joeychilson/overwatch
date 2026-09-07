@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { PageHeaderLayout } from "./page";
 import { Skeleton } from "./ui/skeleton";
 
 function Loading({ label, children }: { label: string; children: ReactNode }) {
@@ -9,15 +10,15 @@ function Loading({ label, children }: { label: string; children: ReactNode }) {
     </div>
   );
 }
-function Heading({ description = false }: { description?: boolean }) {
+function Heading({ action = true }: { action?: boolean }) {
   return (
-    <div className="mb-8 flex min-h-9 items-start justify-between gap-6">
-      <div className="min-w-0 flex-1">
-        <Skeleton className="h-7.5 w-36 max-w-full rounded-md" />
-        {description && <Skeleton className="mt-2 h-4.5 w-72 max-w-full rounded" />}
-      </div>
-      <Skeleton className="h-9 w-24 shrink-0 rounded-lg" />
-    </div>
+    <PageHeaderLayout
+      icon={<Skeleton className="size-10 rounded-lg" />}
+      action={action ? <Skeleton className="h-9 w-24 rounded-lg" /> : undefined}
+    >
+      <Skeleton className="h-7.5 w-48 max-w-full rounded-md" />
+      <Skeleton className="mt-1 h-4.5 w-72 max-w-full rounded" />
+    </PageHeaderLayout>
   );
 }
 function Metrics({ reader = false }: { reader?: boolean }) {
@@ -121,14 +122,7 @@ export function MessagesSkeleton() {
 export function ReaderSkeleton() {
   return (
     <Loading label="Loading session">
-      <div className="mb-7 flex items-start gap-4">
-        <Skeleton className="mt-1 size-10 shrink-0 rounded-lg" />
-        <div className="min-w-0 flex-1">
-          <Skeleton className="h-8 w-3/4 rounded-md" />
-          <Skeleton className="mt-2 h-4 w-1/2 rounded" />
-        </div>
-        <Skeleton className="h-8 w-24 rounded-lg" />
-      </div>
+      <Heading />
       <div className="mb-7">
         <Metrics reader />
       </div>
@@ -185,7 +179,7 @@ export function PageSkeleton({
       label={`Loading ${page === "catalog" ? "pricing catalog" : page === "model-detail" ? "model details" : page}`}
     >
       {back && <Skeleton className="mb-6 h-9 w-32 rounded-lg" />}
-      <Heading description={["sessions", "models", "connections", "catalog"].includes(page)} />
+      <Heading action={page !== "model-detail"} />
       {page === "sessions" || page === "models" || page === "catalog" ? (
         <>
           <div className="mb-5 flex gap-3">

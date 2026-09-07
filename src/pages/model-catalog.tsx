@@ -1,6 +1,16 @@
 import { useDeferredValue, useMemo, useState, type RefObject } from "react";
 import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Brain, Check, Eye, GitCompareArrows, RefreshCw, Star, Wrench, X } from "lucide-react";
+import {
+  BookOpen,
+  Brain,
+  Check,
+  Eye,
+  GitCompareArrows,
+  RefreshCw,
+  Star,
+  Wrench,
+  X,
+} from "lucide-react";
 import { emptyModels, getCatalog, type Catalog, type Model } from "@/lib/models/catalog";
 import { tokenCost } from "@/lib/usage/costs";
 import { compact, integer, money } from "@/lib/format";
@@ -10,7 +20,7 @@ import { Button } from "@/lib/components/ui/button";
 import { Checkbox } from "@/lib/components/ui/checkbox";
 import { Input } from "@/lib/components/ui/input";
 import { DataTable, type DataColumn } from "@/lib/components/data-table";
-import { FilterSelect, Modal, PageTitle, SearchField } from "@/lib/components/page";
+import { FilterSelect, Modal, PageHeader, SearchField } from "@/lib/components/page";
 
 function Capabilities({ model }: { model: Model }) {
   return (
@@ -282,7 +292,8 @@ export default function Models({
   ];
   return (
     <>
-      <PageTitle
+      <PageHeader
+        icon={<BookOpen />}
         title="Pricing catalog"
         description="Compare provider offerings, published prices, and capabilities."
         action={

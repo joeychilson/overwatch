@@ -7,25 +7,58 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
 import { failure } from "@/lib/errors";
 
-export function PageTitle({
+export function PageHeaderLayout({
+  icon,
+  children,
+  action,
+}: {
+  icon: ReactNode;
+  children: ReactNode;
+  action?: ReactNode;
+}) {
+  return (
+    <header
+      data-slot="page-header"
+      className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6"
+    >
+      <div className="flex min-w-0 flex-1 items-center gap-4">
+        <div
+          aria-hidden="true"
+          className="inline-flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted [&>svg]:size-5"
+        >
+          {icon}
+        </div>
+        <div className="min-w-0 flex-1">{children}</div>
+      </div>
+      {action && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 pl-14 sm:pl-0">{action}</div>
+      )}
+    </header>
+  );
+}
+
+export function PageHeader({
+  icon,
   title,
   description,
   action,
 }: {
-  title: string;
+  icon: ReactNode;
+  title: ReactNode;
   description?: ReactNode;
   action?: ReactNode;
 }) {
   return (
-    <div className="mb-8 flex flex-wrap items-start justify-between gap-6">
-      <div>
-        <h1 className="text-2xl leading-tight font-semibold tracking-tight">{title}</h1>
-        {description && (
-          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{description}</p>
-        )}
-      </div>
-      {action && <div className="flex items-center gap-2">{action}</div>}
-    </div>
+    <PageHeaderLayout icon={icon} action={action}>
+      <h1 className="text-2xl leading-tight font-semibold tracking-tight wrap-break-word">
+        {title}
+      </h1>
+      {description && (
+        <div className="mt-1 text-xs leading-relaxed wrap-break-word text-muted-foreground">
+          {description}
+        </div>
+      )}
+    </PageHeaderLayout>
   );
 }
 export function Section({

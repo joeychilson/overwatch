@@ -21,7 +21,7 @@ import { useWorkspace } from "@/lib/hooks/use-workspace";
 import { useModelName } from "@/lib/hooks/use-model-name";
 import { Button } from "./ui/button";
 import { ReaderSkeleton, MessagesSkeleton } from "./page-skeleton";
-import { ErrorNotice, Metric, SearchField } from "./page";
+import { ErrorNotice, Metric, PageHeader, SearchField } from "./page";
 import { AgentMark } from "./agent-mark";
 import { Timeline } from "./timeline";
 import { SessionMetric } from "./session-metric";
@@ -101,41 +101,42 @@ export function SessionReader({
       {transcript.error && (
         <ErrorNotice error={transcript.error} retry={() => void transcript.refetch()} />
       )}
-      <div className="mb-7 flex items-start gap-4">
-        <AgentMark agent={session.agent} className="mt-1 size-10" />
-        <div className="min-w-0 flex-1">
-          <h1 className="text-2xl leading-snug font-semibold tracking-tight">
-            <button
-              type="button"
-              className="block w-full rounded text-left"
-              title={session.title}
-              aria-expanded={titleExpanded}
-              onClick={() => setTitleExpanded(!titleExpanded)}
-            >
-              <span className={titleExpanded ? "wrap-break-word" : "line-clamp-2 wrap-break-word"}>
-                {session.title}
-              </span>
-            </button>
-          </h1>
-          <p className="mt-2 truncate text-xs text-muted-foreground" title={session.cwd}>
+      <PageHeader
+        icon={<AgentMark agent={session.agent} className="size-10" />}
+        title={
+          <button
+            type="button"
+            className="block w-full rounded text-left"
+            title={session.title}
+            aria-expanded={titleExpanded}
+            onClick={() => setTitleExpanded(!titleExpanded)}
+          >
+            <span className={titleExpanded ? "wrap-break-word" : "line-clamp-2 wrap-break-word"}>
+              {session.title}
+            </span>
+          </button>
+        }
+        description={
+          <span title={session.cwd}>
             {session.project} <span className="mx-2">/</span>{" "}
             <span title={session.model}>{modelName(session.model)}</span>{" "}
             <span className="mx-2">/</span>
             {hasTimestamp(session.startedAt)
               ? format(session.startedAt, "MMM d, yyyy · HH:mm xxx")
               : "Time unknown"}
-          </p>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={exportData.isPending}
-          onClick={() => exportData.mutate()}
-        >
-          <Download />
-          Export JSON
-        </Button>
-      </div>
+          </span>
+        }
+        action={
+          <Button
+            variant="outline"
+            disabled={exportData.isPending}
+            onClick={() => exportData.mutate()}
+          >
+            <Download />
+            Export JSON
+          </Button>
+        }
+      />
       <div className="mb-7 grid grid-cols-3 gap-x-6 gap-y-5 min-[1200px]:grid-cols-6">
         <Metric label="Elapsed" value={duration(elapsed(session.startedAt, session.updatedAt))} />
         <Metric label="Turns" value={integer(session.turns)} />

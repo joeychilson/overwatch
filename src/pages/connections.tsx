@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { open } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, RefreshCw } from "lucide-react";
+import { Plug2, FolderOpen, RefreshCw } from "lucide-react";
 import { agents } from "@/lib/agents";
 import { commands, type Source, type SourcePreview, type SourceStatus } from "@/lib/bindings";
 import { native } from "@/lib/errors";
@@ -12,7 +12,7 @@ import { AgentMark } from "@/lib/components/agent-mark";
 import { Button } from "@/lib/components/ui/button";
 import { Input } from "@/lib/components/ui/input";
 import { Switch } from "@/lib/components/ui/switch";
-import { ErrorNotice, Modal, PageTitle, Section } from "@/lib/components/page";
+import { ErrorNotice, Modal, PageHeader, Section } from "@/lib/components/page";
 
 function SourceEditor({
   status,
@@ -159,7 +159,8 @@ export default function Connections({
   });
   return (
     <>
-      <PageTitle
+      <PageHeader
+        icon={<Plug2 />}
         title="Connections"
         description="Local history folders are detected automatically. Review their status below."
         action={

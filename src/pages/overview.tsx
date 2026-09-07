@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { addDays, eachDayOfInterval, formatDistanceStrict, startOfDay, subDays } from "date-fns";
-import { ArrowDownToLine, ArrowUpRight, TriangleAlert } from "lucide-react";
+import { ChartNoAxesCombined, ArrowDownToLine, ArrowUpRight, TriangleAlert } from "lucide-react";
 import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { accountOptions } from "@/lib/queries";
 import { subscriptionForecasts, subscriptionWarnings } from "@/lib/usage/forecast";
@@ -23,7 +23,7 @@ import { Button } from "@/lib/components/ui/button";
 import { UsageOverTime } from "@/lib/components/usage-over-time";
 import { ActivityHeatmap } from "@/lib/components/activity-heatmap";
 import { RankedList } from "@/lib/components/ranked-list";
-import { Metric, PageTitle, Section, Empty } from "@/lib/components/page";
+import { Metric, PageHeader, Section, Empty } from "@/lib/components/page";
 import { SessionTable } from "@/lib/components/session-table";
 
 type Props = {
@@ -113,8 +113,10 @@ export default function Overview({
   const cacheInput = stats.tokens.input + stats.tokens.cacheRead + stats.tokens.cacheWrite;
   return (
     <>
-      <PageTitle
+      <PageHeader
+        icon={<ChartNoAxesCombined />}
         title="Overview"
+        description="Explore activity, token usage, and costs across your coding agents."
         action={
           <Button
             variant="outline"

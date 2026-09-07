@@ -1,6 +1,13 @@
 import { lazy, Suspense, useLayoutEffect, useRef, type RefObject } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowDownToLine, ArrowLeft, ChevronLeft, ChevronRight, X } from "lucide-react";
+import {
+  MessageSquare,
+  ArrowDownToLine,
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
+  X,
+} from "lucide-react";
 import { startOfDay, subDays } from "date-fns";
 import { useWorkspaceField, useWorkspace } from "@/lib/hooks/use-workspace";
 import { useSessionSearch } from "@/lib/hooks/use-session-search";
@@ -15,7 +22,7 @@ import { useModelName } from "@/lib/hooks/use-model-name";
 import { useSessionFeed } from "@/lib/hooks/use-session-feed";
 import { ReaderSkeleton, TableSkeleton } from "@/lib/components/page-skeleton";
 import { Button } from "@/lib/components/ui/button";
-import { ErrorNotice, FilterSelect, PageTitle, SearchField } from "@/lib/components/page";
+import { ErrorNotice, FilterSelect, PageHeader, SearchField } from "@/lib/components/page";
 import { rowButton, whenPresent } from "@/lib/components/restore-focus";
 import { SessionTable } from "@/lib/components/session-table";
 import { ErrorBoundary } from "@/lib/components/error-boundary";
@@ -196,7 +203,8 @@ export default function Sessions({
         </>
       )}
       <div ref={list} hidden={!!selected}>
-        <PageTitle
+        <PageHeader
+          icon={<MessageSquare />}
           title="Sessions"
           description={`${integer(page.total)} conversations across your local history.`}
           action={

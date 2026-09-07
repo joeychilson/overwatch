@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format, formatDistanceStrict, isSameDay } from "date-fns";
-import { KeyRound, RefreshCw, Trash2 } from "lucide-react";
+import { CreditCard, KeyRound, RefreshCw, Trash2 } from "lucide-react";
 import { Line, LineChart, XAxis, YAxis, CartesianGrid, ReferenceLine, Tooltip } from "recharts";
 import { toast } from "sonner";
 import { agents } from "@/lib/agents";
@@ -21,7 +21,7 @@ import { Input } from "@/lib/components/ui/input";
 import { AllowancesSkeleton } from "@/lib/components/page-skeleton";
 import { ChartContainer, ChartHoverCard } from "@/lib/components/ui/chart";
 import { AgentMark } from "@/lib/components/agent-mark";
-import { Empty, ErrorNotice, Modal, PageTitle } from "@/lib/components/page";
+import { Empty, ErrorNotice, Modal, PageHeader } from "@/lib/components/page";
 
 const providers: Agent[] = ["codex", "claude", "opencode", "grok", "antigravity"];
 function TokenForm({ agent, close }: { agent: Agent; close: () => void }) {
@@ -103,8 +103,10 @@ export default function Subscriptions({ now }: { now: number }) {
   const busy = refresh.isPending || remove.isPending;
   return (
     <>
-      <PageTitle
+      <PageHeader
+        icon={<CreditCard />}
         title="Subscriptions"
+        description="Track usage and limits across your AI subscriptions."
         action={
           <Button variant="outline" disabled={busy} onClick={() => refresh.mutate(agent)}>
             <RefreshCw className={refresh.isPending ? "animate-spin" : ""} />
