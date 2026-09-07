@@ -195,3 +195,22 @@ for (const missing of ["all", "mixed"] as const) {
     await page.locator('[data-slot="page-scroll"]').evaluate((element) => (element.scrollTop = 0));
   });
 }
+
+test("the session list defers loading the transcript renderer until a session opens", async ({
+  page,
+}) => {
+  const readerRequests: string[] = [];
+  page.on("request", (request) => {
+    if (/\/session-reader(?:\.tsx|-[^/]+\.js)(?:\?|$)/.test(request.url()))
+      readerRequests.push(request.url());
+  });
+  await desktop(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  const session = page.getByRole("button", { name: sessions[0].title, exact: true }).first();
+  await expect(session).toBeVisible();
+  expect(readerRequests).toEqual([]);
+  await session.click();
+  await expect(page.getByRole("region", { name: "Session conversation" })).toBeVisible();
+  expect(readerRequests.length).toBeGreaterThan(0);
+});

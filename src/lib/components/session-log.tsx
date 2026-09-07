@@ -309,28 +309,30 @@ function ToolCall({
         </span>
         <ChevronRight className="size-3.5 shrink-0 text-muted-foreground group-open:rotate-90" />
       </summary>
-      <div className="space-y-4 px-4 pt-1 pb-4">
-        <div>
-          <div className="mb-2 flex items-center justify-between">
-            <p className="text-[11px] text-muted-foreground">INPUT</p>
-            <CopyPayload text={event.text} label="Copy tool input" />
-          </div>
-          <pre className="mt-2 max-h-80 overflow-auto rounded-lg bg-background/70 p-3 font-mono text-xs leading-relaxed wrap-break-word whitespace-pre-wrap">
-            <Highlight text={event.text} search={search} />
-          </pre>
-        </div>
-        {event.output != null && (
+      {expanded && (
+        <div className="space-y-4 px-4 pt-1 pb-4">
           <div>
             <div className="mb-2 flex items-center justify-between">
-              <p className="text-[11px] text-muted-foreground">RESULT</p>
-              <CopyPayload text={event.output} label="Copy tool result" />
+              <p className="text-[11px] text-muted-foreground">INPUT</p>
+              <CopyPayload text={event.text} label="Copy tool input" />
             </div>
-            <pre className="mt-2 max-h-96 overflow-auto rounded-lg bg-background/70 p-3 font-mono text-xs leading-relaxed wrap-break-word whitespace-pre-wrap">
-              <Highlight text={event.output} search={search} />
+            <pre className="mt-2 max-h-80 overflow-auto rounded-lg bg-background/70 p-3 font-mono text-xs leading-relaxed wrap-break-word whitespace-pre-wrap">
+              <Highlight text={event.text} search={search} />
             </pre>
           </div>
-        )}
-      </div>
+          {event.output != null && (
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-[11px] text-muted-foreground">RESULT</p>
+                <CopyPayload text={event.output} label="Copy tool result" />
+              </div>
+              <pre className="mt-2 max-h-96 overflow-auto rounded-lg bg-background/70 p-3 font-mono text-xs leading-relaxed wrap-break-word whitespace-pre-wrap">
+                <Highlight text={event.output} search={search} />
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
     </details>
   );
 }
@@ -373,19 +375,17 @@ function Event({
           )}
           {event.kind === "thinking" ? "Recorded thinking summary" : "Context compacted"}
         </summary>
-        <div className="mt-3">
-          <Markdown text={event.text || "No summary was recorded."} search={search} />
-        </div>
+        {expanded && (
+          <div className="mt-3">
+            <Markdown text={event.text || "No summary was recorded."} search={search} />
+          </div>
+        )}
       </details>
     );
   return <Message event={event} search={search} />;
 }
 
 function Message({ event, search }: { event: SessionEvent; search: string }) {
-  const copy = useMutation({
-    mutationFn: () => navigator.clipboard.writeText(event.text),
-    onSuccess: () => toast.success("Copied to clipboard"),
-  });
   return (
     <article className={event.kind === "user" ? "rounded-xl bg-card p-5" : "px-5 py-4"}>
       <div className="mb-3 flex items-center gap-2">
@@ -403,28 +403,34 @@ function Message({ event, search }: { event: SessionEvent; search: string }) {
         >
           {hasTimestamp(event.timestamp) ? format(event.timestamp, "HH:mm:ss") : "Time unknown"}
         </time>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className="ml-auto"
-          aria-label="Copy message"
-          onClick={() => copy.mutate()}
-        >
-          <Copy />
-        </Button>
+        <CopyPayload text={event.text} label="Copy message" className="ml-auto" />
       </div>
       <Markdown text={event.text} search={search} />
     </article>
   );
 }
 
-function CopyPayload({ text, label }: { text: string; label: string }) {
+function CopyPayload({
+  text,
+  label,
+  className,
+}: {
+  text: string;
+  label: string;
+  className?: string;
+}) {
   const copy = useMutation({
     mutationFn: () => navigator.clipboard.writeText(text),
     onSuccess: () => toast.success("Copied to clipboard"),
   });
   return (
-    <Button variant="ghost" size="icon-xs" aria-label={label} onClick={() => copy.mutate()}>
+    <Button
+      variant="ghost"
+      size="icon-xs"
+      className={className}
+      aria-label={label}
+      onClick={() => copy.mutate()}
+    >
       <Copy />
     </Button>
   );

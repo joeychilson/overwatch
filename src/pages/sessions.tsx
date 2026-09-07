@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type RefObject } from "react";
+import { lazy, Suspense, useLayoutEffect, useRef, type RefObject } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowDownToLine, ArrowLeft, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { startOfDay, subDays } from "date-fns";
@@ -13,13 +13,16 @@ import { native } from "@/lib/errors";
 import { SessionFilters } from "@/lib/components/session-filters";
 import { useModelName } from "@/lib/hooks/use-model-name";
 import { useSessionFeed } from "@/lib/hooks/use-session-feed";
-import { TableSkeleton } from "@/lib/components/page-skeleton";
+import { ReaderSkeleton, TableSkeleton } from "@/lib/components/page-skeleton";
 import { Button } from "@/lib/components/ui/button";
 import { ErrorNotice, FilterSelect, PageTitle, SearchField } from "@/lib/components/page";
 import { rowButton, whenPresent } from "@/lib/components/restore-focus";
 import { SessionTable } from "@/lib/components/session-table";
-import { SessionReader } from "@/lib/components/session-reader";
 import { ErrorBoundary } from "@/lib/components/error-boundary";
+
+const SessionReader = lazy(() =>
+  import("@/lib/components/session-reader").then((module) => ({ default: module.SessionReader })),
+);
 
 export default function Sessions({
   scope,
@@ -186,7 +189,9 @@ export default function Sessions({
             <ErrorNotice error={navigation.error} retry={() => void navigation.refetch()} />
           )}
           <ErrorBoundary key={selected}>
-            <SessionReader id={selected} scrollRef={scrollRef} />
+            <Suspense fallback={<ReaderSkeleton />}>
+              <SessionReader id={selected} scrollRef={scrollRef} />
+            </Suspense>
           </ErrorBoundary>
         </>
       )}

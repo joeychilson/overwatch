@@ -16,6 +16,7 @@ test("collapsed tool calls expose meaningful inputs and errors, and expand from 
 }) => {
   const log = page.getByRole("region", { name: "Session conversation" });
   await expect(log.locator("details[open]")).toHaveCount(0);
+  await expect(log.locator("pre")).toHaveCount(0);
   const command = log.locator('[data-event-index="0"]');
   await expect(command.locator("summary")).toContainText(
     "rg 'useQuery|useVirtualizer' src --glob '*.tsx'",
@@ -44,6 +45,7 @@ test("collapsed tool calls expose meaningful inputs and errors, and expand from 
   await page.keyboard.press("Enter");
   await expect(command.locator("details")).not.toHaveAttribute("open");
   await expect(preview).toBeVisible();
+  await expect(command.locator("pre")).toHaveCount(0);
   await page.setViewportSize({ width: 900, height: 640 });
   await expect(failed).toContainText("Error: Cannot find module");
   const nameBox = await command
