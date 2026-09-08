@@ -19,7 +19,7 @@ import { useNativeEvents } from "@/lib/hooks/use-native-events";
 import { useNow } from "@/lib/hooks/use-now";
 import { useMediaQuery } from "@/lib/hooks/use-media-query";
 import { WorkspaceContext, useWorkspaceOwner } from "@/lib/hooks/use-workspace";
-import { initialWorkspace, type Route } from "@/lib/workspace-state";
+import { initialWorkspace, type Route } from "@/lib/workspace";
 import { navigation, type View } from "@/lib/navigation";
 import { cn } from "cn";
 import { AppHeader } from "@/lib/components/app-header";
@@ -55,13 +55,11 @@ export default function App() {
     change((previous) => ({
       ...previous,
       agent,
-      sessions: { ...previous.sessions, offset: 0 },
     }));
   const setProject = (project: string) =>
     change((previous) => ({
       ...previous,
       project,
-      sessions: { ...previous.sessions, offset: 0 },
     }));
   const setRange = (range: string) =>
     change((previous) => ({ ...previous, range: range as typeof previous.range }));

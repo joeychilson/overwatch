@@ -84,7 +84,7 @@ export function ModelUsage({
   }, [groups, search, controls.ranking, controls.rankingDescending]);
   const openModel = (group: UsageGroup) => {
     listPosition.current = scrollRef.current?.scrollTop ?? 0;
-    setControls((previous) => ({ ...previous, provider: "all", agent: "all", offset: 0 }));
+    setControls((previous) => ({ ...previous, provider: "all", agent: "all" }));
     setSelected(group);
     scrollRef.current?.scrollTo({ top: 0 });
   };

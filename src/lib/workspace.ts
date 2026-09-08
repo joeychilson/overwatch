@@ -5,19 +5,21 @@ const text = z.string().max(4096);
 const index = z.number().int().min(0).max(1_000_000_000);
 const agent = z.enum(agentIds);
 const sort = z.enum(["title", "project", "tokens", "duration", "responses", "updatedAt"]);
+
 const scope = z.object({
   agent: agent.nullable(),
   project: text.nullable(),
-  start: z.number().finite().nullable(),
-  end: z.number().finite().nullable(),
+  start: z.number().nullable(),
+  end: z.number().nullable(),
   offerings: z.array(text).max(10000),
 });
+
 const sessionQuery = z.object({
   scope,
   search: text,
   searchModels: z.array(text).max(10000),
-  activityAfter: z.number().finite().nullable(),
-  activityBefore: z.number().finite().nullable(),
+  activityAfter: z.number().nullable(),
+  activityBefore: z.number().nullable(),
   day: text.nullable(),
   tool: text.nullable(),
   model: text.nullable(),
@@ -28,6 +30,7 @@ const sessionQuery = z.object({
   sort,
   descending: z.boolean(),
 });
+
 export const routeSchema = z.discriminatedUnion("view", [
   z.object({ view: z.literal("overview") }),
   z.object({ view: z.literal("connections") }),
@@ -47,7 +50,9 @@ export const routeSchema = z.discriminatedUnion("view", [
     search: text.optional(),
   }),
 ]);
+
 export type Route = z.infer<typeof routeSchema>;
+
 export const workspaceSchema = z.object({
   version: z.literal(1),
   route: routeSchema,
@@ -57,7 +62,6 @@ export const workspaceSchema = z.object({
   sessions: z.object({
     search: text,
     range: z.enum(["all", "7", "30", "90"]),
-    offset: index,
     sort,
     descending: z.boolean(),
     model: text.nullable(),
@@ -72,14 +76,15 @@ export const workspaceSchema = z.object({
     rankingDescending: z.boolean().default(true),
     provider: text,
     agent: z.union([agent, z.literal("all")]),
-    offset: index,
     sort,
     descending: z.boolean(),
   }),
   scroll: index,
   readers: z.array(z.object({ id: text, index })).max(20),
 });
+
 export type WorkspaceState = z.infer<typeof workspaceSchema>;
+
 export const initialWorkspace: WorkspaceState = {
   version: 1,
   route: { view: "overview" },
@@ -89,7 +94,6 @@ export const initialWorkspace: WorkspaceState = {
   sessions: {
     search: "",
     range: "all",
-    offset: 0,
     sort: "updatedAt",
     descending: true,
     model: null,
@@ -104,17 +108,19 @@ export const initialWorkspace: WorkspaceState = {
     rankingDescending: true,
     provider: "all",
     agent: "all",
-    offset: 0,
     sort: "updatedAt",
     descending: true,
   },
   scroll: 0,
   readers: [],
 };
+
 export const workspaceKey = "overwatch.workspace.v1";
+
 export function readWorkspace(value: unknown): WorkspaceState {
   return workspaceSchema.safeParse(value).data ?? structuredClone(initialWorkspace);
 }
+
 export function loadWorkspace(): WorkspaceState {
   try {
     return readWorkspace(JSON.parse(localStorage.getItem(workspaceKey) ?? "null"));

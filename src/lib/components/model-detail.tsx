@@ -49,15 +49,12 @@ export function ModelDetail({
   const sessionPosition = useRef(0);
   const restoreSession = useRef<string | undefined>(undefined);
   const [controls, setControls] = useWorkspaceField("models");
-  const { agent, offset, sort, descending } = controls;
+  const { agent, sort, descending } = controls;
   const provider = group.offerings.some((offering) => offering.provider === controls.provider)
     ? controls.provider
     : "all";
-  const setProvider = (provider: string) =>
-    setControls((previous) => ({ ...previous, provider, offset: 0 }));
-  const setAgent = (agent: Agent | "all") =>
-    setControls((previous) => ({ ...previous, agent, offset: 0 }));
-  const setOffset = (offset: number) => setControls((previous) => ({ ...previous, offset }));
+  const setProvider = (provider: string) => setControls((previous) => ({ ...previous, provider }));
+  const setAgent = (agent: Agent | "all") => setControls((previous) => ({ ...previous, agent }));
   const setSort = (sort: SessionQuery["sort"]) =>
     setControls((previous) => ({ ...previous, sort }));
   const setDescending = (descending: boolean) =>
@@ -72,7 +69,7 @@ export function ModelDetail({
       .map((offering) => offering.key),
   });
   const { stats } = useUsage(selectedScope);
-  const query = sessionQuery(selectedScope, { usageOnly: true, offset, sort, descending });
+  const query = sessionQuery(selectedScope, { usageOnly: true, sort, descending });
   const page = useSessionFeed(query);
   const providers = [
     ...new Map(
@@ -225,10 +222,7 @@ export function ModelDetail({
           <FilterSelect
             label="Model provider filter"
             value={provider}
-            onChange={(value) => {
-              setProvider(value);
-              setOffset(0);
-            }}
+            onChange={setProvider}
             options={[
               { value: "all", label: "All providers" },
               ...providers.map(([value, label]) => ({ value, label })),
@@ -237,10 +231,7 @@ export function ModelDetail({
           <FilterSelect
             label="Model agent filter"
             value={agent}
-            onChange={(value) => {
-              setAgent(value);
-              setOffset(0);
-            }}
+            onChange={setAgent}
             options={[
               { value: "all", label: "All agents" },
               ...(scope.agent ? [scope.agent] : agentIds).map((value) => ({
@@ -293,7 +284,6 @@ export function ModelDetail({
               onSort={(sort, descending) => {
                 setSort(sort);
                 setDescending(descending);
-                setOffset(0);
               }}
               usage={page.usage}
               label="Model contributing sessions"

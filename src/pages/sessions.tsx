@@ -58,11 +58,10 @@ export default function Sessions({
 }) {
   const [controls, setControls] = useWorkspaceField("sessions");
   const { restore } = useWorkspace();
-  const { search, range, offset, sort, descending, model, tool, failedOnly } = controls;
+  const { search, range, sort, descending, model, tool, failedOnly } = controls;
   const setSearch = (search: string) => setControls((previous) => ({ ...previous, search }));
   const setRange = (range: string) =>
     setControls((previous) => ({ ...previous, range: range as typeof previous.range }));
-  const setOffset = (offset: number) => setControls((previous) => ({ ...previous, offset }));
   const setSort = (sort: SessionQuery["sort"]) =>
     setControls((previous) => ({ ...previous, sort }));
   const setDescending = (descending: boolean) =>
@@ -89,7 +88,6 @@ export default function Sessions({
     tool: activeTool,
     model,
     failedOnly,
-    offset,
     sort,
     descending,
   });
@@ -221,19 +219,13 @@ export default function Sessions({
         <div className="mb-5 flex flex-wrap gap-3">
           <SearchField
             value={search}
-            onChange={(value) => {
-              setSearch(value);
-              setOffset(0);
-            }}
+            onChange={setSearch}
             placeholder="Search sessions, projects, or models…"
           />
           <FilterSelect
             label="Session date range"
             value={range}
-            onChange={(value) => {
-              setRange(value);
-              setOffset(0);
-            }}
+            onChange={setRange}
             options={[
               { value: "all", label: "Any last activity" },
               { value: "7", label: "Active in last 7 days" },
@@ -250,7 +242,6 @@ export default function Sessions({
               setModel(filters.model);
               setTool(filters.tool);
               setFailedOnly(filters.failedOnly);
-              setOffset(0);
               if (selectedTool) clearTool();
             }}
           />
@@ -261,10 +252,7 @@ export default function Sessions({
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => {
-                  clearDay();
-                  setOffset(0);
-                }}
+                onClick={clearDay}
                 aria-label="Clear day filter"
                 title="Sessions with usage or a start on this local day"
               >
@@ -276,10 +264,7 @@ export default function Sessions({
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => {
-                  setModel(null);
-                  setOffset(0);
-                }}
+                onClick={() => setModel(null)}
                 aria-label="Clear model filter"
               >
                 {modelName(model)}
@@ -294,7 +279,6 @@ export default function Sessions({
                 onClick={() => {
                   clearTool();
                   setTool(null);
-                  setOffset(0);
                 }}
                 aria-label="Clear tool filter"
               >
@@ -306,10 +290,7 @@ export default function Sessions({
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => {
-                  setFailedOnly(false);
-                  setOffset(0);
-                }}
+                onClick={() => setFailedOnly(false)}
                 aria-label="Clear failure filter"
               >
                 Failed tool calls
@@ -333,7 +314,6 @@ export default function Sessions({
               onSort={(sort, descending) => {
                 setSort(sort);
                 setDescending(descending);
-                setOffset(0);
               }}
               sessions={filtered}
               active={!selected}

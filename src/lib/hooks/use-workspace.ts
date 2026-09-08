@@ -9,12 +9,7 @@ import {
   type RefObject,
   type SetStateAction,
 } from "react";
-import {
-  loadWorkspace,
-  readWorkspace,
-  workspaceKey,
-  type WorkspaceState,
-} from "@/lib/workspace-state";
+import { loadWorkspace, readWorkspace, workspaceKey, type WorkspaceState } from "@/lib/workspace";
 
 type Change = (update: (previous: WorkspaceState) => WorkspaceState, push?: boolean) => void;
 export type Workspace = {

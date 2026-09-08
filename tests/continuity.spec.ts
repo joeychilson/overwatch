@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { desktop, sessions } from "./desktop";
-import { initialWorkspace, workspaceKey } from "../src/lib/workspace-state";
+import { initialWorkspace, workspaceKey } from "../src/lib/workspace";
 const history = Array.from({ length: 123 }, (_, index) => ({
   ...sessions[index % sessions.length],
   id: `restore-${index}`,
