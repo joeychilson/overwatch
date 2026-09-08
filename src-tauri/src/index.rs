@@ -104,7 +104,16 @@ fn stamp(path: &Path) -> Result<String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| AppError::InvalidData("Source timestamp precedes the Unix epoch".into()))?
         .as_nanos();
-    Ok(format!("{}:{modified}", meta.len()))
+    let stamp = format!("{}:{modified}", meta.len());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // Atomic replacements and restored files can preserve length and mtime.
+        // Include identity so neither the index nor an open reader stays stale.
+        Ok(format!("{stamp}:{}:{}", meta.dev(), meta.ino()))
+    }
+    #[cfg(not(unix))]
+    Ok(stamp)
 }
 fn history_stamp(agent: Agent, path: &Path) -> Result<String> {
     let mut current = format!("{}:{}", parse::VERSION, stamp(path)?);

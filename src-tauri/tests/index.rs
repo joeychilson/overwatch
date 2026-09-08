@@ -46,6 +46,50 @@ fn duplicate_sessions_use_the_same_copy_for_queries_reading_and_export()
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn replaced_files_with_preserved_size_and_timestamp_refresh_the_index_and_reader()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let directory = root.path().join("history");
+    std::fs::create_dir_all(directory.join("sessions"))?;
+    let path = directory.join("sessions/session.jsonl");
+    let log = |text: &str| {
+        format!(
+            "{}\n",
+            json!({"type":"message","id":"user",
+        "timestamp":1700000000000i64,"message":{"role":"user","content":text}})
+        )
+    };
+    std::fs::write(&path, log("Before"))?;
+    let sources = Agent::ALL
+        .into_iter()
+        .map(|agent| Source {
+            agent,
+            path: directory.to_string_lossy().into_owned(),
+            enabled: agent == Agent::Pi,
+        })
+        .collect();
+    let index = Index::open(root.path().join("index"), sources)?;
+    index.scan()?;
+    let id = index.snapshot()?.sessions[0].id.clone();
+    assert_eq!(index.events(&id, 0, "Before")?.total, 1);
+    let previous = path.metadata()?;
+    let replacement = directory.join("replacement");
+    let mut file = std::fs::File::create(&replacement)?;
+    file.write_all(log("After!").as_bytes())?;
+    file.set_times(std::fs::FileTimes::new().set_modified(previous.modified()?))?;
+    std::fs::rename(replacement, &path)?;
+    assert_eq!(path.metadata()?.len(), previous.len());
+    assert_eq!(path.metadata()?.modified()?, previous.modified()?);
+    assert_eq!(index.events(&id, 0, "Before")?.total, 0);
+    assert_eq!(index.events(&id, 0, "After!")?.total, 1);
+    assert!(index.scan_paths(&[path].into())?);
+    assert_eq!(index.snapshot()?.sessions[0].title, "After!");
+    assert!(!index.scan()?);
+    Ok(())
+}
+
 #[test]
 fn opencode_indexes_multiple_batches_and_reconciles_live_updates()
 -> Result<(), Box<dyn std::error::Error>> {
