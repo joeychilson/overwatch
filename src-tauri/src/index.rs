@@ -330,7 +330,7 @@ impl Index {
         let mut sources = self.sources.lock()?.clone();
         let db = self.db.lock()?;
         let mut query =
-            db.prepare("SELECT source,agent,data FROM sessions ORDER BY updated DESC")?;
+            db.prepare("SELECT source,agent,data FROM sessions ORDER BY updated DESC,source")?;
         let mut sessions = Vec::new();
         let mut seen = HashSet::new();
         for row in query.query_map([], |row| {
@@ -741,7 +741,7 @@ impl Index {
         let (agent, source, stamp): (String, String, String) = {
             let db = self.db.lock()?;
             db.query_row(
-                "SELECT agent,source,stamp FROM sessions WHERE id=?1 ORDER BY updated DESC LIMIT 1",
+                "SELECT agent,source,stamp FROM sessions WHERE id=?1 ORDER BY updated DESC,source LIMIT 1",
                 [id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )

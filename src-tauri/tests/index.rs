@@ -6,6 +6,47 @@ use serde_json::json;
 use std::io::Write;
 
 #[test]
+fn duplicate_sessions_use_the_same_copy_for_queries_reading_and_export()
+-> Result<(), Box<dyn std::error::Error>> {
+    use overwatch_lib::queries::{self, SessionQuery};
+
+    let root = tempfile::tempdir()?;
+    let directory = root.path().join("history");
+    std::fs::create_dir_all(directory.join("sessions"))?;
+    let sources = Agent::ALL
+        .into_iter()
+        .map(|agent| Source {
+            agent,
+            path: directory.to_string_lossy().into_owned(),
+            enabled: agent == Agent::Pi,
+        })
+        .collect();
+    let index = Index::open(root.path().join("index"), sources)?;
+    // Index the lexically later copy first to expose insertion-order tie breaks.
+    for name in ["z", "a"] {
+        let mut file = std::fs::File::create(directory.join(format!("sessions/{name}.jsonl")))?;
+        writeln!(file, "{}", json!({"type":"session","id":"duplicate"}))?;
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"message","id":"user","timestamp":1700000000000i64,
+            "message":{"role":"user","content":name}})
+        )?;
+        index.scan()?;
+    }
+    let page = queries::sessions(&index, &SessionQuery::default())?;
+    assert_eq!(page.total, 1);
+    assert_eq!(page.sessions[0].title, "a");
+    assert_eq!(index.snapshot()?.sessions[0].title, "a");
+    assert_eq!(index.transcript("pi:duplicate")?.session.title, "a");
+    assert_eq!(index.events("pi:duplicate", 0, "")?.events[0].text, "a");
+    assert!(index.source_path("pi:duplicate")?.ends_with("a.jsonl"));
+    let export: serde_json::Value = serde_json::from_str(&index.export_session("pi:duplicate")?)?;
+    assert_eq!(export["session"]["title"], "a");
+    Ok(())
+}
+
+#[test]
 fn opencode_indexes_multiple_batches_and_reconciles_live_updates()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
