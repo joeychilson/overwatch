@@ -49,8 +49,13 @@ pub(crate) fn stored(index: &Index, compact: bool) -> CatalogPayload {
             "catalog/full"
         };
         let cached = settings::read::<CatalogPayload>(&*index.db.lock()?, key)?;
-        if cached.is_some() {
-            return Ok(cached);
+        if let Some(payload) = cached {
+            // Validate the embedded catalog, not just its envelope. Native usage
+            // queries and the frontend must use the same offline fallback if the
+            // stored prices are damaged.
+            projection::pricing(&serde_json::from_str(&payload.json)?)
+                .map_err(|error| AppError::InvalidData(error.into()))?;
+            return Ok(Some(payload));
         }
         // Migrate the old file once. Future starts read only the compact SQLite value.
         match std::fs::read(index.directory.join("catalog.json")) {
@@ -170,6 +175,18 @@ mod tests {
         let fallback = stored(&index, true);
         assert!(matches!(fallback.source, CatalogSource::Bundled));
         assert!(fallback.warning.is_some());
+        for json in [
+            "invalid".to_string(),
+            json!({"lab":{"name":"Lab","models":{"broken":{"id":"broken","name":"Broken","cost":{"input":-1}}}}}).to_string(),
+        ] {
+            let damaged = CatalogPayload { json, ..payload.clone() };
+            settings::write(&*index.db.lock()?, "catalog/pricing", &damaged)?;
+            let fallback = stored(&index, true);
+            assert!(matches!(fallback.source, CatalogSource::Bundled));
+            assert!(fallback.warning.is_some());
+            assert_eq!(fallback.json, bundled(true, None).json);
+            assert!(crate::queries::usage(&index, &Default::default()).is_ok());
+        }
         Ok(())
     }
 }

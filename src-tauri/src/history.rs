@@ -36,18 +36,17 @@ pub fn initialize(db: &mut Connection) -> Result<Vec<String>> {
             DELETE FROM history_tools WHERE source=OLD.source;
             DELETE FROM history_limits WHERE source=OLD.source;
         END;")?;
-    if settings::read::<u32>(db, "history/schema")? == Some(1) {
-        let mut query = db.prepare(
-            "SELECT source FROM sessions WHERE source NOT IN (SELECT source FROM history_rows)",
-        )?;
-        return Ok(query
-            .query_map([], |row| row.get(0))?
-            .collect::<std::result::Result<_, _>>()?);
-    }
+    let current = settings::read::<u32>(db, "history/schema")? == Some(1);
     let tx = db.transaction()?;
     let mut invalid = Vec::new();
     {
-        let mut query = tx.prepare("SELECT source,data FROM sessions")?;
+        // Missing derived rows can be repaired from cached summaries even when
+        // the original source is offline. Only undecodable summaries need a scan.
+        let mut query = tx.prepare(if current {
+            "SELECT source,data FROM sessions WHERE source NOT IN (SELECT source FROM history_rows)"
+        } else {
+            "SELECT source,data FROM sessions"
+        })?;
         for row in query.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })? {
@@ -58,7 +57,9 @@ pub fn initialize(db: &mut Connection) -> Result<Vec<String>> {
             }
         }
     }
-    settings::write(&tx, "history/schema", &1)?;
+    if !current {
+        settings::write(&tx, "history/schema", &1)?;
+    }
     tx.commit()?;
     Ok(invalid)
 }
@@ -175,6 +176,13 @@ mod tests {
         )?;
         db.execute("INSERT INTO sessions VALUES('broken','invalid')", [])?;
         assert_eq!(initialize(&mut db)?, ["broken"]);
+        db.execute("DELETE FROM history_rows WHERE source='source'", [])?;
+        assert_eq!(initialize(&mut db)?, ["broken"]);
+        assert_eq!(
+            db.query_row("SELECT COUNT(*) FROM history_rows", [], |row| row
+                .get::<_, u32>(0))?,
+            1
+        );
         let light: Session =
             serde_json::from_str(&db.query_row("SELECT data FROM history_rows", [], |row| {
                 row.get::<_, String>(0)
