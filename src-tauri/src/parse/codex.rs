@@ -35,10 +35,10 @@ impl State {
                 }
             }
             "token_usage_record" => {
-                if !self.precise {
-                    data.clear_legacy_usage();
-                    self.precise = true;
-                }
+                // Precise records precede their legacy token_count notifications.
+                // Earlier legacy responses belong to the history before the format
+                // transition and must survive when a session resumes after an upgrade.
+                self.precise = true;
                 data.usage(
                     format!("response:{}", payload["response_id"].as_str().unwrap_or(id)),
                     Usage {

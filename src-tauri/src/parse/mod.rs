@@ -4,7 +4,7 @@ mod grok;
 mod pi;
 
 // Bump when normalized session data changes so unchanged histories are reindexed.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 use crate::{data::*, error::Result};
 use serde_json::Value;
@@ -202,9 +202,6 @@ impl Accumulator {
         if usage.tokens.total() > 0 || usage.reported_cost.is_some() {
             self.usage.insert(key, usage);
         }
-    }
-    pub fn clear_legacy_usage(&mut self) {
-        self.usage.retain(|key, _| !key.starts_with("legacy:"));
     }
     pub fn stream(
         &mut self,

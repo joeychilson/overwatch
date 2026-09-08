@@ -12,7 +12,7 @@ fn log(agent: Agent, records: &[Value]) -> Result<(tempfile::NamedTempFile, Curs
     Ok((file, cursor))
 }
 #[test]
-fn codex_precise_records_replace_legacy_and_deduplicate_response_ids() -> Result<()> {
+fn codex_precise_records_preserve_earlier_usage_and_deduplicate_response_ids() -> Result<()> {
     let (_, cursor) = log(
         Agent::Codex,
         &[
@@ -20,13 +20,14 @@ fn codex_precise_records_replace_legacy_and_deduplicate_response_ids() -> Result
             json!({"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000},"last_token_usage":{"input_tokens":1000}}}}),
             json!({"type":"token_usage_record","payload":{"response_id":"r","usage":{"input_tokens":80,"cached_input_tokens":30,"output_tokens":20,"reasoning_output_tokens":6}}}),
             json!({"type":"token_usage_record","payload":{"response_id":"r","usage":{"input_tokens":80,"cached_input_tokens":30,"output_tokens":20,"reasoning_output_tokens":6}}}),
+            json!({"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":80,"cached_input_tokens":30,"output_tokens":20},"last_token_usage":{"input_tokens":80,"cached_input_tokens":30,"output_tokens":20}}}}),
         ],
     )?;
     let summary = cursor.summary();
-    assert_eq!(summary.tokens.total(), 100);
-    assert_eq!(summary.tokens.input, 50);
+    assert_eq!(summary.tokens.total(), 1100);
+    assert_eq!(summary.tokens.input, 1050);
     assert_eq!(summary.tokens.reasoning, 6);
-    assert_eq!(summary.usage.len(), 1);
+    assert_eq!(summary.usage.len(), 2);
     // Missing dates remain explicitly unknown; usage is still retained.
     assert_eq!(summary.usage[0].timestamp, 0);
     Ok(())
