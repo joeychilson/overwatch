@@ -112,7 +112,7 @@ pub struct ToolUsage {
 
 // Canonical sessions are chosen among enabled sources BEFORE any user filters.
 // Tie-breaking by source makes pagination stable even when copies have equal dates.
-const CANONICAL:&str = "WITH enabled AS (SELECT value AS agent FROM json_each(?1)), canonical AS MATERIALIZED (
+const CANONICAL:&str = "WITH enabled AS (SELECT value AS agent FROM json_each(?1)), canonical AS NOT MATERIALIZED (
  SELECT r.* FROM history_rows r JOIN enabled e ON e.agent=r.agent
  WHERE NOT EXISTS(SELECT 1 FROM history_rows newer JOIN enabled en ON en.agent=newer.agent
  WHERE newer.id=r.id AND (newer.updated>r.updated OR (newer.updated=r.updated AND newer.source<r.source))))";
@@ -171,7 +171,7 @@ fn enabled(index: &Index) -> Result<String> {
             .collect::<Vec<_>>(),
     )?)
 }
-fn session_sql(query: &SessionQuery) -> String {
+fn session_order(query: &SessionQuery) -> String {
     let order = match query.sort {
         SessionSort::Title => "title COLLATE NOCASE",
         SessionSort::Project => "project COLLATE NOCASE",
@@ -186,6 +186,12 @@ fn session_sql(query: &SessionQuery) -> String {
         SessionSort::Responses => "usage_calls",
         SessionSort::UpdatedAt => "updated",
     };
+    format!(
+        "{order} {} NULLS LAST,id,source",
+        if query.descending { "DESC" } else { "ASC" }
+    )
+}
+fn session_sql(query: &SessionQuery) -> String {
     let usage_tokens = if query.usage_only && matches!(query.sort, SessionSort::Tokens) {
         format!(
             "(SELECT COALESCE(SUM(u.input+u.output+u.cache_read+u.cache_write),0) FROM history_usage u WHERE u.source=r.source AND {USAGE})"
@@ -210,8 +216,7 @@ fn session_sql(query: &SessionQuery) -> String {
       AND (json_extract(?4,'$.tool') IS NULL OR EXISTS(SELECT 1 FROM history_tools t WHERE t.source=r.source AND t.name=json_extract(?4,'$.tool')))
       AND (NOT json_extract(?4,'$.failedOnly') OR EXISTS(SELECT 1 FROM history_tools t WHERE t.source=r.source AND t.failures>0 AND (json_extract(?4,'$.tool') IS NULL OR t.name=json_extract(?4,'$.tool'))))
       AND (json_extract(?4,'$.model') IS NULL OR EXISTS(SELECT 1 FROM history_usage u WHERE u.source=r.source AND u.model=json_extract(?4,'$.model')))
-      AND (NOT json_extract(?4,'$.usageOnly') OR EXISTS(SELECT 1 FROM history_usage u WHERE u.source=r.source AND {USAGE})))
-      , ordered AS (SELECT *, ROW_NUMBER() OVER(ORDER BY {order} {} NULLS LAST,id,source)-1 AS position FROM filtered)", if query.descending {"DESC"}else{"ASC"})
+      AND (NOT json_extract(?4,'$.usageOnly') OR EXISTS(SELECT 1 FROM history_usage u WHERE u.source=r.source AND {USAGE})))")
 }
 
 pub fn sessions(index: &Index, query: &SessionQuery) -> Result<SessionPage> {
@@ -230,7 +235,8 @@ pub fn sessions(index: &Index, query: &SessionQuery) -> Result<SessionPage> {
     let limit = query.limit.clamp(1, 100);
     let offset = query.offset.min(total.saturating_sub(1) / limit * limit);
     let mut statement = db.prepare(&format!(
-        "{sql} SELECT data,source FROM ordered ORDER BY position LIMIT ?5 OFFSET ?6"
+        "{sql} SELECT data,source FROM filtered ORDER BY {} LIMIT ?5 OFFSET ?6",
+        session_order(query)
     ))?;
     let mut sessions = Vec::new();
     let mut usage = HashMap::new();
@@ -253,7 +259,7 @@ pub fn sessions(index: &Index, query: &SessionQuery) -> Result<SessionPage> {
     })
 }
 fn usage_summary(db: &Connection, source: &str, scope: &str) -> Result<UsageSummary> {
-    let mut statement=db.prepare(&format!("SELECT u.model,SUM(u.input),SUM(u.output),SUM(u.cache_read),SUM(u.cache_write),SUM(u.reasoning),COUNT(*) FROM history_usage u WHERE source=?1 AND {USAGE} GROUP BY model"))?;
+    let mut statement=db.prepare_cached(&format!("SELECT u.model,SUM(u.input),SUM(u.output),SUM(u.cache_read),SUM(u.cache_write),SUM(u.reasoning),COUNT(*) FROM history_usage u WHERE source=?1 AND {USAGE} GROUP BY model"))?;
     let mut summary = UsageSummary::default();
     for row in statement.query_map(params![source, scope], |row| {
         Ok((
@@ -276,7 +282,11 @@ pub fn navigation(index: &Index, query: &SessionQuery, id: &str) -> Result<Sessi
     let scope = serde_json::to_string(&query.scope)?;
     let raw = serde_json::to_string(query)?;
     let search = query.search.to_lowercase();
-    let sql = session_sql(query);
+    let sql = format!(
+        "{}, ordered AS (SELECT id,ROW_NUMBER() OVER(ORDER BY {})-1 AS position FROM filtered)",
+        session_sql(query),
+        session_order(query)
+    );
     Ok(db.query_row(
         &format!(
             "{sql} SELECT
@@ -309,22 +319,30 @@ pub fn status(
     )?;
     let db = index.db.lock()?;
     for source in &mut sources {
-        source.sessions = db.query_row(
-            &format!("{CANONICAL} SELECT COUNT(*) FROM canonical WHERE agent=?2"),
-            params![agents, source.source.agent.id()],
-            |row| row.get(0),
-        )?;
+        source.sessions = 0;
     }
-    let (session_count, longest_session) = db.query_row(
-        &format!("{CANONICAL} SELECT COUNT(*),MAX(elapsed) FROM canonical"),
-        [&agents],
-        |row| {
-            Ok((
-                row.get(0)?,
-                row.get::<_, Option<i64>>(1)?.map(|value| value as u64),
-            ))
-        },
-    )?;
+    let mut session_count = 0;
+    let mut longest_session = None;
+    let mut counts = db.prepare(&format!(
+        "{CANONICAL} SELECT agent,COUNT(*),MAX(elapsed) FROM canonical GROUP BY agent"
+    ))?;
+    for row in counts.query_map([&agents], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, u32>(1)?,
+            row.get::<_, Option<i64>>(2)?.map(|value| value as u64),
+        ))
+    })? {
+        let (agent, count, longest) = row?;
+        session_count += count;
+        longest_session = longest_session.max(longest);
+        if let Some(source) = sources
+            .iter_mut()
+            .find(|source| source.source.agent.id() == agent)
+        {
+            source.sessions = count;
+        }
+    }
     let projects=db.prepare(&format!("{CANONICAL} SELECT cwd,MIN(project) FROM canonical WHERE cwd<>'' GROUP BY cwd ORDER BY MIN(project) COLLATE NOCASE,cwd"))?.query_map([&agents],|row|Ok((row.get(0)?,row.get(1)?)))?.collect::<std::result::Result<_,_>>()?;
     let offerings=db.prepare(&format!("{CANONICAL} SELECT DISTINCT u.provider||'/'||u.model FROM history_usage u JOIN canonical r ON r.source=u.source ORDER BY 1"))?.query_map([&agents],|row|row.get(0))?.collect::<std::result::Result<_,_>>()?;
     Ok(HistoryStatus {
@@ -605,7 +623,10 @@ pub fn export_sessions(index: &Index, query: &SessionQuery) -> Result<String> {
     let db = index.db.lock()?;
     prepare_calendar(&db)?;
     let sql = session_sql(query);
-    let mut statement = db.prepare(&format!("{sql} SELECT data FROM ordered ORDER BY position"))?;
+    let mut statement = db.prepare(&format!(
+        "{sql} SELECT data FROM filtered ORDER BY {}",
+        session_order(query)
+    ))?;
     let mut content = String::from(
         "\"Session\",\"Agent\",\"Project\",\"Model\",\"Tokens\",\"Uncached input\",\"Cached input\",\"Cache writes\",\"Output\",\"Reasoning (included in output)\",\"Started\",\"Updated\",\"Elapsed ms\"",
     );
@@ -734,46 +755,6 @@ mod tests {
         Ok(())
     }
     #[test]
-    #[ignore = "manual large-history query benchmark"]
-    fn profile_snapshot_queries() -> Result<()> {
-        let (_root, index) = fixture()?;
-        let mut expected = 0;
-        for i in 0..5000 {
-            let mut session = sample(&format!("bench-{i}"), 1_735_689_600_000 + i * 1000);
-            session.usage = (0..if i == 0 { 25000 } else { 40 })
-                .map(|turn| Usage {
-                    timestamp: 1_735_689_600_000 + (i * 37 % 365) * 86_400_000 + turn * 1000,
-                    model: "priced".into(),
-                    provider: "lab".into(),
-                    tokens: Tokens {
-                        input: 100,
-                        output: 20,
-                        cache_read: 50,
-                        cache_write: 10,
-                        reasoning: 0,
-                    },
-                    reported_cost: if turn % 2 == 0 { Some(0.001) } else { None },
-                })
-                .collect();
-            expected += session.usage.len();
-            insert(&index, &session.id, &session)?;
-        }
-        for _ in 0..3 {
-            let start = std::time::Instant::now();
-            let page = sessions(&index, &SessionQuery::default())?;
-            eprintln!("session query: {:?}, {} rows", start.elapsed(), page.total);
-            let start = std::time::Instant::now();
-            let report = usage(&index, &HistoryScope::default())?;
-            eprintln!(
-                "usage query: {:?}, {} responses",
-                start.elapsed(),
-                report.totals.calls
-            );
-            assert_eq!(report.totals.calls as usize, expected);
-        }
-        Ok(())
-    }
-    #[test]
     fn calendar_function_matches_local_dates_across_boundaries() -> Result<()> {
         let db = Connection::open_in_memory()?;
         prepare_calendar(&db)?;
@@ -869,6 +850,17 @@ mod tests {
         insert(&index, "new-copy", &duplicate)?;
         let first = sessions(&index, &SessionQuery::default())?;
         assert_eq!(first.total, 120);
+        let status = index.history_status()?;
+        assert_eq!(status.session_count, 120);
+        assert_eq!(status.longest_session, Some(1999));
+        assert_eq!(
+            status
+                .sources
+                .iter()
+                .map(|source| source.sessions)
+                .sum::<u32>(),
+            120
+        );
         assert_eq!(first.sessions.len(), 50);
         assert_eq!(first.sessions[0].id, "000");
         assert!(
@@ -905,6 +897,10 @@ mod tests {
             .enabled = false;
         index.set_sources(config)?;
         assert_eq!(sessions(&index, &SessionQuery::default())?.total, 0);
+        let status = index.history_status()?;
+        assert_eq!(status.session_count, 0);
+        assert_eq!(status.longest_session, None);
+        assert!(status.sources.iter().all(|source| source.sessions == 0));
         Ok(())
     }
     #[test]
