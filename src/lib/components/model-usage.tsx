@@ -163,16 +163,20 @@ export function ModelUsage({
       accessorFn: (row) => knownCost(row) ?? -1,
       width: 130,
       cell: ({ row }) => (
-        <span
+        <div
           title={
             row.original.unpricedCalls
-              ? `${integer(row.original.unpricedCalls)} responses unpriced; partial cost coverage, known subtotal`
+              ? `${integer(row.original.unpricedCalls)} responses unpriced; ${row.original.pricedCalls ? "partial cost coverage, known subtotal" : "cost unavailable"}`
               : "Recorded costs and catalog estimates"
           }
         >
           {money(knownCost(row.original))}
-          {row.original.unpricedCalls > 0 && row.original.pricedCalls > 0 ? " *" : ""}
-        </span>
+          {row.original.unpricedCalls > 0 && (
+            <p className="mt-1 truncate text-xs text-muted-foreground">
+              {integer(row.original.unpricedCalls)} unpriced
+            </p>
+          )}
+        </div>
       ),
     },
     {
