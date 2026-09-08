@@ -1,18 +1,12 @@
 import { useMemo } from "react";
-import { addDays, eachDayOfInterval, formatDistanceStrict, startOfDay, subDays } from "date-fns";
+import { eachDayOfInterval, formatDistanceStrict } from "date-fns";
 import { ChartNoAxesCombined, ArrowDownToLine, ArrowUpRight, TriangleAlert } from "lucide-react";
-import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { accountOptions } from "@/lib/queries";
 import { subscriptionForecasts, subscriptionWarnings } from "@/lib/usage/forecast";
 import { agents, agentIds } from "@/lib/agents";
-import {
-  historyScope,
-  sessionOptions,
-  sessionQuery,
-  toolOptions,
-  useUsage,
-  logAllowanceOptions,
-} from "@/lib/history";
+import { logAllowanceOptions } from "@/lib/history";
+import { useOverviewData } from "@/lib/hooks/use-overview-data";
 import type { HistoryScope } from "@/lib/bindings";
 import { activity } from "@/lib/usage/analytics";
 import { knownCost } from "@/lib/usage/costs";
@@ -55,7 +49,6 @@ export default function Overview({
   navigate,
   clearScope,
 }: Props) {
-  const start = startOfDay(subDays(now, range - 1)).getTime();
   const accounts = useQuery(accountOptions);
   const logs = useQuery(logAllowanceOptions);
   const quota = useMemo(
@@ -63,22 +56,14 @@ export default function Overview({
     [accounts.data, logs.data, now],
   );
   const warnings = subscriptionWarnings(quota, now);
-  const end = addDays(startOfDay(now), 1).getTime();
-  const { stats } = useUsage(historyScope({ ...scope, start, end }));
-  const { stats: lifetime } = useUsage(scope);
-  const previousStart = subDays(start, range).getTime();
-  const { stats: previous } = useUsage(
-    historyScope({ ...scope, start: previousStart, end: start }),
+  const { start, stats, lifetime, previous, recent, scopedSessions, tools } = useOverviewData(
+    scope,
+    range,
+    now,
   );
   const change = previous.total ? (stats.total / previous.total - 1) * 100 : null;
   const streak = activity(lifetime.days, new Date(now));
-  const recent = useSuspenseQuery(
-    sessionOptions(sessionQuery(scope, { activityAfter: start, activityBefore: end, limit: 5 })),
-  ).data;
-  const scopedSessions = useSuspenseQuery(sessionOptions(sessionQuery(scope, { limit: 1 }))).data
-    .total;
   const projectCount = stats.projectCount;
-  const { data: tools } = useSuspenseQuery(toolOptions(historyScope({ ...scope, start, end })));
   const days = eachDayOfInterval({ start, end: now });
   const exportData = useMutation({
     onSuccess: confirmExport,

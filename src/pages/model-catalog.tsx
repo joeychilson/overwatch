@@ -1,111 +1,17 @@
 import { useDeferredValue, useMemo, useState, type RefObject } from "react";
 import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  BookOpen,
-  Brain,
-  Check,
-  Eye,
-  GitCompareArrows,
-  RefreshCw,
-  Star,
-  Wrench,
-  X,
-} from "lucide-react";
+import { BookOpen, GitCompareArrows, RefreshCw, Star, X } from "lucide-react";
 import { emptyModels, getCatalog, type Catalog, type Model } from "@/lib/models/catalog";
-import { tokenCost } from "@/lib/usage/costs";
 import { compact, integer, money } from "@/lib/format";
 import { catalogOptions, fullCatalogOptions } from "@/lib/queries";
 import { usePreferences } from "@/lib/hooks/use-preferences";
 import { Button } from "@/lib/components/ui/button";
 import { Checkbox } from "@/lib/components/ui/checkbox";
-import { Input } from "@/lib/components/ui/input";
+import { Capabilities, CatalogDialogs } from "@/lib/components/catalog-dialogs";
 import { DataTable, type DataColumn } from "@/lib/components/data-table";
-import { FilterSelect, Modal, PageHeader, SearchField } from "@/lib/components/page";
+import { FilterSelect, PageHeader, SearchField } from "@/lib/components/page";
 
-function Capabilities({ model }: { model: Model }) {
-  return (
-    <div className="flex gap-2 text-muted-foreground">
-      {model.reasoning && (
-        <Brain className="size-3.5" aria-label="Reasoning">
-          <title>Reasoning</title>
-        </Brain>
-      )}
-      {model.tools && (
-        <Wrench className="size-3.5" aria-label="Tool use">
-          <title>Tool use</title>
-        </Wrench>
-      )}
-      {model.vision && (
-        <Eye className="size-3.5" aria-label="Vision">
-          <title>Vision</title>
-        </Eye>
-      )}
-      {model.openWeights && <span className="rounded bg-muted px-1.5 text-[11px]">Open</span>}
-    </div>
-  );
-}
-
-function Calculator({ models }: { models: Model[] }) {
-  const [tokens, setTokens] = useState({
-    input: 100_000,
-    cacheRead: 0,
-    cacheWrite: 0,
-    output: 10_000,
-    reasoning: 0,
-  });
-  return (
-    <section>
-      <h3 className="mb-4 text-sm font-medium">Cost calculator</h3>
-      <div className="grid grid-cols-2 gap-4">
-        {(
-          [
-            ["input", "Uncached input"],
-            ["cacheRead", "Cached input"],
-            ["cacheWrite", "Cache writes"],
-            ["output", "Output"],
-          ] as const
-        ).map(([key, label]) => (
-          <label key={key} className="space-y-2 text-xs text-muted-foreground">
-            <span>{label} tokens</span>
-            <Input
-              type="number"
-              min="0"
-              max="1000000000000"
-              step="1000"
-              value={tokens[key]}
-              onChange={(event) => {
-                const value = event.currentTarget.valueAsNumber;
-                setTokens({
-                  ...tokens,
-                  [key]: Number.isFinite(value) ? Math.max(0, Math.min(1e12, value)) : 0,
-                });
-              }}
-            />
-          </label>
-        ))}
-      </div>
-      <div className="mt-5 space-y-3 rounded-xl bg-muted/60 p-4">
-        {models.map((model) => {
-          const cost = tokenCost(tokens, model);
-          return (
-            <div key={model.key} className="flex items-center justify-between gap-4">
-              <span className="text-xs text-muted-foreground">{model.name}</span>
-              <span className="text-lg font-medium tabular-nums">
-                {cost == null ? "Price unavailable" : money(cost)}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-      <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-        Current USD list rates. Missing cache prices remain unknown. Long-context tiers, service
-        tiers, non-text modalities, taxes, and discounts may differ.
-      </p>
-    </section>
-  );
-}
-
-export default function Models({
+export default function ModelCatalog({
   catalog,
   offerings,
   scrollRef,
@@ -147,20 +53,25 @@ export default function Models({
   );
   const saved = useMemo(() => new Set(preferences.savedModels), [preferences.savedModels]);
   const byKey = useMemo(() => new Map(models.map((model) => [model.key, model])), [models]);
+  const sortedModels = useMemo(
+    () =>
+      [...models].sort(
+        (a, b) => b.releaseDate.localeCompare(a.releaseDate) || a.name.localeCompare(b.name),
+      ),
+    [models],
+  );
   const filtered = useMemo(
     () =>
-      models
-        .filter(
-          (model) =>
-            (provider === "all" || model.provider === provider) &&
-            (capability === "all" || model[capability]) &&
-            (view === "all" || (view === "saved" ? saved.has(model.key) : used.has(model.key))) &&
-            `${model.name} ${model.id} ${model.providerName} ${model.family}`
-              .toLowerCase()
-              .includes(deferred),
-        )
-        .sort((a, b) => b.releaseDate.localeCompare(a.releaseDate) || a.name.localeCompare(b.name)),
-    [models, provider, capability, view, saved, used, deferred],
+      sortedModels.filter(
+        (model) =>
+          (provider === "all" || model.provider === provider) &&
+          (capability === "all" || model[capability]) &&
+          (view === "all" || (view === "saved" ? saved.has(model.key) : used.has(model.key))) &&
+          `${model.name} ${model.id} ${model.providerName} ${model.family}`
+            .toLowerCase()
+            .includes(deferred),
+      ),
+    [sortedModels, provider, capability, view, saved, used, deferred],
   );
   const detail = selected ? byKey.get(selected) : undefined;
   const comparison = compare.flatMap((key) => {
@@ -176,10 +87,10 @@ export default function Models({
     });
   }
   function toggleCompare(key: string) {
-    setCompare(
-      compare.includes(key)
-        ? compare.filter((model) => model !== key)
-        : [...compare, key].slice(0, 3),
+    setCompare((previous) =>
+      previous.includes(key)
+        ? previous.filter((model) => model !== key)
+        : [...previous, key].slice(0, 3),
     );
   }
   const columns: DataColumn<Model>[] = [
@@ -275,20 +186,6 @@ export default function Models({
         </Button>
       ),
     },
-  ];
-  const rows: { label: string; value: (model: Model) => string }[] = [
-    { label: "Input / 1M", value: (model) => money(model.inputPrice) },
-    { label: "Output / 1M", value: (model) => money(model.outputPrice) },
-    { label: "Cached input / 1M", value: (model) => money(model.cacheReadPrice) },
-    { label: "Cache write / 1M", value: (model) => money(model.cacheWritePrice) },
-    { label: "Context window", value: (model) => integer(model.context) },
-    { label: "Maximum output", value: (model) => integer(model.outputLimit) },
-    { label: "Reasoning", value: (model) => (model.reasoning ? "Yes" : "No") },
-    { label: "Tool use", value: (model) => (model.tools ? "Yes" : "No") },
-    { label: "Vision", value: (model) => (model.vision ? "Yes" : "No") },
-    { label: "Open weights", value: (model) => (model.openWeights ? "Yes" : "No") },
-    { label: "Release date", value: (model) => model.releaseDate || "—" },
-    { label: "Knowledge cutoff", value: (model) => model.knowledge || "—" },
   ];
   return (
     <>
@@ -399,96 +296,16 @@ export default function Models({
           </Button>
         </div>
       )}
-      <Modal
-        open={!!detail}
-        onOpenChange={(open) => {
-          if (!open) setSelected(null);
-        }}
-        title={detail?.name ?? "Model"}
-        description={detail ? `${detail.providerName} · ${detail.id}` : ""}
-      >
-        {detail && (
-          <>
-            <div className="flex items-center justify-between">
-              <Capabilities model={detail} />
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={saving}
-                onClick={() => toggleSaved(detail.key)}
-              >
-                {saved.has(detail.key) ? <Check /> : <Star />}
-                {saved.has(detail.key) ? "Saved" : "Save model"}
-              </Button>
-            </div>
-            {detail.description && (
-              <p className="text-sm leading-relaxed text-muted-foreground">{detail.description}</p>
-            )}
-            <dl className="grid grid-cols-2 gap-x-8 gap-y-4">
-              {rows.map((row) => (
-                <div key={row.label} className="flex justify-between gap-3 text-xs">
-                  <dt className="text-muted-foreground">{row.label}</dt>
-                  <dd className="text-right tabular-nums">{row.value(detail)}</dd>
-                </div>
-              ))}
-            </dl>
-            <Calculator models={[detail]} />
-          </>
-        )}
-      </Modal>
-      <Modal
-        open={comparing}
-        onOpenChange={setComparing}
-        title="Model comparison"
-        description="Current list pricing and capabilities, side by side."
-        className="sm:max-w-4xl"
-      >
-        <div className="overflow-auto">
-          <table
-            className="w-full table-fixed text-left text-xs"
-            style={{ minWidth: 160 + comparison.length * 200 }}
-            aria-label="Model comparison"
-          >
-            <colgroup>
-              <col style={{ width: 160 }} />
-              {comparison.map((model) => (
-                <col key={model.key} />
-              ))}
-            </colgroup>
-            <thead>
-              <tr>
-                <th />
-                {comparison.map((model) => (
-                  <th key={model.key} className="p-3 align-top font-medium">
-                    <span className="block truncate" title={model.name}>
-                      {model.name}
-                    </span>
-                    <p
-                      className="mt-1 truncate font-normal text-muted-foreground"
-                      title={model.providerName}
-                    >
-                      {model.providerName}
-                    </p>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.label}>
-                  <th className="p-3 font-normal text-muted-foreground">{row.label}</th>
-                  {comparison.map((model) => (
-                    <td key={model.key} className="p-3 whitespace-nowrap tabular-nums">
-                      {row.value(model)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <Calculator models={comparison} />
-      </Modal>
+      <CatalogDialogs
+        detail={detail}
+        comparison={comparison}
+        comparing={comparing}
+        saved={saved}
+        saving={saving}
+        onSelect={setSelected}
+        onToggleSaved={toggleSaved}
+        onComparingChange={setComparing}
+      />
     </>
   );
 }

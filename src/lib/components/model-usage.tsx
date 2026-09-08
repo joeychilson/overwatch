@@ -53,12 +53,16 @@ export function ModelUsage({
   const detail = allGroups.find((group) => group.key === modelKey);
   const setSelected = (group: UsageGroup | undefined) =>
     onRoute({ modelKey: group?.key, reading: undefined });
+  const filtered = useMemo(
+    () =>
+      groups.filter((group) =>
+        `${group.label} ${group.detail} ${group.offerings.map((offering) => `${offering.providerName} ${offering.model}`).join(" ")}`
+          .toLowerCase()
+          .includes(search.toLowerCase()),
+      ),
+    [groups, search],
+  );
   const rows = useMemo(() => {
-    const filtered = groups.filter((group) =>
-      `${group.label} ${group.detail} ${group.offerings.map((offering) => `${offering.providerName} ${offering.model}`).join(" ")}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
-    );
     if (!controls.ranking) return filtered;
     const value = (group: UsageGroup) => {
       switch (controls.ranking) {
@@ -72,7 +76,7 @@ export function ModelUsage({
           return group.tokens;
       }
     };
-    return filtered.sort((a, b) => {
+    return [...filtered].sort((a, b) => {
       const av = value(a),
         bv = value(b);
       const comparison =
@@ -81,7 +85,7 @@ export function ModelUsage({
           : Number(av) - Number(bv);
       return comparison * (controls.rankingDescending ? -1 : 1) || a.key.localeCompare(b.key);
     });
-  }, [groups, search, controls.ranking, controls.rankingDescending]);
+  }, [filtered, controls.ranking, controls.rankingDescending]);
   const openModel = (group: UsageGroup) => {
     listPosition.current = scrollRef.current?.scrollTop ?? 0;
     setControls((previous) => ({ ...previous, provider: "all", agent: "all" }));

@@ -136,14 +136,18 @@ function totals(value: QueryTotals) {
     estimatedCost: finiteCost(value.estimatedCost),
   };
 }
-export function useUsage(scope: HistoryScope) {
-  const catalog = useQuery(catalogOptions);
-  const models = catalog.data?.models ?? emptyModels;
-  const query = useSuspenseQuery({
-    queryKey: ["usage", scope, catalog.data?.updatedAt],
+export function usageOptions(scope: HistoryScope, catalogUpdatedAt?: number) {
+  return queryOptions({
+    queryKey: ["usage", scope, catalogUpdatedAt],
     queryFn: () => native(commands.getUsage(scope)),
     staleTime: Infinity,
   });
+}
+
+export function useUsage(scope: HistoryScope) {
+  const catalog = useQuery(catalogOptions);
+  const models = catalog.data?.models ?? emptyModels;
+  const query = useSuspenseQuery(usageOptions(scope, catalog.data?.updatedAt));
   const stats = useMemo(() => reportStats(query.data, models), [query.data, models]);
   return { ...query, stats };
 }

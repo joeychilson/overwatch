@@ -263,6 +263,7 @@ export async function desktop(
     costCoverage?: "unknown" | "zero" | "mixed";
     accountErrorWithoutUsage?: boolean;
     scanning?: boolean;
+    holdUsage?: boolean;
     cancelExport?: boolean;
     failExport?: boolean;
   } = {},
@@ -488,6 +489,11 @@ export async function desktop(
       Object.defineProperty(window, "__TAURI_EVENT_PLUGIN_INTERNALS__", {
         value: { unregisterListener: () => {} },
       });
+      const usageReady = options.holdUsage
+        ? new Promise<void>((resolve) =>
+            window.addEventListener("fixture-release-usage", () => resolve(), { once: true }),
+          )
+        : Promise.resolve();
       Object.defineProperty(window, "__TAURI_INTERNALS__", {
         value: {
           transformCallback: (callback: (value: unknown) => void) => {
@@ -516,6 +522,7 @@ export async function desktop(
                 ...JSON.parse(document.documentElement.dataset.historyRequests ?? "[]"),
                 { command, args },
               ]);
+              if (command === "get_usage") await usageReady;
               const result = await (
                 window as unknown as { historyFixture: (...args: unknown[]) => Promise<unknown> }
               ).historyFixture(command, args, state.snapshot, catalog);

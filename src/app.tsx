@@ -1,73 +1,46 @@
-import {
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type SetStateAction,
-} from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isTauri } from "@tauri-apps/api/core";
 import { Toaster } from "sonner";
-import { commands, type Agent } from "@/lib/bindings";
-import { historyOptions, historyScope, sessionQuery } from "@/lib/history";
+import { commands } from "@/lib/bindings";
+import { historyOptions, sessionQuery } from "@/lib/history";
 import { AppFailure, native } from "@/lib/errors";
 import { catalogOptions } from "@/lib/queries";
 import { usePreferences } from "@/lib/hooks/use-preferences";
 import { useNativeEvents } from "@/lib/hooks/use-native-events";
-import { useNow } from "@/lib/hooks/use-now";
+import { useAppNavigation } from "@/lib/hooks/use-app-navigation";
 import { useMediaQuery } from "@/lib/hooks/use-media-query";
 import { WorkspaceContext, useWorkspaceOwner } from "@/lib/hooks/use-workspace";
-import { initialWorkspace, type Route } from "@/lib/workspace";
-import { navigation, type View } from "@/lib/navigation";
+import { navigation } from "@/lib/navigation";
 import { cn } from "cn";
 import { AppHeader } from "@/lib/components/app-header";
 import { AppSidebar } from "@/lib/components/app-sidebar";
 import { PageSkeleton, ReaderSkeleton } from "@/lib/components/page-skeleton";
-import { Empty, ErrorNotice, Modal } from "@/lib/components/page";
+import { Empty, ErrorNotice } from "@/lib/components/page";
 import { CommandMenu } from "@/lib/components/command-menu";
 import { ErrorBoundary } from "@/lib/components/error-boundary";
-
-const Overview = lazy(() => import("@/pages/overview"));
-const Sessions = lazy(() => import("@/pages/sessions"));
-const Models = lazy(() => import("@/pages/models"));
-const Subscriptions = lazy(() => import("@/pages/subscriptions"));
-const Connections = lazy(() => import("@/pages/connections"));
+import { AppRoutes } from "@/lib/components/app-routes";
+import { KeyboardHelp } from "@/lib/components/keyboard-help";
 
 export default function App() {
   const scroll = useRef<HTMLDivElement>(null);
   const workspace = useWorkspaceOwner(scroll);
   const { change } = workspace;
   const { route, agent, project, range } = workspace.state;
-  const setRoute = useCallback(
-    (value: SetStateAction<Route>, push = true) =>
-      change(
-        (previous) => ({
-          ...previous,
-          route: typeof value === "function" ? value(previous.route) : value,
-        }),
-        push,
-      ),
-    [change],
-  );
-  const setAgent = (agent: Agent | "all") =>
-    change((previous) => ({
-      ...previous,
-      agent,
-    }));
-  const setProject = (project: string) =>
-    change((previous) => ({
-      ...previous,
-      project,
-    }));
-  const setRange = (range: string) =>
-    change((previous) => ({ ...previous, range: range as typeof previous.range }));
+  const {
+    setRoute,
+    setAgent,
+    setProject,
+    setRange,
+    navigate,
+    openSession,
+    clearScope,
+    searchSessions,
+  } = useAppNavigation(workspace, scroll);
   const [searchOpen, setSearchOpen] = useState(false);
   const [help, setHelp] = useState(false);
   const compactWindow = useMediaQuery("(max-width: 799px)");
   const prefersDark = useMediaQuery("(prefers-color-scheme: dark)");
-  const now = useNow();
   const client = useQueryClient();
   const snapshot = useQuery(historyOptions);
   const catalog = useQuery(catalogOptions);
@@ -120,10 +93,6 @@ export default function App() {
     };
   }, [setRoute]);
 
-  const scope = historyScope({
-    project: project === "all" ? null : project,
-    agent: agent === "all" ? null : agent,
-  });
   const projects = snapshot.data?.projects ?? [];
   useEffect(() => {
     if (!snapshot.data || snapshot.data.scanning) return;
@@ -137,21 +106,6 @@ export default function App() {
     )
       change((previous) => ({ ...previous, agent: "all" }));
   }, [snapshot.data, project, agent, change]);
-
-  const navigate = (view: View) => {
-    setRoute({ view });
-    scroll.current?.scrollTo({ top: 0 });
-  };
-
-  const openSession = (id: string, query = sessionQuery(scope)) => {
-    setRoute((route) => ({
-      ...(route.view === "sessions" ? route : {}),
-      view: "sessions",
-      id,
-      query,
-    }));
-    scroll.current?.scrollTo({ top: 0 });
-  };
 
   const collapsed = compactWindow || preferences.sidebarCollapsed;
   const readingSession = route.view === "sessions" && !!route.id;
@@ -264,87 +218,7 @@ export default function App() {
               ) : (
                 <ErrorBoundary key={route.view}>
                   <Suspense fallback={loading}>
-                    {route.view === "overview" && (
-                      <Overview
-                        scope={scope}
-                        sessionCount={snapshot.data?.sessionCount ?? 0}
-                        scanning={snapshot.data?.scanning ?? false}
-                        detectedSources={
-                          snapshot.data?.sources.filter(
-                            (source) => source.source.enabled && source.available,
-                          ).length ?? 0
-                        }
-                        range={Number(range)}
-                        now={now}
-                        openSession={openSession}
-                        openDay={(day) => {
-                          change(
-                            (previous) => ({
-                              ...previous,
-                              route: { view: "sessions", day },
-                              sessions: { ...initialWorkspace.sessions },
-                            }),
-                            true,
-                          );
-                          scroll.current?.scrollTo({ top: 0 });
-                        }}
-                        openModel={(modelKey) => {
-                          setRoute({ view: "models", modelKey });
-                          scroll.current?.scrollTo({ top: 0 });
-                        }}
-                        openTool={(tool) => {
-                          change(
-                            (previous) => ({
-                              ...previous,
-                              route: { view: "sessions", tool },
-                              sessions: { ...initialWorkspace.sessions },
-                            }),
-                            true,
-                          );
-                          scroll.current?.scrollTo({ top: 0 });
-                        }}
-                        clearScope={() => {
-                          setProject("all");
-                          setAgent("all");
-                        }}
-                        navigate={navigate}
-                      />
-                    )}
-                    {route.view === "sessions" && (
-                      <Sessions
-                        scope={scope}
-                        selected={route.id}
-                        selectedQuery={route.query}
-                        scrollRef={scroll}
-                        selectedDay={route.day}
-                        selectedTool={route.tool}
-                        openSession={openSession}
-                        clearSelection={() => setRoute({ ...route, id: undefined })}
-                        clearDay={() => setRoute({ ...route, day: undefined })}
-                        clearTool={() => setRoute({ ...route, tool: undefined })}
-                        now={now}
-                      />
-                    )}
-                    {route.view === "models" && (
-                      <Models
-                        modelKey={route.modelKey}
-                        pricing={route.pricing ?? false}
-                        reading={route.reading}
-                        onRoute={(patch) => setRoute({ ...route, ...patch })}
-                        scope={scope}
-                        offerings={snapshot.data?.offerings ?? []}
-                        range={Number(range)}
-                        now={now}
-                        scrollRef={scroll}
-                      />
-                    )}
-                    {route.view === "subscriptions" && <Subscriptions now={now} />}
-                    {route.view === "connections" && (
-                      <Connections
-                        sources={snapshot.data?.sources ?? []}
-                        openSubscriptions={() => navigate("subscriptions")}
-                      />
-                    )}
+                    <AppRoutes snapshot={snapshot.data} scroll={scroll} />
                   </Suspense>
                 </ErrorBoundary>
               )}
@@ -356,59 +230,14 @@ export default function App() {
         <CommandMenu
           pages={navigation.map((page) => ({ label: page.label, select: () => navigate(page.id) }))}
           openSession={(id) => {
-            setProject("all");
-            setAgent("all");
+            clearScope();
             openSession(id, sessionQuery());
           }}
-          seeAll={(search) => {
-            setProject("all");
-            setAgent("all");
-            change(
-              (previous) => ({
-                ...previous,
-                route: { view: "sessions" },
-                sessions: { ...initialWorkspace.sessions, search },
-              }),
-              true,
-            );
-            scroll.current?.scrollTo({ top: 0 });
-          }}
+          seeAll={searchSessions}
           onClose={() => setSearchOpen(false)}
         />
       )}
-      <Modal
-        title="Keyboard shortcuts"
-        description="Move through Overwatch without leaving the keyboard."
-        open={help}
-        onOpenChange={setHelp}
-      >
-        <dl className="space-y-5 text-sm">
-          <div className="flex justify-between">
-            <dt>Search pages and sessions</dt>
-            <dd>
-              <kbd>⌘ / Ctrl K</kbd>
-            </dd>
-          </div>
-          <div className="flex justify-between">
-            <dt>Switch views</dt>
-            <dd>
-              <kbd>⌘ / Ctrl 1–{navigation.length}</kbd>
-            </dd>
-          </div>
-          <div className="flex justify-between">
-            <dt>Navigate session timeline</dt>
-            <dd>
-              <kbd>← → Home End</kbd>
-            </dd>
-          </div>
-          <div className="flex justify-between">
-            <dt>Close dialog</dt>
-            <dd>
-              <kbd>Esc</kbd>
-            </dd>
-          </div>
-        </dl>
-      </Modal>
+      <KeyboardHelp open={help} onOpenChange={setHelp} />
       <Toaster theme={preferences.theme} position="bottom-right" closeButton richColors />
     </WorkspaceContext.Provider>
   );
