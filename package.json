@@ -1,0 +1,65 @@
+{
+  "name": "overwatch",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Explore coding sessions, understand model usage, and track costs on your desktop.",
+  "license": "MIT",
+  "author": {
+    "name": "Joey Chilson",
+    "url": "https://github.com/joeychilson"
+  },
+  "type": "module",
+  "imports": {
+    "#lib/*": "./src/lib/*"
+  },
+  "scripts": {
+    "dev": "vp dev",
+    "build": "vp run check && vp build",
+    "preview": "vp preview",
+    "prepare": "svelte-kit sync",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings && vp check",
+    "check:watch": "svelte-check --tsconfig ./tsconfig.json --watch",
+    "fmt": "vp fmt && cargo fmt --manifest-path src-tauri/Cargo.toml",
+    "check:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check && cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml --locked",
+    "prices": "node scripts/prices.ts",
+    "screenshot": "vp build && node scripts/screenshot.ts",
+    "test": "vp run test:unit && playwright test",
+    "test:ui": "playwright test --ui",
+    "tauri": "tauri",
+    "desktop": "tauri dev",
+    "desktop:build": "tauri build --bundles app -- --locked",
+    "test:unit": "vp test --run"
+  },
+  "dependencies": {
+    "@lucide/svelte": "1.42.0",
+    "@tauri-apps/api": "2.11.1",
+    "bits-ui": "2.19.0",
+    "marked": "18.0.12",
+    "mode-watcher": "1.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@sveltejs/adapter-static": "4.0.0-next.4",
+    "@sveltejs/kit": "3.0.0-next.27",
+    "@sveltejs/vite-plugin-svelte": "7.3.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "2.11.4",
+    "@types/node": "26.5.0",
+    "svelte": "5.57.0",
+    "svelte-check": "4.7.6",
+    "tailwindcss": "^4.3.3",
+    "typescript": "6.0.3",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.3.4",
+      "onFail": "download"
+    }
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
+  }
+}

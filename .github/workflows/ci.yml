@@ -1,0 +1,41 @@
+name: Verify
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: voidzero-dev/setup-vp@v1.19.0
+        with:
+          node-version-file: ".node-version"
+          run-install: false
+          cache: true
+      - run: vp install --frozen-lockfile
+      - name: Use project toolchain
+        run: echo "$GITHUB_WORKSPACE/node_modules/.bin" >> "$GITHUB_PATH"
+      - run: rustup show
+      - run: vp run check
+      - run: vp run check:rust
+      - run: vp exec playwright install chromium webkit
+      - run: vp run test
+      - run: vp run desktop:build
+      - name: Retain browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: browser-test-results
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7

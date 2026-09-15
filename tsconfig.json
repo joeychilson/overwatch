@@ -1,0 +1,16 @@
+{
+  "extends": "$app/tsconfig",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "types": ["node", "$app/types"]
+  },
+  "include": ["src", "tests", "scripts", "*.ts"],
+  "exclude": ["node_modules", "build", "src-tauri"]
+}

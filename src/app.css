@@ -1,0 +1,175 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: Inter;
+  src: url("/fonts/InterVariable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@theme {
+  --font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  --text-title: 24px;
+  --text-title--line-height: 1.4;
+  --text-title--letter-spacing: -0.8px;
+  --text-title--font-weight: 600;
+
+  --text-section: 16px;
+  --text-section--line-height: 1.4;
+  --text-section--font-weight: 600;
+
+  --text-meta: 12px;
+  --text-meta--line-height: 1.5;
+
+  --text-label: 11px;
+  --text-label--line-height: 1.4;
+  --text-label--font-weight: 500;
+
+  --radius-control: 7px;
+  --radius-item: 5px;
+  --radius-menu: 10px;
+}
+
+@theme inline {
+  --color-content: var(--content);
+  --color-sidebar: var(--sidebar);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-hover: var(--hover);
+  --color-active: var(--active);
+  --color-menu: var(--menu);
+
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+}
+
+:root {
+  --content: #fafafa;
+  --sidebar: #f2f2f2;
+  --text: #262626;
+  --muted: #666666;
+  --border: #e4e4e4;
+  --hover: #e9e9e9;
+  --active: #e2e2e2;
+  --menu: #ffffff;
+  --focus: #737373;
+
+  /* Status. Each carries enough contrast on --content for body text. */
+  --warning: #946316;
+  --danger: #bd3546;
+  /* A session still going. */
+  --live: #1f9d63;
+
+  /* Data. Colour is kept for what it tells apart: each agent in a chart. */
+  --agent-claude: #d97757;
+  --agent-codex: #10a37f;
+  --agent-opencode: #4f86e8;
+  --agent-pi: #9a76dc;
+  --agent-grok: #7c8797;
+
+  /* Translucent so one thumb colour works over every surface. */
+  --scrollbar: #26262633;
+  --scrollbar-active: #26262659;
+}
+
+:root.dark {
+  --content: #171717;
+  --sidebar: #141414;
+  --text: #ededed;
+  --muted: #a1a1a1;
+  --border: #262626;
+  --hover: #222222;
+  --active: #2a2a2a;
+  --menu: #202020;
+  --focus: #a3a3a3;
+
+  --warning: #e1b66f;
+  --danger: #f08d98;
+  --live: #4cc38a;
+
+  --agent-claude: #e58a6b;
+  --agent-codex: #34bf94;
+  --agent-opencode: #74a1f0;
+  --agent-pi: #b596ea;
+  --agent-grok: #9aa4b2;
+
+  --scrollbar: #ededed2e;
+  --scrollbar-active: #ededed59;
+}
+
+@layer base {
+  :root {
+    font-synthesis: none;
+    -webkit-font-smoothing: antialiased;
+    color-scheme: light;
+    background: var(--content);
+    color: var(--text);
+  }
+
+  :root.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    margin: 0;
+    overflow: hidden;
+    font-size: 13px;
+  }
+
+  button,
+  a,
+  [role="menuitemradio"] {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  :where(a, button, [role="menuitemradio"], [role="slider"]):focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 3px;
+  }
+
+  /*
+   * Scrollbars.
+   *
+   * The platform default is a light overlay bar that reads as foreign against
+   * these surfaces. Declaring any `::-webkit-scrollbar` rule opts the whole
+   * document out of overlay scrollbars, so the thumb is drawn to match the app
+   * instead: translucent, inset from its track by a transparent border, and
+   * only darkening under the pointer. The standard properties cover engines
+   * that do not implement the pseudo-elements.
+   */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 11px;
+    height: 11px;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar);
+    /* Padding-box clipping turns the transparent border into breathing room. */
+    background-clip: padding-box;
+    border: 3px solid transparent;
+    border-radius: 8px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover,
+  ::-webkit-scrollbar-thumb:active {
+    background: var(--scrollbar-active);
+    background-clip: padding-box;
+  }
+}

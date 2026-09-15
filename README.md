@@ -1,0 +1,99 @@
+# Overwatch
+
+A macOS app for your coding-agent history: sessions, token usage, cost, and subscription limits.
+
+It reads what **Claude Code, Codex, OpenCode, Pi, and Grok Build** already keep on your Mac. No setup, no account, no telemetry.
+
+<p align="center">
+  <img src=".github/assets/overwatch-overview.png" alt="Overwatch Overview showing a month of usage by agent, estimated cost, and the top models, projects, and sessions" width="49%">
+  <img src=".github/assets/overwatch-session.png" alt="Overwatch session page showing a Claude Code session's cost, tokens, and models, a timeline of its turns and tool calls across an afternoon, and the conversation" width="49%">
+</p>
+
+## Features
+
+<img src=".github/assets/overwatch-menu-bar.png" alt="Overwatch menu bar panel listing Claude, Codex, OpenCode Go, and Grok accounts, those in use first, with each limit's time to reset and how much is left" width="240" align="right">
+
+- **Overview**: tokens and cost by agent, plus the top models, projects, and sessions.
+- **Sessions**: search every session and read it as a conversation with a timeline of turns and tool calls.
+- **Models**: usage, cost, and trend for each model.
+- **Subscriptions**: what's left of your Claude, Codex, Grok, and OpenCode Go limits, with a notification before one runs out.
+- **Menu bar**: your tightest limit at a glance. Close the window and it keeps watching.
+
+New sessions show up within seconds while you work.
+
+## Supported agents
+
+| Agent       | Reads from                                          |
+| ----------- | --------------------------------------------------- |
+| Claude Code | `~/.claude/projects/`                               |
+| Codex       | `~/.codex/sessions/`, `~/.codex/archived_sessions/` |
+| OpenCode    | `~/.local/share/opencode/opencode.db`               |
+| Pi          | `~/.pi/agent/sessions/`                             |
+| Grok Build  | `~/.grok/sessions/`                                 |
+
+An agent appears once its directory exists. [docs/agents.md](docs/agents.md) covers what each one records.
+
+## Privacy
+
+- **Read-only.** Agent files and sign-ins are never modified or renewed.
+- **No transcript copies.** The index holds summaries and usage counts; conversations are read from the agent's files when you open them.
+- **One kind of network request.** Each subscription's usage endpoint, using the sign-ins your agents already have (including Claude Code's Keychain item).
+- **No telemetry.**
+
+[docs/architecture.md](docs/architecture.md) lists exactly what is read and where requests go.
+
+## Good to know
+
+- Cost is an estimate at [models.dev](https://models.dev) list prices, not what your subscription charged. Grok is the exception: xAI reports the real charge.
+- Usage with no known price shows `—`, not `$0.00`.
+- The usage endpoints are undocumented and may change.
+
+## Build
+
+Requires macOS 13.3+, [Vite+](https://viteplus.dev/guide/), and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). Use the Node version in `.node-version`; rustup picks up `rust-toolchain.toml`.
+
+```sh
+git clone https://github.com/joeychilson/overwatch.git
+cd overwatch
+vp install --frozen-lockfile
+vp exec vp run desktop:build
+open src-tauri/target/release/bundle/macos/Overwatch.app
+```
+
+Local builds are not signed or notarized.
+
+## Development
+
+```sh
+vp exec vp run desktop   # desktop app
+vp exec vp run dev       # browser only, on port 1430
+```
+
+Always go through `vp exec vp` to use the project's own Vite+.
+
+| Command                        | Purpose                                 |
+| ------------------------------ | --------------------------------------- |
+| `vp exec vp run check`         | Svelte, formatting, lint, and types     |
+| `vp exec vp run check:rust`    | Rust formatting, Clippy, and tests      |
+| `vp exec vp run test:unit`     | Unit tests                              |
+| `vp exec vp run test`          | Unit tests, then browser tests          |
+| `vp exec vp run fmt`           | Format frontend and Rust code           |
+| `vp exec vp run build`         | Check and build the frontend            |
+| `vp exec vp run desktop:build` | Build the macOS app                     |
+| `vp exec vp run screenshot`    | Render the screenshots from sample data |
+
+- Install test browsers once: `vp exec playwright install chromium webkit`.
+- Browser tests can't cover window controls or dragging. Check those in the desktop app.
+- The types in `src/lib/api/backend.ts` are hand-written copies of `src-tauri/src/session.rs`. Change both together.
+- SvelteKit is a 3.0 prerelease. Use the [SvelteKit 3 docs](https://next.svelte.dev/docs/kit).
+- To benchmark against your own history, run `cargo run --release --example scan` in `src-tauri/`. It's read-only and indexes into a temp directory.
+
+Conventions and commit format are in [AGENTS.md](AGENTS.md). How the engine works is in [docs/](docs/README.md).
+
+## Credits
+
+Prices from [models.dev](https://github.com/sst/models.dev) (MIT). Font is [Inter](https://github.com/rsms/inter) (OFL 1.1). Agent and provider names and marks belong to their owners. Overwatch isn't affiliated with or endorsed by any of them.
+
+## License
+
+[MIT](LICENSE)

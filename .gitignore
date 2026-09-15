@@ -1,0 +1,15 @@
+node_modules/
+.svelte-kit/
+.vite/
+build/
+dist/
+src-tauri/target/
+src-tauri/gen/
+test-results/
+playwright-report/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+.pnpm-store
