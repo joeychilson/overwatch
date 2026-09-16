@@ -19,6 +19,14 @@ updates:
     groups:
       frontend:
         patterns: ["*"]
+    ignore:
+      # TypeScript 7 is the native port, and SvelteKit reaches into the package
+      # for what it no longer exposes: `svelte-kit sync` dies in `load_tsconfig`
+      # before anything is installed, which fails the whole group with it. Lift
+      # this once SvelteKit reads the new package, and take the major
+      # deliberately rather than as one line of a weekly bump.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: cargo
     directory: /src-tauri
