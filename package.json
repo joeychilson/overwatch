@@ -22,10 +22,12 @@
     "fmt": "vp fmt && cargo fmt --manifest-path src-tauri/Cargo.toml",
     "check:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check && cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml --locked",
     "prices": "node scripts/prices.ts",
+    "record": "vp build && node scripts/record.ts",
     "screenshot": "vp build && node scripts/screenshot.ts",
     "test": "vp run test:unit && playwright test",
     "test:ui": "playwright test --ui",
     "tauri": "tauri",
+    "demo": "OVERWATCH_SAMPLE=1 vp dev",
     "desktop": "tauri dev",
     "desktop:build": "tauri build --bundles app -- --locked",
     "test:unit": "vp test --run"

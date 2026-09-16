@@ -1,9 +1,13 @@
+import { fileURLToPath } from "node:url";
 import adapter from "@sveltejs/adapter-static";
 import { sveltekit } from "@sveltejs/kit/vite";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite-plus";
 
 const host = process.env.TAURI_DEV_HOST ?? "127.0.0.1";
+const sample = process.env.OVERWATCH_SAMPLE === "1";
+
+const ipc = fileURLToPath(new URL("./scripts/sample/ipc.ts", import.meta.url));
 
 export default defineConfig({
   plugins: [
@@ -17,8 +21,9 @@ export default defineConfig({
     }),
   ],
   clearScreen: false,
-  // Unit tests live beside the module they cover. `tests/` holds the Playwright
-  // suite, whose files would otherwise be collected here and fail to load.
+  resolve: sample
+    ? { alias: { "@tauri-apps/api/core": ipc, "@tauri-apps/api/event": ipc } }
+    : undefined,
   test: { include: ["src/**/*.test.ts"] },
   server: {
     host,
@@ -31,8 +36,6 @@ export default defineConfig({
   build: { target: "safari16.4" },
   fmt: {
     svelte: true,
-    // The price table is generated one model per line, so a price change is a
-    // one-line diff.
     ignorePatterns: [
       ".svelte-kit/**",
       "build/**",

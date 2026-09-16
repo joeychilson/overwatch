@@ -684,7 +684,15 @@ function transcript(id: string, offset: number, limit: number): Transcript {
   };
 }
 
-const STATUS: Status = {
+/**
+ * What the engine reports about its own indexing.
+ *
+ * Read when asked rather than when this module loads: `vp run demo` puts this
+ * module where the window reaches the engine, and the window's own engine
+ * module is still being evaluated then, so `AGENTS` is not there yet. Every
+ * command is answered later, by which time it is.
+ */
+const status = (): Status => ({
   scanning: false,
   filesRead: 0,
   progress: null,
@@ -692,7 +700,7 @@ const STATUS: Status = {
   agents: [...AGENTS],
   problems: [],
   accounts: ACCOUNTS,
-};
+});
 
 const number = (value: unknown) => (typeof value === "number" ? value : undefined);
 
@@ -701,7 +709,7 @@ export function answer(command: string, args: Record<string, unknown>): unknown 
   const id = typeof args.id === "string" ? args.id : "";
   switch (command) {
     case "get_status":
-      return STATUS;
+      return status();
     case "get_overview":
       return overview(number(args.since), number(args.until));
     case "list_models":

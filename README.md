@@ -67,6 +67,7 @@ Local builds are not signed or notarized.
 ```sh
 vp exec vp run desktop   # desktop app
 vp exec vp run dev       # browser only, on port 1430
+vp exec vp run demo      # browser only, filled with sample data
 ```
 
 Always go through `vp exec vp` to use the project's own Vite+.
@@ -81,8 +82,10 @@ Always go through `vp exec vp` to use the project's own Vite+.
 | `vp exec vp run build`         | Check and build the frontend            |
 | `vp exec vp run desktop:build` | Build the macOS app                     |
 | `vp exec vp run screenshot`    | Render the screenshots from sample data |
+| `vp exec vp run record`        | Record a walk through the app           |
 
 - Install test browsers once: `vp exec playwright install chromium webkit`.
+- `demo` answers every engine command from `scripts/sample/`, so the pages can be walked through without a machine's own history behind them. `record` walks them by itself and writes the walk to `.github/assets/overwatch-tour.webm`.
 - Browser tests can't cover window controls or dragging. Check those in the desktop app.
 - The types in `src/lib/api/backend.ts` are hand-written copies of `src-tauri/src/session.rs`. Change both together.
 - SvelteKit is a 3.0 prerelease. Use the [SvelteKit 3 docs](https://next.svelte.dev/docs/kit).
