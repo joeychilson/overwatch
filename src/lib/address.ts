@@ -7,7 +7,7 @@
  */
 
 /** How a control changes the address: in place, keeping focus and scroll. */
-export const REPLACE = { replaceState: true, keepFocus: true, noScroll: true } as const;
+export const REPLACE = { replace: true, reset: false } as const;
 
 /** An ordering of rows by one of their columns. */
 export interface Ordering<K extends string> {
