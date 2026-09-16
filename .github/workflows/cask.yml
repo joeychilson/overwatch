@@ -1,0 +1,65 @@
+name: Cask
+
+# The tap is how most people install this, and nothing else exercises it: the
+# release job writes the cask and never reads it back, and the machine it was
+# written from has no Homebrew to read it with. A runner does, so the cask is
+# audited and installed here the way anyone else would install it.
+#
+# Kept apart from Release so that a cask worth fixing cannot turn an otherwise
+# good release red, and can be run again once it is fixed.
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cask
+  cancel-in-progress: true
+
+jobs:
+  install:
+    # A release that failed published nothing worth installing.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      CASK: ${{ github.repository_owner }}/tap/overwatch
+    steps:
+      - run: brew tap ${{ github.repository_owner }}/tap
+
+      # What Homebrew's own maintainers would say about the file: stanza order,
+      # naming, the shape of every field.
+      - name: Audit the cask
+        run: brew audit --cask "$CASK"
+
+      - name: Install it the way a reader would
+        run: brew install --cask --no-quarantine "$CASK"
+
+      - name: Check what arrived
+        run: |
+          set -euo pipefail
+          app="/Applications/Overwatch.app"
+          test -d "$app" || { echo "The cask installed no app" >&2; exit 1; }
+
+          # Both architectures, or the people left out cannot run it at all.
+          arches=$(lipo -archs "$app/Contents/MacOS/overwatch")
+          for want in arm64 x86_64; do
+            case " $arches " in
+              *" $want "*) ;;
+              *) echo "Installed without $want: $arches" >&2; exit 1 ;;
+            esac
+          done
+
+          # The app the cask fetched has to be the version the cask claims.
+          installed=$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")
+          declared=$(brew info --cask --json=v2 "$CASK" | jq -r '.casks[0].version')
+          if [ "$installed" != "$declared" ]; then
+            echo "Cask says $declared, app says $installed" >&2
+            exit 1
+          fi
+
+          echo "Installed $installed, $arches, from the tap."
