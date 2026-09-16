@@ -53,10 +53,19 @@ An agent appears once its directory exists. [docs/agents.md](docs/agents.md) cov
 Requires macOS 13.3 or later. Universal: Apple silicon and Intel.
 
 ```sh
-brew install --cask --no-quarantine joeychilson/tap/overwatch
+brew install --cask joeychilson/tap/overwatch
 ```
 
-Or take the disk image from the [latest release](https://github.com/joeychilson/overwatch/releases/latest). Overwatch is not notarized — Apple charges a yearly fee for that — so macOS stops it the first time it runs. Open **System Settings → Privacy & Security**, scroll to the bottom, and choose **Open Anyway**. Installing through Homebrew with `--no-quarantine` skips this.
+Or take the disk image from the [latest release](https://github.com/joeychilson/overwatch/releases/latest).
+
+Overwatch is not notarized — Apple charges a yearly fee for that — so macOS stops it the first time it is opened, however it arrived. Open **System Settings → Privacy & Security**, scroll to the bottom, and choose **Open Anyway**. Homebrew quarantines every cask and removed `--no-quarantine` in 2026, so this holds for the disk image and for Homebrew alike.
+
+[mise](https://mise.jdx.dev) fetches the same cask without Homebrew and sets no quarantine flag, so what it installs opens straight away:
+
+```sh
+mise bootstrap packages brew tap joeychilson/tap
+mise bootstrap packages use brew-cask:joeychilson/tap/overwatch
+```
 
 ## Building it yourself
 

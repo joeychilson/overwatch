@@ -74,12 +74,13 @@ jobs:
           Install with Homebrew:
 
           ```sh
-          brew install --cask --no-quarantine joeychilson/tap/overwatch
+          brew install --cask joeychilson/tap/overwatch
           ```
 
           Or take the disk image below. The app is not notarized — Apple charges
-          for that — so macOS blocks it the first time. Open **System Settings →
-          Privacy & Security**, scroll to the bottom, and choose **Open Anyway**.
+          for that — so macOS stops it the first time it is opened, however it
+          arrived. Open **System Settings → Privacy & Security**, scroll to the
+          bottom, and choose **Open Anyway**.
           NOTES
           printf '\nsha256: `%s`\n' "$sha256" >> notes.md
           # The notes above are prepended to the list of changes GitHub works
