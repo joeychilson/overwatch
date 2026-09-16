@@ -636,12 +636,12 @@ function projects(since?: number, until?: number): ProjectUsage[] {
 
 function list(filter: Filter): SessionPage {
   const search = filter.search?.toLowerCase();
-  const matched = SESSIONS.filter(
+  // A session's usage all falls where it began, so the period's sessions are
+  // those that began in it, counted whole.
+  const matched = within(filter.since ?? undefined, filter.until ?? undefined).filter(
     (each) =>
       (filter.includeSpawned || !each.spawned) &&
       (!filter.agents?.length || filter.agents.includes(each.agent)) &&
-      (filter.since == null || each.updatedAt >= filter.since) &&
-      (filter.until == null || each.startedAt <= filter.until) &&
       (filter.project == null || each.cwd === filter.project) &&
       (filter.model == null || each.models.some((part) => part.model === filter.model)) &&
       (!search ||

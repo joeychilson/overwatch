@@ -125,16 +125,26 @@ export interface Sort {
  * How a caller narrows the session list.
  *
  * Every field is optional and an omitted field filters nothing. There is no
- * view to open and nothing to release afterwards: this resolves to one indexed
- * query each time it is sent.
+ * view to open and nothing to release afterwards: this is answered afresh each
+ * time it is sent.
+ *
+ * A period, from `since` or `until`, also changes what each session counts: its
+ * tokens, cost and models are only what it used inside the period, and the list
+ * is ordered and totalled by those.
  */
 export interface Filter {
   search?: string | null;
   agents?: Agent[];
   includeSpawned?: boolean;
-  /** Only sessions that used tokens at or after this instant. */
+  /**
+   * Only sessions that used tokens at or after this instant, counting only what
+   * they used from then.
+   */
   since?: number | null;
-  /** Only sessions that used tokens at or before this instant. */
+  /**
+   * Only sessions that used tokens at or before this instant, counting only
+   * what they used until then.
+   */
   until?: number | null;
   /** Only sessions that worked in this directory, matched whole. */
   project?: string | null;

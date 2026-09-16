@@ -158,27 +158,13 @@ impl Store {
                     cache_read, cache_write, reasoning, total, cost_usd)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
             )?;
-            let mut total = transaction.prepare_cached(
+            let mut total = transaction.prepare_cached(&format!(
                 "UPDATE sessions SET
                     input = used.input, output = used.output,
                     cache_read = used.cache_read, cache_write = used.cache_write,
                     reasoning = used.reasoning, total_tokens = used.total,
                     cost_usd = used.cost_usd,
-                    models = (
-                        SELECT json_group_array(json_object(
-                            'model', model,
-                            'tokens', json_object(
-                                'input', input, 'output', output,
-                                'cacheRead', cache_read, 'cacheWrite', cache_write,
-                                'reasoning', reasoning, 'total', total),
-                            'costUsd', cost_usd))
-                        FROM (SELECT model, SUM(input) AS input, SUM(output) AS output,
-                                     SUM(cache_read) AS cache_read,
-                                     SUM(cache_write) AS cache_write,
-                                     SUM(reasoning) AS reasoning, SUM(total) AS total,
-                                     SUM(cost_usd) AS cost_usd
-                              FROM usage WHERE session_id = ?1 AND model <> ''
-                              GROUP BY model ORDER BY SUM(total) DESC))
+                    models = {models}
                  FROM (SELECT COALESCE(SUM(input), 0) AS input,
                               COALESCE(SUM(output), 0) AS output,
                               COALESCE(SUM(cache_read), 0) AS cache_read,
@@ -188,7 +174,8 @@ impl Store {
                               SUM(cost_usd) AS cost_usd
                        FROM usage WHERE session_id = ?1) AS used
                  WHERE sessions.id = ?1",
-            )?;
+                models = shares("usage.session_id = ?1"),
+            ))?;
 
             for Summary { session, usage } in summaries {
                 insert.execute(params![
@@ -293,8 +280,45 @@ impl Store {
     // ------------------------------------------------------------- reading --
 
     /// One page of the session list, with the totals of the whole match.
+    ///
+    /// Narrowed to a period, the list holds the sessions that used tokens in
+    /// it, and each session's tokens, cost and models are only what it used
+    /// there: the list is ordered and totalled by those, as the overview and
+    /// its rankings count the same period. Otherwise they are the session's
+    /// whole usage, kept on its row.
     pub fn list(&self, filter: &Filter) -> Result<SessionPage> {
-        let (where_clause, bindings) = predicate(filter);
+        let (where_clause, mut bindings) = predicate(filter);
+        let (source, models) = if filter.since.is_none() && filter.until.is_none() {
+            ("sessions".to_owned(), "models".to_owned())
+        } else {
+            // Bounds rather than nulls for an open end, so the range reaches
+            // the usage index and a short period reads only its own usage.
+            bindings.push(Box::new(filter.since.unwrap_or(i64::MIN)));
+            bindings.push(Box::new(filter.until.unwrap_or(i64::MAX)));
+            let window = format!(
+                "usage.at >= ?{} AND usage.at <= ?{}",
+                bindings.len() - 1,
+                bindings.len()
+            );
+            let source = format!(
+                "(SELECT sessions.id, sessions.agent, sessions.native_id, sessions.title,
+                         sessions.cwd, sessions.branch, sessions.started_at, sessions.updated_at,
+                         sessions.spawned, sessions.role, used.input, used.output,
+                         used.cache_read, used.cache_write, used.reasoning,
+                         used.total AS total_tokens, used.cost_usd, sessions.messages,
+                         sessions.tools, sessions.present
+                  FROM sessions
+                  JOIN (SELECT session_id, SUM(input) AS input, SUM(output) AS output,
+                               SUM(cache_read) AS cache_read, SUM(cache_write) AS cache_write,
+                               SUM(reasoning) AS reasoning, SUM(total) AS total,
+                               SUM(cost_usd) AS cost_usd
+                        FROM usage WHERE {window}
+                        GROUP BY session_id) AS used
+                    ON used.session_id = sessions.id)"
+            );
+            let models = shares(&format!("usage.session_id = page.id AND {window}"));
+            (source, models)
+        };
         let order = format!(
             "{} {}",
             filter.sort.key.column(),
@@ -307,12 +331,15 @@ impl Store {
         let limit = filter.limit.clamp(1, MAX_PAGE);
         let offset = filter.offset.max(0);
 
+        // The page is chosen before its models are read, so a period sums the
+        // models of the rows returned rather than of every match.
         let sql = format!(
             "SELECT id, agent, native_id, title, cwd, branch, started_at, updated_at,
-                    spawned, role, models, input, output, cache_read, cache_write,
+                    spawned, role, {models}, input, output, cache_read, cache_write,
                     reasoning, total_tokens, cost_usd, messages, tools, present
-             FROM sessions WHERE {where_clause}
-             ORDER BY {order}, id LIMIT {limit} OFFSET {offset}"
+             FROM (SELECT * FROM {source} AS listed WHERE {where_clause}
+                   ORDER BY {order}, id LIMIT {limit} OFFSET {offset}) AS page
+             ORDER BY {order}, id"
         );
         let mut statement = self.connection.prepare(&sql)?;
         let rows =
@@ -324,7 +351,7 @@ impl Store {
                     COALESCE(SUM(cache_read),0), COALESCE(SUM(cache_write),0),
                     COALESCE(SUM(reasoning),0), COALESCE(SUM(total_tokens),0),
                     SUM(cost_usd)
-             FROM sessions WHERE {where_clause}"
+             FROM {source} AS listed WHERE {where_clause}"
         );
         let (total, tokens, cost_usd) = self.connection.query_row(
             &totals,
@@ -575,7 +602,9 @@ impl Store {
     }
 }
 
-/// The `WHERE` clause and bindings a filter resolves to.
+/// The `WHERE` clause and bindings a filter resolves to, over the list's rows
+/// as `listed`. A period is not among them: [`Store::list`] narrows to one by
+/// reading only the usage inside it.
 ///
 /// Values are bound rather than interpolated; only the sort column and the
 /// page bounds reach the SQL text, and both come from closed sets.
@@ -598,7 +627,7 @@ fn predicate(filter: &Filter) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
             "(title LIKE ?{placeholder}
               OR cwd LIKE ?{placeholder}
               OR EXISTS (SELECT 1 FROM usage
-                         WHERE usage.session_id = sessions.id
+                         WHERE usage.session_id = listed.id
                            AND usage.model LIKE ?{placeholder}))"
         ));
     }
@@ -619,22 +648,35 @@ fn predicate(filter: &Filter) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
         bindings.push(Box::new(model.clone()));
         clauses.push(format!(
             "EXISTS (SELECT 1 FROM usage
-                     WHERE usage.session_id = sessions.id AND usage.model = ?{})",
+                     WHERE usage.session_id = listed.id AND usage.model = ?{})",
             bindings.len()
         ));
     }
-    if filter.since.is_some() || filter.until.is_some() {
-        bindings.push(Box::new(filter.since));
-        bindings.push(Box::new(filter.until));
-        let (since, until) = (bindings.len() - 1, bindings.len());
-        clauses.push(format!(
-            "EXISTS (SELECT 1 FROM usage
-                     WHERE usage.session_id = sessions.id
-                       AND usage.at >= COALESCE(?{since}, usage.at)
-                       AND usage.at <= COALESCE(?{until}, usage.at))"
-        ));
-    }
     (clauses.join(" AND "), bindings)
+}
+
+/// A scalar subquery for usage by model, largest first, as the JSON a
+/// session's `models` column holds and [`ModelSlice`] reads. `usage` is the
+/// condition choosing the usage rows, such as one session's.
+///
+/// Usage recorded under no model counts toward a session but is no model's,
+/// so it has no share.
+fn shares(usage: &str) -> String {
+    format!(
+        "(SELECT json_group_array(json_object(
+                     'model', model,
+                     'tokens', json_object(
+                         'input', input, 'output', output,
+                         'cacheRead', cache_read, 'cacheWrite', cache_write,
+                         'reasoning', reasoning, 'total', total),
+                     'costUsd', cost_usd))
+          FROM (SELECT model, SUM(input) AS input, SUM(output) AS output,
+                       SUM(cache_read) AS cache_read, SUM(cache_write) AS cache_write,
+                       SUM(reasoning) AS reasoning, SUM(total) AS total,
+                       SUM(cost_usd) AS cost_usd
+                FROM usage WHERE {usage} AND usage.model <> ''
+                GROUP BY model ORDER BY SUM(total) DESC))"
+    )
 }
 
 /// An agent is stored as its key.
@@ -1293,7 +1335,8 @@ mod tests {
         let second = store.overview(Some(DAY), None).expect("totals");
         assert_eq!(second.tokens.total, 40, "the first day's usage is outside");
         assert_eq!(second.sessions, 1, "but the session used tokens in it");
-        // The list narrows the same way, by when tokens were used.
+        // The list narrows the same way, by when tokens were used, and counts
+        // the same usage.
         let listed = |since, until| {
             let filter = Filter {
                 since,
@@ -1301,11 +1344,22 @@ mod tests {
                 limit: 50,
                 ..Filter::default()
             };
-            store.list(&filter).expect("lists").total
+            store.list(&filter).expect("lists")
         };
-        assert_eq!(listed(Some(DAY), None), 1);
-        assert_eq!(listed(Some(2 * DAY), None), 0, "nothing was used after");
-        assert_eq!(listed(None, Some(DAY / 2 - 1)), 0, "nor before");
+        let later = listed(Some(DAY), None);
+        assert_eq!(later.total, 1);
+        assert_eq!((later.tokens.total, later.cost_usd), (40, Some(1.5)));
+        let row = &later.sessions[0];
+        assert_eq!((row.tokens.total, row.cost_usd), (40, Some(1.5)));
+        assert_eq!(row.models[0].tokens.total, 40);
+        let first = listed(None, Some(DAY - 1));
+        assert_eq!(first.sessions[0].tokens.total, 100, "a period can end, too");
+        assert_eq!(
+            listed(Some(2 * DAY), None).total,
+            0,
+            "nothing was used after"
+        );
+        assert_eq!(listed(None, Some(DAY / 2 - 1)).total, 0, "nor before");
         assert_eq!(second.daily.len(), 1);
         let models = store.models(Some(DAY), None).expect("ranks");
         assert_eq!(models[0].tokens.total, 40);
@@ -1313,6 +1367,131 @@ mod tests {
         let all = store.overview(None, None).expect("totals");
         let days: Vec<_> = all.daily.iter().map(|day| day.tokens.total).collect();
         assert_eq!(days, [100, 40]);
+        // The session itself is still the whole of it.
+        let whole = store.get("codex:span").expect("reads").expect("exists");
+        assert_eq!((whole.tokens.total, whole.cost_usd), (140, Some(3.0)));
+    }
+
+    #[test]
+    fn a_period_orders_and_totals_the_list_by_what_was_used_in_it() {
+        let mut store = Store::memory().expect("opens");
+        let used = |at, total, cost| Usage {
+            cost_usd: Some(cost),
+            ..usage(at, total)
+        };
+        // One session did most of its work on the first day and little on the
+        // second; the other did all of its on the second, under two models.
+        let mut busy = summary("busy", Agent::Codex, DAY + DAY / 2, 0, false);
+        busy.usage = vec![used(DAY / 2, 1_000, 8.0), used(DAY + DAY / 2, 10, 0.25)];
+        let mut late = summary("late", Agent::ClaudeCode, DAY + DAY / 2, 0, false);
+        late.usage = vec![
+            used(DAY + DAY / 2, 30, 0.5),
+            Usage {
+                model: "model-b".into(),
+                ..used(DAY + DAY / 2, 20, 0.25)
+            },
+        ];
+        store.put(&unit("/s.jsonl"), &[busy, late]).expect("writes");
+
+        let list = |filter: Filter| {
+            store
+                .list(&Filter {
+                    limit: 50,
+                    ..filter
+                })
+                .expect("lists")
+        };
+        let ranked = |page: &SessionPage| -> Vec<(String, i64)> {
+            page.sessions
+                .iter()
+                .map(|session| (session.native_id.clone(), session.tokens.total))
+                .collect()
+        };
+        let largest = |key| Sort {
+            key,
+            descending: true,
+        };
+
+        let ever = list(Filter {
+            sort: largest(SortKey::Tokens),
+            ..Filter::default()
+        });
+        assert_eq!(ranked(&ever), [("busy".into(), 1_010), ("late".into(), 50)]);
+
+        let second = list(Filter {
+            since: Some(DAY),
+            sort: largest(SortKey::Tokens),
+            ..Filter::default()
+        });
+        assert_eq!(
+            ranked(&second),
+            [("late".into(), 50), ("busy".into(), 10)],
+            "the period's largest, not the largest that touched it"
+        );
+        let by_cost = list(Filter {
+            since: Some(DAY),
+            sort: largest(SortKey::Cost),
+            ..Filter::default()
+        });
+        let costs: Vec<_> = by_cost
+            .sessions
+            .iter()
+            .map(|session| (session.native_id.as_str(), session.cost_usd))
+            .collect();
+        assert_eq!(costs, [("late", Some(0.75)), ("busy", Some(0.25))]);
+        let shares: Vec<_> = second
+            .sessions
+            .iter()
+            .map(|session| {
+                session
+                    .models
+                    .iter()
+                    .map(|slice| (slice.model.as_str(), slice.tokens.total))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(
+            shares,
+            [
+                vec![("model-a", 30), ("model-b", 20)],
+                vec![("model-a", 10)]
+            ]
+        );
+
+        // What the overview and the projects ranking say of the period is what
+        // the list opened from them adds up to.
+        let overview = store.overview(Some(DAY), None).expect("totals");
+        assert_eq!(
+            (second.total, second.tokens, second.cost_usd),
+            (overview.sessions, overview.tokens, overview.cost_usd)
+        );
+        let projects = store.projects(Some(DAY), None).expect("ranks");
+        let project = list(Filter {
+            since: Some(DAY),
+            project: Some(projects[0].project.clone()),
+            ..Filter::default()
+        });
+        assert_eq!(
+            (project.tokens, project.cost_usd),
+            (projects[0].tokens, projects[0].cost_usd)
+        );
+
+        // Paging and narrowing work within a period as they do without one.
+        let rest = list(Filter {
+            since: Some(DAY),
+            sort: largest(SortKey::Tokens),
+            offset: 1,
+            ..Filter::default()
+        });
+        assert_eq!(ranked(&rest), [("busy".into(), 10)]);
+        let narrowed = list(Filter {
+            since: Some(DAY),
+            model: Some("model-b".into()),
+            search: Some("late".into()),
+            ..Filter::default()
+        });
+        assert_eq!(narrowed.total, 1);
+        assert_eq!(narrowed.sessions[0].native_id, "late");
     }
 
     #[test]

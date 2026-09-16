@@ -330,8 +330,12 @@ pub struct Mark {
 /// How a caller narrows the session list.
 ///
 /// Every field is optional and an omitted field filters nothing. The whole
-/// filter resolves to one indexed `SELECT`, so there is no view to open, no
-/// cursor to carry, and nothing to release afterwards.
+/// filter is answered afresh each time it is sent, so there is no view to
+/// open, no cursor to carry, and nothing to release afterwards.
+///
+/// A period, from `since` or `until`, also changes what each session counts:
+/// its tokens, cost and models are only what it used inside the period, and
+/// the list is ordered and totalled by those.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Filter {
@@ -341,9 +345,11 @@ pub struct Filter {
     pub agents: Vec<Agent>,
     /// Include runs an agent spawned for itself.
     pub include_spawned: bool,
-    /// Only sessions that used tokens at or after this instant.
+    /// Only sessions that used tokens at or after this instant, counting only
+    /// what they used from then.
     pub since: Option<i64>,
-    /// Only sessions that used tokens at or before this instant.
+    /// Only sessions that used tokens at or before this instant, counting only
+    /// what they used until then.
     pub until: Option<i64>,
     /// Only sessions that worked in this directory, matched whole.
     pub project: Option<String>,
@@ -371,6 +377,8 @@ pub struct Sort {
 ///
 /// Closed, and every value maps to an indexed column, so the list cannot be
 /// asked for an ordering that would make the database sort the whole table.
+/// Within a period, tokens and cost are what was used in it, so ordering by
+/// them sorts the sessions of that period instead.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SortKey {
@@ -388,7 +396,7 @@ pub enum SortKey {
 }
 
 impl SortKey {
-    /// The indexed column this orders on.
+    /// The column this orders on.
     pub fn column(self) -> &'static str {
         match self {
             SortKey::Updated => "updated_at",

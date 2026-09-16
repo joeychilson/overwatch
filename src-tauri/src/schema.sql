@@ -17,7 +17,8 @@ CREATE TABLE sessions (
     spawned      INTEGER NOT NULL DEFAULT 0,
     role         TEXT,
     -- The model shares as JSON, and the totals below, are sums of the session's
-    -- usage, kept on the row so a list row needs no join.
+    -- usage, kept on the row so a list row needs no join. A list narrowed to a
+    -- period sums the usage inside it instead.
     models       TEXT    NOT NULL DEFAULT '[]',
     input        INTEGER NOT NULL DEFAULT 0,
     output       INTEGER NOT NULL DEFAULT 0,
@@ -37,7 +38,8 @@ CREATE TABLE sessions (
 
 -- Every ordering the list offers reaches one of these, so sorting never scans
 -- the table. The filtered indexes match the default view, which hides runs an
--- agent spawned for itself.
+-- agent spawned for itself. Within a period, tokens and cost are summed from
+-- the usage inside it, so ordering by them sorts that period's sessions.
 CREATE INDEX sessions_updated ON sessions (updated_at DESC);
 CREATE INDEX sessions_started ON sessions (started_at DESC);
 CREATE INDEX sessions_tokens  ON sessions (total_tokens DESC);
