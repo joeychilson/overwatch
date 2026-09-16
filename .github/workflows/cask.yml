@@ -37,7 +37,7 @@ jobs:
         run: brew audit --cask "$CASK"
 
       - name: Install it the way a reader would
-        run: brew install --cask --no-quarantine "$CASK"
+        run: brew install --cask "$CASK"
 
       - name: Check what arrived
         run: |
@@ -62,4 +62,8 @@ jobs:
             exit 1
           fi
 
-          echo "Installed $installed, $arches, from the tap."
+          # Whether a downloaded copy is stopped on first launch, which is
+          # what an unnotarized app has to tell people about. Homebrew has no
+          # quarantine option any more, so this is the only way to know.
+          quarantine=$(xattr -p com.apple.quarantine "$app" 2>/dev/null || echo "none")
+          echo "Installed $installed, $arches, from the tap. Quarantine: $quarantine"
