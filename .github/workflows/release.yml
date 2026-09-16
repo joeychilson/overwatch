@@ -17,7 +17,9 @@ concurrency:
 jobs:
   release:
     runs-on: macos-latest
-    timeout-minutes: 45
+    # Two architectures from cold, so roughly twice what Verify's single build
+    # takes.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: voidzero-dev/setup-vp@v1.19.0
@@ -32,13 +34,14 @@ jobs:
       # makes the build universal.
       - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
-      - name: Check the tag against the version the app reports
+      - name: Check the tag against the versions declared
         run: |
           set -euo pipefail
           tagged="${GITHUB_REF_NAME#v}"
           declared=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          if [ "$tagged" != "$declared" ]; then
-            echo "Tag $GITHUB_REF_NAME does not match tauri.conf.json version $declared" >&2
+          packaged=$(node -p "require('./package.json').version")
+          if [ "$tagged" != "$declared" ] || [ "$tagged" != "$packaged" ]; then
+            echo "Tag $GITHUB_REF_NAME, tauri.conf.json $declared and package.json $packaged disagree" >&2
             exit 1
           fi
           echo "version=$tagged" >> "$GITHUB_ENV"
