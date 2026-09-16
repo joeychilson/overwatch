@@ -33,6 +33,8 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
+    "category": "DeveloperTool",
+    "copyright": "\u00a9 2026 Joey Chilson",
     "macOS": {
       "minimumSystemVersion": "13.3"
     },

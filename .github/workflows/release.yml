@@ -85,9 +85,12 @@ jobs:
           Privacy & Security**, scroll to the bottom, and choose **Open Anyway**.
           NOTES
           printf '\nsha256: `%s`\n' "$sha256" >> notes.md
+          # The notes above are prepended to the list of changes GitHub works
+          # out from the commits since the last tag.
           gh release create "$GITHUB_REF_NAME" "$dmg" \
             --title "$GITHUB_REF_NAME" \
             --notes-file notes.md \
+            --generate-notes \
             --verify-tag
 
       # Kept last: a release that is already published is worth having even if

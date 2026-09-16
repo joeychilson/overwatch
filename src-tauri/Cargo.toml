@@ -5,6 +5,7 @@ description = "Local coding session history, model usage, and cost insights"
 license = "MIT"
 authors = ["Joey Chilson"]
 readme = "../README.md"
+repository = "https://github.com/joeychilson/overwatch"
 publish = false
 edition = "2024"
 rust-version = "1.98"

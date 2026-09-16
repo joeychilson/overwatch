@@ -1,0 +1,29 @@
+# Every dependency here is pinned to an exact version, which keeps builds
+# reproducible and leaves nothing to notice when one falls behind. These are
+# the notices. Each ecosystem is raised as one grouped pull request a week
+# rather than one per package.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      frontend:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: weekly
+    groups:
+      rust:
+        patterns: ["*"]
