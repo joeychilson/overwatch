@@ -727,6 +727,10 @@ export function answer(command: string, args: Record<string, unknown>): unknown 
       return id === FEATURED.id ? marks(TURNS) : [];
     case "get_transcript":
       return transcript(id, number(args.offset) ?? 0, number(args.limit) ?? 150);
+    case "save_card":
+      // Nothing is written here, so the answer is where the engine would have
+      // put it: the Desktop, under the name the window asked for.
+      return `/Users/you/Desktop/${typeof args.name === "string" ? args.name : "overwatch"}.png`;
     default:
       // Subscribing to the engine's events answers with a listener id.
       return 0;

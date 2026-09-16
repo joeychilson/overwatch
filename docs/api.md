@@ -21,8 +21,9 @@ one and are written by hand.
 - **Names are camelCase on the wire**, and enum values are snake_case strings
   (`claude_code`, `sign_in`).
 - **A failure rejects with `{ kind, message }`.** `kind` is one of
-  `not_found`, `read_failed`, `store_failed`, `open_failed`, or `unavailable`;
-  the last is the client's own, used when there is no Tauri host to answer.
+  `not_found`, `read_failed`, `write_failed`, `store_failed`, `open_failed`,
+  `invalid`, or `unavailable`; the last is the client's own, used when there is
+  no Tauri host to answer.
   `message` is safe to display and never contains transcript content.
 
 ## Commands
@@ -40,6 +41,7 @@ one and are written by hand.
 | `list_projects`       | `since?`, `until?`        | `ProjectUsage[]` |
 | `get_overview`        | `since?`, `until?`        | `Overview`       |
 | `get_status`          | —                         | `Status`         |
+| `save_card`           | `name`, `png`             | `string`         |
 | `open_window`         | `path?`                   | —                |
 | `quit`                | —                         | —                |
 
@@ -47,6 +49,14 @@ one and are written by hand.
 `open_session_folder` opens the folder it worked in, both in Finder.
 `open_window` brings the app's window forward, at `path` when one is given, and
 `quit` quits; the menu bar item's panel offers both.
+
+`save_card` writes a picture the window drew — the overview's share card — to
+the Desktop, or to the home directory when there is none. `name` carries no
+extension and is reduced to lowercase words and hyphens, so it can only ever
+name a file directly in that folder; a name already taken gets a number rather
+than displacing what is there. `png` is the image's bytes in base64, as a
+canvas's data URL carries them, and anything that is not a PNG is refused. The
+answer is the path it was written to.
 
 `get_status` never waits for a scan, and no command starts one: the engine
 scans at startup and every five seconds after. It emits `index_changed`,

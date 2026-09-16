@@ -2,7 +2,7 @@
  * The engine's command surface.
  *
  * Every type here is written by hand and mirrors a Rust type in
- * `src-tauri/src/session.rs` one to one. There are thirteen commands and about
+ * `src-tauri/src/session.rs` one to one. There are fourteen commands and about
  * two dozen shapes, which is small enough to keep honest by reading.
  *
  * Counts and money are plain numbers. The largest total any agent records is a
@@ -282,7 +282,14 @@ export interface Status {
 
 /** What a failed command rejects with. */
 export interface EngineError {
-  kind: "not_found" | "read_failed" | "store_failed" | "open_failed" | "unavailable";
+  kind:
+    | "not_found"
+    | "read_failed"
+    | "write_failed"
+    | "store_failed"
+    | "open_failed"
+    | "invalid"
+    | "unavailable";
   message: string;
 }
 
@@ -365,6 +372,18 @@ export function getOverview(since?: number, until?: number): Promise<Overview> {
 /** What indexing has done so far. Never waits for a scan. */
 export function getStatus(): Promise<Status> {
   return call<Status>("get_status");
+}
+
+/**
+ * Write a picture the window drew to the Desktop, and answer with where it
+ * went.
+ *
+ * `name` has no extension: the engine gives it one, and a name already taken
+ * gets a number rather than overwriting what is there. `png` is the image's
+ * bytes in base64, which is what a canvas's data URL already carries.
+ */
+export function saveCard(name: string, png: string): Promise<string> {
+  return call<string>("save_card", { name, png });
 }
 
 /** Bring the app's window forward, at a destination such as `/subscriptions` when one is given. */

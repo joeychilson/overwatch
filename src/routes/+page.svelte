@@ -20,12 +20,14 @@
   import LayoutGrid from "@lucide/svelte/icons/layout-grid";
   import PageHeader, { pageIcon } from "#lib/components/ui/PageHeader.svelte";
   import Segmented from "#lib/components/ui/Segmented.svelte";
+  import ShareButton from "#lib/components/share/ShareButton.svelte";
   import UsageChart from "#lib/components/charts/UsageChart.svelte";
   import Ranking, { SHOWN } from "#lib/components/charts/Ranking.svelte";
   import AgentMark from "#lib/components/marks/AgentMark.svelte";
   import { MOST_TOKENS } from "#lib/components/models/ModelRows.svelte";
   import { getOverview, listModels, listProjects, listSessions } from "#lib/api/backend.ts";
   import { sessionLabel } from "#lib/agents.ts";
+  import { card, type Card } from "#lib/card.ts";
   import { errorLine } from "#lib/errors.ts";
   import { REPLACE, sortParam, withParams } from "#lib/address.ts";
   import {
@@ -132,10 +134,11 @@
 
 <svelte:head><title>Overview · Overwatch</title></svelte:head>
 
-{#snippet header(description?: string)}
+{#snippet header(description?: string, picture?: Card)}
   <PageHeader title="Overview" {description}>
     {#snippet icon()}<LayoutGrid {...pageIcon} />{/snippet}
     {#snippet actions()}
+      <ShareButton card={picture} />
       <Segmented
         options={MEASURES}
         value={measure}
@@ -183,7 +186,10 @@
   {@const { since, overview, before, models, projects } = await read(days, engine.revision)}
   {@const sessions = await readSessions(days, measure, engine.revision)}
 
-  {@render header(covered(since, overview.daily[0]?.day))}
+  {@render header(
+    covered(since, overview.daily[0]?.day),
+    overview.sessions === 0 ? undefined : card({ overview, models, days, measure, now: clock.now }),
+  )}
 
   {#if overview.sessions === 0}
     <p class="text-muted">

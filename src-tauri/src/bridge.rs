@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use tauri::{AppHandle, Runtime, State};
+use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::error::{Error, Result};
@@ -135,6 +135,29 @@ pub fn get_status(index: State<'_, Arc<Index>>) -> Status {
     status
 }
 
+/// Write a picture of a period the window drew to the Desktop, and answer with
+/// where it went.
+///
+/// `png` carries the image's bytes in base64. The Desktop is where a saved file
+/// is hardest to lose; without one, the home directory stands in. A name
+/// already taken gets a number rather than displacing what is there.
+///
+/// # Errors
+///
+/// Returns an error when the image is not a PNG, when neither folder can be
+/// found, or when the file cannot be written.
+#[tauri::command(async)]
+pub fn save_card<R: Runtime>(app: AppHandle<R>, name: String, png: String) -> Result<String> {
+    let bytes = crate::card::decode(&png)?;
+    let folder = app
+        .path()
+        .desktop_dir()
+        .or_else(|_| app.path().home_dir())
+        .map_err(|error| Error::Open(error.to_string()))?;
+    let path = crate::card::write(&folder, &name, &bytes)?;
+    Ok(path.display().to_string())
+}
+
 /// Bring the app's window forward, at a destination when one is given.
 #[tauri::command(async)]
 pub fn open_window<R: Runtime>(app: AppHandle<R>, path: Option<String>) {
@@ -162,6 +185,7 @@ pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         list_projects,
         get_overview,
         get_status,
+        save_card,
         open_window,
         quit,
     ])

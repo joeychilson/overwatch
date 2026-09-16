@@ -23,9 +23,22 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    /// A file could not be written.
+    #[error("could not write {path}: {source}")]
+    Write {
+        /// The file concerned.
+        path: String,
+        /// The underlying failure.
+        source: std::io::Error,
+    },
+
     /// The index database failed.
     #[error("the index database failed: {0}")]
     Store(#[from] rusqlite::Error),
+
+    /// An argument was not what the command accepts.
+    #[error("{0}")]
+    Invalid(String),
 
     /// The system could not open a file or folder.
     #[error("could not open it: {0}")]
@@ -48,8 +61,10 @@ impl Error {
         match self {
             Error::NotFound(_) => "not_found",
             Error::Read { .. } => "read_failed",
+            Error::Write { .. } => "write_failed",
             Error::Store(_) => "store_failed",
             Error::Open(_) => "open_failed",
+            Error::Invalid(_) => "invalid",
         }
     }
 }

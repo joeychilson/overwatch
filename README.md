@@ -14,6 +14,7 @@ It reads what **Claude Code, Codex, OpenCode, Pi, and Grok Build** already keep 
 <img src=".github/assets/overwatch-menu-bar.png" alt="Overwatch menu bar panel listing Claude, Codex, OpenCode Go, and Grok accounts, those in use first, with each limit's time to reset and how much is left" width="240" align="right">
 
 - **Overview**: tokens and cost by agent, plus the top models, projects, and sessions.
+- **Share**: any period as a card — your top models and agents side by side — saved to your Desktop as a PNG.
 - **Sessions**: search every session and read it as a conversation with a timeline of turns and tool calls.
 - **Models**: usage, cost, and trend for each model.
 - **Subscriptions**: what's left of your Claude, Codex, Grok, and OpenCode Go limits, with a notification before one runs out.

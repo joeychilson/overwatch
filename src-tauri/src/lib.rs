@@ -9,10 +9,12 @@
 //! agent's files and prices their usage with [`price`], [`session`] is what
 //! those reads produce, [`store`] holds the index, [`index`] keeps it current,
 //! and [`bridge`] answers the window. [`account`] reads subscription limits
-//! from their providers, and the menu bar item shows them.
+//! from their providers, and the menu bar item shows them. [`card`] writes out
+//! a picture of a period that the window drew and the reader wants to keep.
 
 pub mod account;
 pub mod bridge;
+pub mod card;
 pub mod error;
 pub mod index;
 pub mod price;
