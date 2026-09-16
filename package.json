@@ -30,6 +30,7 @@
     "demo": "OVERWATCH_SAMPLE=1 vp dev",
     "desktop": "tauri dev",
     "desktop:build": "tauri build --bundles app -- --locked",
+    "dmg:build": "tauri build --target universal-apple-darwin --bundles dmg -- --locked",
     "test:unit": "vp test --run"
   },
   "dependencies": {

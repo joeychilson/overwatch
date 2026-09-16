@@ -1,0 +1,139 @@
+name: Release
+
+# A tag cuts a release: the app is built for both architectures, put in a disk
+# image, attached to the tag, and its cask updated in the Homebrew tap. The
+# Verify workflow runs on the same push, so what ships has passed the checks.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: voidzero-dev/setup-vp@v1.19.0
+        with:
+          node-version-file: ".node-version"
+          run-install: false
+          cache: true
+      - run: vp install --frozen-lockfile
+      - name: Use project toolchain
+        run: echo "$GITHUB_WORKSPACE/node_modules/.bin" >> "$GITHUB_PATH"
+      # The runner's own architecture is already there; the other one is what
+      # makes the build universal.
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Check the tag against the version the app reports
+        run: |
+          set -euo pipefail
+          tagged="${GITHUB_REF_NAME#v}"
+          declared=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "$tagged" != "$declared" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match tauri.conf.json version $declared" >&2
+            exit 1
+          fi
+          echo "version=$tagged" >> "$GITHUB_ENV"
+          # What the app calls itself is where it keeps its files, and so what
+          # uninstalling has to clear.
+          echo "identifier=$(node -p "require('./src-tauri/tauri.conf.json').identifier")" >> "$GITHUB_ENV"
+
+      - run: vp run dmg:build
+
+      - name: Find the disk image and measure it
+        run: |
+          set -euo pipefail
+          # A missing target builds one architecture and says nothing, and the
+          # people it leaves out are the ones who cannot run it at all.
+          arches=$(lipo -archs src-tauri/target/universal-apple-darwin/release/overwatch)
+          for want in arm64 x86_64; do
+            case " $arches " in
+              *" $want "*) ;;
+              *) echo "Built without $want: $arches" >&2; exit 1 ;;
+            esac
+          done
+          dmg=$(ls src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg)
+          echo "dmg=$dmg" >> "$GITHUB_ENV"
+          echo "sha256=$(shasum -a 256 "$dmg" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "Built $(basename "$dmg")"
+
+      - name: Attach it to the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cat > notes.md <<'NOTES'
+          Install with Homebrew:
+
+          ```sh
+          brew install --cask --no-quarantine joeychilson/tap/overwatch
+          ```
+
+          Or take the disk image below. The app is not notarized — Apple charges
+          for that — so macOS blocks it the first time. Open **System Settings →
+          Privacy & Security**, scroll to the bottom, and choose **Open Anyway**.
+          NOTES
+          printf '\nsha256: `%s`\n' "$sha256" >> notes.md
+          gh release create "$GITHUB_REF_NAME" "$dmg" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --verify-tag
+
+      # Kept last: a release that is already published is worth having even if
+      # the tap cannot be reached, and re-running the job repeats this step
+      # alone once the token is in place.
+      - name: Point the Homebrew cask at it
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "No TAP_TOKEN secret; leaving the cask alone." >&2
+            exit 0
+          fi
+          remote="https://x-access-token:${TAP_TOKEN}@github.com/${GITHUB_REPOSITORY_OWNER}/homebrew-tap.git"
+          git init -q -b main tap
+          cd tap
+          git remote add origin "$remote"
+          if git ls-remote --exit-code --heads origin main >/dev/null 2>&1; then
+            git fetch -q --depth 1 origin main
+            git reset -q --hard origin/main
+          fi
+          mkdir -p Casks
+          cat > Casks/overwatch.rb <<CASK
+          cask "overwatch" do
+            version "${version}"
+            sha256 "${sha256}"
+
+            url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v#{version}/$(basename "$dmg" | sed "s/${version}/#{version}/")"
+            name "Overwatch"
+            desc "Explore coding sessions, understand model usage, and track costs on your desktop"
+            homepage "https://github.com/${GITHUB_REPOSITORY}"
+
+            # Not notarized, so Gatekeeper stops it unless it arrives without the
+            # quarantine flag: install with \`--no-quarantine\`.
+            depends_on macos: ">= :ventura"
+
+            app "Overwatch.app"
+
+            zap trash: [
+              "~/Library/Application Support/${identifier}",
+              "~/Library/Caches/${identifier}",
+              "~/Library/Saved Application State/${identifier}.savedState",
+            ]
+          end
+          CASK
+          git add Casks/overwatch.rb
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "overwatch ${version}"
+          git push -q origin main
+          echo "Cask updated to ${version}."

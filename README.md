@@ -48,9 +48,19 @@ An agent appears once its directory exists. [docs/agents.md](docs/agents.md) cov
 - Usage with no known price shows `—`, not `$0.00`.
 - The usage endpoints are undocumented and may change.
 
-## Build
+## Install
 
-Requires macOS 13.3+, [Vite+](https://viteplus.dev/guide/), and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). Use the Node version in `.node-version`; rustup picks up `rust-toolchain.toml`.
+Requires macOS 13.3 or later. Universal: Apple silicon and Intel.
+
+```sh
+brew install --cask --no-quarantine joeychilson/tap/overwatch
+```
+
+Or take the disk image from the [latest release](https://github.com/joeychilson/overwatch/releases/latest). Overwatch is not notarized — Apple charges a yearly fee for that — so macOS stops it the first time it runs. Open **System Settings → Privacy & Security**, scroll to the bottom, and choose **Open Anyway**. Installing through Homebrew with `--no-quarantine` skips this.
+
+## Building it yourself
+
+Requires [Vite+](https://viteplus.dev/guide/) and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). Use the Node version in `.node-version`; rustup picks up `rust-toolchain.toml`.
 
 ```sh
 git clone https://github.com/joeychilson/overwatch.git
@@ -81,6 +91,7 @@ Always go through `vp exec vp` to use the project's own Vite+.
 | `vp exec vp run fmt`           | Format frontend and Rust code           |
 | `vp exec vp run build`         | Check and build the frontend            |
 | `vp exec vp run desktop:build` | Build the macOS app                     |
+| `vp exec vp run dmg:build`     | Build the universal disk image          |
 | `vp exec vp run screenshot`    | Render the screenshots from sample data |
 | `vp exec vp run record`        | Record a walk through the app           |
 
