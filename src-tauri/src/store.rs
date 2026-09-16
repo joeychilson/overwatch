@@ -27,7 +27,7 @@ use crate::source::{Summary, Unit};
 
 /// Bumped whenever the shape below or what a reader records changes, which
 /// rebuilds the index.
-const SCHEMA: i64 = 8;
+const SCHEMA: i64 = 9;
 
 /// The largest page the list will return, however much is asked for.
 const MAX_PAGE: i64 = 500;
@@ -111,7 +111,11 @@ impl Store {
     /// A session can span several units — a Codex thread resumed into a new
     /// file is still one thread — so a unit replaces only its own usage, and
     /// the session's totals are summed from all of it. The session keeps the
-    /// title of its earliest file and the path of its latest.
+    /// title of its earliest file, and the path, directory, branch and role of
+    /// its latest, falling back to another file's where that one recorded
+    /// none. It is spawned if any of its files says so. Files are read in
+    /// parallel and finish in any order, so none of this may depend on which
+    /// was written last.
     pub fn put(&mut self, unit: &Unit, summaries: &[Summary]) -> Result<()> {
         let transaction = self.connection.transaction()?;
         let path = unit.path.to_string_lossy().into_owned();
@@ -134,9 +138,17 @@ impl Store {
                     started_at = MIN(sessions.started_at, excluded.started_at),
                     path = CASE WHEN excluded.updated_at >= sessions.updated_at
                                 THEN excluded.path ELSE sessions.path END,
+                    cwd = CASE WHEN excluded.updated_at >= sessions.updated_at
+                               THEN COALESCE(excluded.cwd, sessions.cwd)
+                               ELSE COALESCE(sessions.cwd, excluded.cwd) END,
+                    branch = CASE WHEN excluded.updated_at >= sessions.updated_at
+                                  THEN COALESCE(excluded.branch, sessions.branch)
+                                  ELSE COALESCE(sessions.branch, excluded.branch) END,
+                    role = CASE WHEN excluded.updated_at >= sessions.updated_at
+                                THEN COALESCE(excluded.role, sessions.role)
+                                ELSE COALESCE(sessions.role, excluded.role) END,
                     updated_at = MAX(sessions.updated_at, excluded.updated_at),
-                    cwd = excluded.cwd, branch = excluded.branch,
-                    spawned = excluded.spawned, role = excluded.role, present = 1",
+                    spawned = sessions.spawned OR excluded.spawned, present = 1",
             )?;
             let mut clear = transaction
                 .prepare_cached("DELETE FROM usage WHERE session_id = ?1 AND source = ?2")?;
@@ -1089,6 +1101,53 @@ mod tests {
             .expect("writes");
         let thread = store.get("codex:thread").expect("reads").expect("exists");
         assert_eq!(thread.tokens.total, 145);
+    }
+
+    #[test]
+    fn a_session_spanning_several_files_is_the_same_whichever_is_read_last() {
+        // A spawned thread resumed into a second file in another directory. The
+        // second recorded no branch or role, nor that the thread was spawned.
+        let mut earlier = summary("thread", Agent::Codex, 2_000, 100, true);
+        earlier.session.cwd = Some("/w/before".into());
+        earlier.session.branch = Some("main".into());
+        earlier.session.role = Some("thread_spawn".into());
+        let mut later = summary("thread", Agent::Codex, 9_000, 40, false);
+        later.session.cwd = Some("/w/after".into());
+        let files = [
+            ("/sessions/rollout-1.jsonl", &earlier),
+            ("/sessions/rollout-2.jsonl", &later),
+        ];
+
+        for order in [[files[0], files[1]], [files[1], files[0]]] {
+            let mut store = Store::memory().expect("opens");
+            for (path, read) in order {
+                store
+                    .put(&unit(path), std::slice::from_ref(read))
+                    .expect("writes");
+            }
+            let thread = store.get("codex:thread").expect("reads").expect("exists");
+            assert_eq!(
+                thread.cwd.as_deref(),
+                Some("/w/after"),
+                "the directory it was last worked in"
+            );
+            assert_eq!(
+                (thread.branch.as_deref(), thread.role.as_deref()),
+                (Some("main"), Some("thread_spawn")),
+                "what the latest file did not record, an earlier one did"
+            );
+            assert!(
+                thread.spawned,
+                "a continuation does not unmark a spawned run"
+            );
+            let projects: Vec<_> = store
+                .projects(None, None)
+                .expect("ranks")
+                .into_iter()
+                .map(|project| (project.project, project.tokens.total))
+                .collect();
+            assert_eq!(projects, [("/w/after".to_owned(), 140)]);
+        }
     }
 
     #[test]
