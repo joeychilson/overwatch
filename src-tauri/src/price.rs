@@ -18,32 +18,33 @@ use crate::session::Tokens;
 /// The catalog, cut down to prices.
 const PRICES: &str = include_str!("prices.json");
 
-/// Every provider's models, and each model's rates by context size.
+/// Every provider's models, and each model's rates by context size, from the
+/// base rates up. The file ships inside the binary, and a test parses it.
 static CATALOG: LazyLock<HashMap<String, HashMap<String, Vec<Rates>>>> =
     LazyLock::new(|| serde_json::from_str(PRICES).expect("prices.json is valid"));
 
 /// Dollars per million tokens, for requests whose context was above `above`.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
-pub struct Rates {
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub(crate) struct Rates {
     #[serde(default)]
     above: i64,
     /// Fresh input.
-    pub input: f64,
+    pub(crate) input: f64,
     /// Output.
-    pub output: f64,
+    pub(crate) output: f64,
     /// Input served from a prompt cache.
-    pub cache_read: f64,
+    pub(crate) cache_read: f64,
     /// Input written into a prompt cache.
-    pub cache_write: f64,
+    pub(crate) cache_write: f64,
     /// Reasoning counted apart from output.
-    pub reasoning: f64,
+    pub(crate) reasoning: f64,
 }
 
 impl Rates {
     /// What `tokens` cost at these rates.
     ///
     /// Reasoning is priced only as far as it was counted apart from output.
-    pub fn cost(&self, tokens: &Tokens) -> f64 {
+    pub(crate) fn cost(&self, tokens: &Tokens) -> f64 {
         (tokens.input as f64 * self.input
             + tokens.output as f64 * self.output
             + tokens.cache_read as f64 * self.cache_read
@@ -55,9 +56,9 @@ impl Rates {
 
 /// The rates `provider` lists for `model`, for a request whose context held
 /// `context` tokens, or `None` when the catalog has no price for it.
-pub fn rates(provider: &str, model: &str, context: i64) -> Option<Rates> {
+pub(crate) fn rates(provider: &str, model: &str, context: i64) -> Option<Rates> {
     let tiers = CATALOG.get(provider)?.get(model)?;
-    // Listed from the base rates up, so the last one the context passed wins.
+    // The last tier the context passed, or the base rates.
     tiers
         .iter()
         .rev()
@@ -68,7 +69,7 @@ pub fn rates(provider: &str, model: &str, context: i64) -> Option<Rates> {
 
 /// A value that changes whenever the prices do, so that costs estimated with
 /// other prices can be estimated again.
-pub fn version() -> u64 {
+pub(crate) fn version() -> u64 {
     let mut hasher = DefaultHasher::new();
     PRICES.hash(&mut hasher);
     hasher.finish()
@@ -87,6 +88,16 @@ mod tests {
         let large = rates("openai", "gpt-5.6-sol", 300_000).expect("priced");
         assert_eq!((large.input, large.output), (8.0, 30.0));
         assert!(rates("openai", "no-such-model", 0).is_none());
+    }
+
+    #[test]
+    fn every_model_lists_its_tiers_from_the_base_rates_up() {
+        for (provider, models) in CATALOG.iter() {
+            for (model, tiers) in models {
+                let rising = tiers.windows(2).all(|pair| pair[0].above < pair[1].above);
+                assert!(!tiers.is_empty() && rising, "{provider} {model}");
+            }
+        }
     }
 
     #[test]

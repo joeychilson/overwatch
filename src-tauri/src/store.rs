@@ -1,46 +1,54 @@
-//! The index.
+//! The index: one SQLite file holding a row per session, what each session
+//! used by quarter hour, and the file signatures that make rescanning
+//! incremental. No transcript text is kept; bodies stay in the agents' files.
 //!
-//! A single SQLite file holding one row per session, what each session used by
-//! quarter hour, and the file signatures that make rescanning incremental. It
-//! holds no transcript text: bodies stay in the agents' own files and are read
-//! when a conversation is opened.
-//!
-//! # No migrations
-//!
-//! The index is a cache, not a record. Everything in it can be rebuilt from the
-//! agents' files, so a schema change drops the tables and rebuilds rather than
-//! migrating, and no store in the wild can have a shape a migration did not
-//! expect.
+//! The index is a cache, not a record. Everything in it can be rebuilt from
+//! the agents' files, so a new schema, or new prices, drops the tables and
+//! rebuilds rather than migrating, and no index in the wild can have a shape
+//! a migration did not expect.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
-use rusqlite::{Connection, ErrorCode, OptionalExtension, params};
+use rusqlite::types::{
+    FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, Type, Value, ValueRef,
+};
+use rusqlite::{Connection, ErrorCode, OptionalExtension, Row, params, params_from_iter};
 
 use crate::error::{Error, Result};
 use crate::session::{
-    Account, Agent, AgentDay, AgentTotals, DayTotals, Filter, HourTotals, ModelDay, ModelSlice,
-    ModelUsage, Overview, ProjectUsage, Provider, Session, SessionPage, Sort, SortKey, Tokens,
+    Account, Agent, AgentDay, AgentTotals, DayTotals, Filter, HourTotals, ModelDay, ModelUsage,
+    Overview, ProjectUsage, Provider, Session, SessionPage, SortKey, Tokens,
 };
-use crate::source::{Summary, Unit};
+pub use crate::source::Unit;
+use crate::source::{QUARTER_HOUR, Summary};
 
-/// Bumped whenever the shape below or what a reader records changes, which
+/// Bumped whenever the schema or what a reader records changes, which
 /// rebuilds the index.
-const SCHEMA: i64 = 9;
+const SCHEMA: i64 = 10;
 
-/// The largest page the list will return, however much is asked for.
+/// The largest page the list returns, however much is asked for.
 const MAX_PAGE: i64 = 500;
 
-/// The local day a usage row's quarter hour falls in, as the instant of the
-/// midnight that starts it.
+/// The columns [`read_session`] reads, in its order, before the model shares.
+const SESSION: &str = "id, agent, native_id, title, cwd, branch, started_at, updated_at, \
+                       spawned, role, input, output, cache_read, cache_write, reasoning, \
+                       total_tokens, cost_usd, messages, tools, present";
+
+/// Usage rows summed in the order [`read_tokens`] reads them, then their cost.
+const SUMS: &str = "SUM(input) AS input, SUM(output) AS output, \
+                    SUM(cache_read) AS cache_read, SUM(cache_write) AS cache_write, \
+                    SUM(reasoning) AS reasoning, SUM(total) AS total, SUM(cost_usd) AS cost_usd";
+
+/// The local day a usage row falls in, as the instant of the midnight that
+/// starts it.
 ///
 /// SQLite applies the local zone's rules to each instant, so a day beside a
 /// clock change is 23 or 25 hours long rather than shifted by an hour.
 const LOCAL_DAY: &str = "unixepoch(date(at / 1000, 'unixepoch', 'localtime'), 'utc') * 1000";
 
-/// The local hour a usage row's quarter hour falls in, as the instant it
-/// starts.
+/// The local hour a usage row falls in, as the instant it starts.
 ///
 /// The zone's offset at the instant says how far into its local hour it is,
 /// so every span is an hour long. Grouping on the clock's reading would fold
@@ -50,24 +58,12 @@ const LOCAL_DAY: &str = "unixepoch(date(at / 1000, 'unixepoch', 'localtime'), 'u
 const LOCAL_HOUR: &str = "at - (at + (unixepoch(datetime(at / 1000, 'unixepoch', 'localtime')) \
                           - at / 1000) * 1000) % 3600000";
 
-/// Where one session's history was read from.
-pub struct Origin {
+/// A session, and the unit its history was last read from.
+pub(crate) struct Origin {
     /// The session, as the list shows it.
-    pub session: Session,
+    pub(crate) session: Session,
     /// The unit it was last read from.
-    pub unit: Unit,
-    /// The agent's own id for it.
-    pub native_id: String,
-}
-
-/// Usage within one span of local time, such as a day, split by agent.
-struct Span {
-    /// The instant it starts.
-    start: i64,
-    sessions: i64,
-    tokens: Tokens,
-    cost_usd: Option<f64>,
-    by_agent: Vec<AgentDay>,
+    pub(crate) unit: Unit,
 }
 
 /// The index database.
@@ -79,7 +75,7 @@ impl Store {
     /// Open the index at `path`, creating it, or rebuilding it when it was
     /// built by another schema or with other prices, or is not a readable
     /// database at all.
-    pub fn open(path: &Path) -> Result<Store> {
+    pub(crate) fn open(path: &Path) -> Result<Store> {
         match Store::connect(path) {
             Err(Error::Store(error))
                 if matches!(
@@ -108,33 +104,29 @@ impl Store {
         }
     }
 
-    /// Open the index at `path`, creating it or rebuilding it as needed.
+    /// Open the index at `path`, creating it, or rebuilding it when its schema
+    /// or prices moved on.
     fn connect(path: &Path) -> Result<Store> {
         let connection = Connection::open(path)?;
+        // WAL keeps reads from blocking the scanner's writes, and NORMAL is
+        // durable enough for a cache that can be rebuilt.
         connection.execute_batch(
-            // WAL keeps reads from blocking the scanner's writes, and NORMAL
-            // is the right durability for a cache that can be rebuilt.
-            // Foreign keys are off by default in SQLite, which would make the
-            // cascade declared in the schema silently do nothing.
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
              PRAGMA temp_store = MEMORY;
-             PRAGMA foreign_keys = ON;
              PRAGMA mmap_size = 268435456;",
         )?;
 
         // Costs are estimated as the index is built, so new prices rebuild it
-        // just as a new shape does.
+        // as a new schema does.
         let version = format!("{SCHEMA}.{:x}", crate::price::version());
-        // No table, no row, or a value of another version: all mean a rebuild.
+        // No table, no row, or another version: each means a rebuild.
         let found: Option<String> = connection
             .query_row("SELECT value FROM meta WHERE key = 'schema'", [], |row| {
                 row.get(0)
             })
             .ok();
-
         if found.as_deref() != Some(version.as_str()) {
-            // Whatever shape the cache had, it is rebuilt from nothing.
             let tables: Vec<String> = connection
                 .prepare(
                     "SELECT name FROM sqlite_master
@@ -148,107 +140,84 @@ impl Store {
             connection.execute_batch(include_str!("schema.sql"))?;
             connection.execute(
                 "INSERT INTO meta (key, value) VALUES ('schema', ?1)",
-                params![version],
+                [version],
             )?;
         }
         Ok(Store { connection })
     }
 
-    /// An in-memory index, for tests.
-    #[cfg(test)]
-    pub fn memory() -> Result<Store> {
-        let connection = Connection::open_in_memory()?;
-        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
-        connection.execute_batch(include_str!("schema.sql"))?;
-        Ok(Store { connection })
-    }
-
-    // ------------------------------------------------------------ indexing --
-
-    /// The file signatures the last scan recorded, by path.
-    pub fn signatures(&self) -> Result<HashMap<String, (i64, i64)>> {
+    /// The signature of every file the index has read, by path: its
+    /// modification time and size when it was read.
+    pub(crate) fn signatures(&self) -> Result<HashMap<String, (i64, i64)>> {
         let mut statement = self
             .connection
             .prepare("SELECT path, mtime, size FROM files")?;
-        let rows = statement.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, (row.get(1)?, row.get(2)?)))
-        })?;
+        let rows = statement.query_map([], |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?))))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Write what one unit holds, in a single transaction.
     ///
-    /// A session can span several units — a Codex thread resumed into a new
-    /// file is still one thread — so a unit replaces only its own usage, and
-    /// the session's totals are summed from all of it. The session keeps the
-    /// title of its earliest file, and the path, directory, branch and role of
-    /// its latest, falling back to another file's where that one recorded
-    /// none. It is spawned if any of its files says so. Files are read in
-    /// parallel and finish in any order, so none of this may depend on which
-    /// was written last.
-    pub fn put(&mut self, unit: &Unit, summaries: &[Summary]) -> Result<()> {
+    /// A session can span several units, as a Codex thread resumed into a new
+    /// file does, so a unit replaces only its own usage and the session's
+    /// totals are summed from all of it. The session keeps the title of its
+    /// earliest unit, and the path, directory, branch and role of its latest,
+    /// or of another where that one recorded none; it is spawned if any unit
+    /// says so. Units are read in parallel and written in any order, so none
+    /// of this depends on which is written last.
+    pub(crate) fn put(&mut self, unit: &Unit, summaries: &[Summary]) -> Result<()> {
         let transaction = self.connection.transaction()?;
-        let path = unit.path.to_string_lossy().into_owned();
-        // A file's name survives it being moved, as Codex does when archiving,
-        // so a moved file replaces its usage rather than adding it again.
+        let path = unit.path.to_string_lossy();
+        // A file keeps its name when moved, as Codex's are when archived, so
+        // a moved file replaces its usage rather than adding to it.
         let source = unit
             .path
             .file_name()
-            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+            .map(OsStr::to_string_lossy)
+            .unwrap_or_default();
         {
-            let mut insert = transaction.prepare_cached(
-                "INSERT INTO sessions (
-                    id, agent, native_id, title, cwd, branch, started_at, updated_at,
-                    spawned, role, path)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
-                 ON CONFLICT(id) DO UPDATE SET
-                    title = CASE WHEN excluded.started_at <= sessions.started_at
-                                 THEN COALESCE(excluded.title, sessions.title)
-                                 ELSE COALESCE(sessions.title, excluded.title) END,
-                    started_at = MIN(sessions.started_at, excluded.started_at),
-                    path = CASE WHEN excluded.updated_at >= sessions.updated_at
-                                THEN excluded.path ELSE sessions.path END,
-                    cwd = CASE WHEN excluded.updated_at >= sessions.updated_at
-                               THEN COALESCE(excluded.cwd, sessions.cwd)
-                               ELSE COALESCE(sessions.cwd, excluded.cwd) END,
-                    branch = CASE WHEN excluded.updated_at >= sessions.updated_at
-                                  THEN COALESCE(excluded.branch, sessions.branch)
-                                  ELSE COALESCE(sessions.branch, excluded.branch) END,
-                    role = CASE WHEN excluded.updated_at >= sessions.updated_at
-                                THEN COALESCE(excluded.role, sessions.role)
-                                ELSE COALESCE(sessions.role, excluded.role) END,
-                    updated_at = MAX(sessions.updated_at, excluded.updated_at),
-                    spawned = sessions.spawned OR excluded.spawned, present = 1",
+            // Unqualified columns in the update are the stored row's.
+            let mut upsert = transaction.prepare_cached(
+                "INSERT INTO sessions (id, agent, native_id, title, cwd, branch, started_at,
+                                       updated_at, spawned, role, path)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                 ON CONFLICT (id) DO UPDATE SET
+                    title = iif(excluded.started_at <= started_at,
+                                COALESCE(excluded.title, title), COALESCE(title, excluded.title)),
+                    path = iif(excluded.updated_at >= updated_at, excluded.path, path),
+                    cwd = iif(excluded.updated_at >= updated_at,
+                              COALESCE(excluded.cwd, cwd), COALESCE(cwd, excluded.cwd)),
+                    branch = iif(excluded.updated_at >= updated_at,
+                                 COALESCE(excluded.branch, branch),
+                                 COALESCE(branch, excluded.branch)),
+                    role = iif(excluded.updated_at >= updated_at,
+                               COALESCE(excluded.role, role), COALESCE(role, excluded.role)),
+                    started_at = MIN(started_at, excluded.started_at),
+                    updated_at = MAX(updated_at, excluded.updated_at),
+                    spawned = spawned OR excluded.spawned,
+                    present = 1",
             )?;
             let mut clear = transaction
                 .prepare_cached("DELETE FROM usage WHERE session_id = ?1 AND source = ?2")?;
-            let mut count = transaction.prepare_cached(
-                "INSERT INTO usage (
-                    session_id, source, at, provider, model, agent, input, output,
-                    cache_read, cache_write, reasoning, total, cost_usd)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            let mut record = transaction.prepare_cached(
+                "INSERT INTO usage (session_id, source, at, provider, model, agent, input, output,
+                                    cache_read, cache_write, reasoning, total, cost_usd)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             )?;
             let mut total = transaction.prepare_cached(&format!(
                 "UPDATE sessions SET
-                    input = used.input, output = used.output,
-                    cache_read = used.cache_read, cache_write = used.cache_write,
-                    reasoning = used.reasoning, total_tokens = used.total,
-                    cost_usd = used.cost_usd,
+                    (input, output, cache_read, cache_write, reasoning, total_tokens, cost_usd) =
+                    (SELECT COALESCE(SUM(input), 0), COALESCE(SUM(output), 0),
+                            COALESCE(SUM(cache_read), 0), COALESCE(SUM(cache_write), 0),
+                            COALESCE(SUM(reasoning), 0), COALESCE(SUM(total), 0), SUM(cost_usd)
+                     FROM usage WHERE session_id = ?1),
                     models = {models}
-                 FROM (SELECT COALESCE(SUM(input), 0) AS input,
-                              COALESCE(SUM(output), 0) AS output,
-                              COALESCE(SUM(cache_read), 0) AS cache_read,
-                              COALESCE(SUM(cache_write), 0) AS cache_write,
-                              COALESCE(SUM(reasoning), 0) AS reasoning,
-                              COALESCE(SUM(total), 0) AS total,
-                              SUM(cost_usd) AS cost_usd
-                       FROM usage WHERE session_id = ?1) AS used
-                 WHERE sessions.id = ?1",
-                models = shares("usage.session_id = ?1"),
+                 WHERE id = ?1",
+                models = shares("session_id = ?1"),
             ))?;
 
             for Summary { session, usage } in summaries {
-                insert.execute(params![
+                upsert.execute(params![
                     session.id,
                     session.agent,
                     session.native_id,
@@ -263,30 +232,27 @@ impl Store {
                 ])?;
                 clear.execute(params![session.id, source])?;
                 for used in usage {
-                    count.execute(params![
+                    let tokens = &used.tokens;
+                    record.execute(params![
                         session.id,
                         source,
                         used.at,
                         used.provider,
                         used.model,
                         session.agent,
-                        used.tokens.input,
-                        used.tokens.output,
-                        used.tokens.cache_read,
-                        used.tokens.cache_write,
-                        used.tokens.reasoning,
-                        used.tokens.total,
+                        tokens.input,
+                        tokens.output,
+                        tokens.cache_read,
+                        tokens.cache_write,
+                        tokens.reasoning,
+                        tokens.total,
                         used.cost_usd,
                     ])?;
                 }
-                total.execute(params![session.id])?;
+                total.execute([&session.id])?;
             }
-
             transaction
-                .prepare_cached(
-                    "INSERT INTO files (path, mtime, size) VALUES (?1,?2,?3)
-                     ON CONFLICT(path) DO UPDATE SET mtime = excluded.mtime, size = excluded.size",
-                )?
+                .prepare_cached("REPLACE INTO files (path, mtime, size) VALUES (?1, ?2, ?3)")?
                 .execute(params![path, unit.mtime, unit.size])?;
         }
         transaction.commit()?;
@@ -297,12 +263,9 @@ impl Store {
     ///
     /// Only accounts whose limits have been read are kept: one never read has
     /// nothing to show on the next launch.
-    pub fn put_accounts(&mut self, provider: Provider, accounts: &[Account]) -> Result<()> {
+    pub(crate) fn put_accounts(&mut self, provider: Provider, accounts: &[Account]) -> Result<()> {
         let transaction = self.connection.transaction()?;
-        transaction.execute(
-            "DELETE FROM accounts WHERE provider = ?1",
-            params![provider.key()],
-        )?;
+        transaction.execute("DELETE FROM accounts WHERE provider = ?1", [provider.key()])?;
         {
             let mut insert = transaction.prepare_cached(
                 "INSERT INTO accounts (id, provider, account) VALUES (?1, ?2, ?3)",
@@ -321,17 +284,16 @@ impl Store {
     /// Forget files that are no longer on disk, marking their sessions absent.
     ///
     /// The sessions themselves are kept: history an agent has since deleted is
-    /// still history, and losing it silently would be worse than showing it
-    /// with a note.
-    pub fn retire(&mut self, missing: &[String]) -> Result<()> {
+    /// still history.
+    pub(crate) fn retire(&mut self, missing: &[String]) -> Result<()> {
         let transaction = self.connection.transaction()?;
         {
             let mut forget = transaction.prepare_cached("DELETE FROM files WHERE path = ?1")?;
             let mut absent =
                 transaction.prepare_cached("UPDATE sessions SET present = 0 WHERE path = ?1")?;
             for path in missing {
-                forget.execute(params![path])?;
-                absent.execute(params![path])?;
+                forget.execute([path])?;
+                absent.execute([path])?;
             }
         }
         transaction.commit()?;
@@ -339,7 +301,7 @@ impl Store {
     }
 
     /// Store the counts learned by reading a conversation in full.
-    pub fn put_counts(&mut self, id: &str, messages: i64, tools: i64) -> Result<()> {
+    pub(crate) fn put_counts(&mut self, id: &str, messages: i64, tools: i64) -> Result<()> {
         self.connection.execute(
             "UPDATE sessions SET messages = ?2, tools = ?3 WHERE id = ?1",
             params![id, messages, tools],
@@ -347,88 +309,49 @@ impl Store {
         Ok(())
     }
 
-    // ------------------------------------------------------------- reading --
-
     /// One page of the session list, with the totals of the whole match.
     ///
     /// Narrowed to a period, the list holds the sessions that used tokens in
-    /// it, and each session's tokens, cost and models are only what it used
-    /// there: the list is ordered and totalled by those, as the overview and
-    /// its rankings count the same period. Otherwise they are the session's
-    /// whole usage, kept on its row.
+    /// it, and each session's tokens, cost and models are what it used there,
+    /// as the overview counts the same period; the list is ordered and
+    /// totalled by those. Otherwise they are the session's whole usage.
     pub fn list(&self, filter: &Filter) -> Result<SessionPage> {
-        let (where_clause, mut bindings) = predicate(filter);
-        let (source, models) = if filter.since.is_none() && filter.until.is_none() {
-            ("sessions".to_owned(), "models".to_owned())
+        let Listing {
+            rows,
+            models,
+            bindings,
+        } = self.listing(filter)?;
+        let direction = if filter.sort.descending {
+            "DESC"
         } else {
-            // Bounds rather than nulls for an open end, so the range reaches
-            // the usage index and a short period reads only its own usage.
-            bindings.push(Box::new(filter.since.unwrap_or(i64::MIN)));
-            bindings.push(Box::new(filter.until.unwrap_or(i64::MAX)));
-            let window = format!(
-                "usage.at >= ?{} AND usage.at <= ?{}",
-                bindings.len() - 1,
-                bindings.len()
-            );
-            let source = format!(
-                "(SELECT sessions.id, sessions.agent, sessions.native_id, sessions.title,
-                         sessions.cwd, sessions.branch, sessions.started_at, sessions.updated_at,
-                         sessions.spawned, sessions.role, used.input, used.output,
-                         used.cache_read, used.cache_write, used.reasoning,
-                         used.total AS total_tokens, used.cost_usd, sessions.messages,
-                         sessions.tools, sessions.present
-                  FROM sessions
-                  JOIN (SELECT session_id, SUM(input) AS input, SUM(output) AS output,
-                               SUM(cache_read) AS cache_read, SUM(cache_write) AS cache_write,
-                               SUM(reasoning) AS reasoning, SUM(total) AS total,
-                               SUM(cost_usd) AS cost_usd
-                        FROM usage WHERE {window}
-                        GROUP BY session_id) AS used
-                    ON used.session_id = sessions.id)"
-            );
-            let models = shares(&format!("usage.session_id = page.id AND {window}"));
-            (source, models)
+            "ASC"
         };
-        let order = format!(
-            "{} {}",
-            filter.sort.key.column(),
-            if filter.sort.descending {
-                "DESC"
-            } else {
-                "ASC"
-            }
-        );
+        let order = format!("{} {direction}, id", sort_column(filter.sort.key));
         let limit = filter.limit.clamp(1, MAX_PAGE);
         let offset = filter.offset.max(0);
 
-        // The page is chosen before its models are read, so a period sums the
-        // models of the rows returned rather than of every match.
-        let sql = format!(
-            "SELECT id, agent, native_id, title, cwd, branch, started_at, updated_at,
-                    spawned, role, {models}, input, output, cache_read, cache_write,
-                    reasoning, total_tokens, cost_usd, messages, tools, present
-             FROM (SELECT * FROM {source} AS listed WHERE {where_clause}
-                   ORDER BY {order}, id LIMIT {limit} OFFSET {offset}) AS page
-             ORDER BY {order}, id"
-        );
-        let mut statement = self.connection.prepare(&sql)?;
-        let rows =
-            statement.query_map(rusqlite::params_from_iter(bindings.iter()), read_session)?;
-        let sessions = rows.collect::<rusqlite::Result<Vec<Session>>>()?;
-
-        let totals = format!(
-            "SELECT COUNT(*), COALESCE(SUM(input),0), COALESCE(SUM(output),0),
-                    COALESCE(SUM(cache_read),0), COALESCE(SUM(cache_write),0),
-                    COALESCE(SUM(reasoning),0), COALESCE(SUM(total_tokens),0),
-                    SUM(cost_usd)
-             FROM {source} AS listed WHERE {where_clause}"
-        );
+        // The page is chosen before its model shares are summed, so a period
+        // sums them only for the rows returned.
+        let sessions = self
+            .connection
+            .prepare(&format!(
+                "SELECT {SESSION}, {models}
+                 FROM (SELECT * FROM {rows} ORDER BY {order} LIMIT {limit} OFFSET {offset}) AS page
+                 ORDER BY {order}"
+            ))?
+            .query_map(params_from_iter(&bindings), read_session)?
+            .collect::<rusqlite::Result<_>>()?;
         let (total, tokens, cost_usd) = self.connection.query_row(
-            &totals,
-            rusqlite::params_from_iter(bindings.iter()),
-            |row| Ok((row.get::<_, i64>(0)?, read_tokens(row, 1)?, row.get(7)?)),
+            &format!(
+                "SELECT COUNT(*), COALESCE(SUM(input), 0), COALESCE(SUM(output), 0),
+                        COALESCE(SUM(cache_read), 0), COALESCE(SUM(cache_write), 0),
+                        COALESCE(SUM(reasoning), 0), COALESCE(SUM(total_tokens), 0),
+                        SUM(cost_usd)
+                 FROM {rows}"
+            ),
+            params_from_iter(&bindings),
+            |row| Ok((row.get(0)?, read_tokens(row, 1)?, row.get(7)?)),
         )?;
-
         Ok(SessionPage {
             sessions,
             total,
@@ -438,125 +361,101 @@ impl Store {
     }
 
     /// One session by id.
-    pub fn get(&self, id: &str) -> Result<Option<Session>> {
+    pub(crate) fn get(&self, id: &str) -> Result<Option<Session>> {
         Ok(self
             .connection
             .query_row(
-                "SELECT id, agent, native_id, title, cwd, branch, started_at, updated_at,
-                        spawned, role, models, input, output, cache_read, cache_write,
-                        reasoning, total_tokens, cost_usd, messages, tools, present
-                 FROM sessions WHERE id = ?1",
-                params![id],
+                &format!("SELECT {SESSION}, models FROM sessions WHERE id = ?1"),
+                [id],
                 read_session,
             )
             .optional()?)
     }
 
-    /// Where a session's history lives, for reading its conversation.
+    /// Where a session's history lives, and its agent's own id for it.
     pub fn locate(&self, id: &str) -> Result<Option<(Unit, String)>> {
         Ok(self
             .connection
             .query_row(
-                "SELECT agent, native_id, path FROM sessions WHERE id = ?1",
-                params![id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, String>(2)?)),
+                "SELECT agent, sessions.path, mtime, size, native_id
+                 FROM sessions LEFT JOIN files ON files.path = sessions.path
+                 WHERE id = ?1",
+                [id],
+                |row| Ok((read_unit(row, 0)?, row.get(4)?)),
             )
-            .optional()?
-            .map(|(agent, native_id, path)| {
-                let path = PathBuf::from(path);
-                let (mtime, size) = crate::source::stat(&path).unwrap_or((0, 0));
-                let unit = Unit {
-                    agent,
-                    path,
-                    mtime,
-                    size,
-                };
-                (unit, native_id)
-            }))
+            .optional()?)
     }
 
-    /// Every session a filter matches, most recently active first, with where
-    /// its history was read from. The filter's search, order and window do not
-    /// apply: this is every match, for looking through each one's history.
-    pub fn origins(&self, filter: &Filter) -> Result<Vec<Origin>> {
-        let mut filter = Filter {
+    /// Every session a filter matches, most recently active first, with the
+    /// unit its history was last read from. The filter's search, order and
+    /// window do not apply: this is every match, for reading each one's
+    /// history.
+    pub(crate) fn origins(&self, filter: &Filter) -> Result<Vec<Origin>> {
+        let Listing {
+            rows,
+            models,
+            bindings,
+        } = self.listing(&Filter {
             search: None,
-            sort: Sort {
-                key: SortKey::Updated,
-                descending: true,
-            },
-            offset: 0,
-            limit: MAX_PAGE,
             ..filter.clone()
-        };
-        let mut sessions = Vec::new();
-        loop {
-            let page = self.list(&filter)?;
-            let read = page.sessions.len() as i64;
-            sessions.extend(page.sessions);
-            filter.offset += read;
-            if read < MAX_PAGE || filter.offset >= page.total {
-                break;
-            }
-        }
-
-        let mut origins = Vec::with_capacity(sessions.len());
-        for session in sessions {
-            if let Some((unit, native_id)) = self.locate(&session.id)? {
-                origins.push(Origin {
-                    session,
-                    unit,
-                    native_id,
-                });
-            }
-        }
-        Ok(origins)
-    }
-
-    /// Models ranked by the usage recorded within a period.
-    pub fn models(&self, since: Option<i64>, until: Option<i64>) -> Result<Vec<ModelUsage>> {
-        let mut statement = self.connection.prepare(
-            "SELECT model,
-                    GROUP_CONCAT(DISTINCT agent),
-                    COUNT(DISTINCT session_id),
-                    SUM(input), SUM(output), SUM(cache_read), SUM(cache_write),
-                    SUM(reasoning), SUM(total), SUM(cost_usd)
-             FROM usage
-             WHERE model <> ''
-               AND at >= COALESCE(?1, at)
-               AND at <= COALESCE(?2, at)
-             GROUP BY model ORDER BY SUM(total) DESC",
-        )?;
-        let rows = statement.query_map(params![since, until], |row| {
-            let agents: String = row.get(1)?;
-            Ok(ModelUsage {
-                model: row.get(0)?,
-                // In the interface's order, whichever order they were read in.
-                agents: Agent::ALL
-                    .into_iter()
-                    .filter(|agent| agents.split(',').any(|key| key == agent.key()))
-                    .collect(),
-                sessions: row.get(2)?,
-                tokens: read_tokens(row, 3)?,
-                cost_usd: row.get(9)?,
-                daily: Vec::new(),
+        })?;
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {SESSION}, {models}, agent, page.path, mtime, size
+             FROM (SELECT * FROM {rows}) AS page LEFT JOIN files ON files.path = page.path
+             ORDER BY updated_at DESC, id"
+        ))?;
+        let origins = statement.query_map(params_from_iter(&bindings), |row| {
+            Ok(Origin {
+                session: read_session(row)?,
+                unit: read_unit(row, 21)?,
             })
         })?;
-        let mut models: Vec<ModelUsage> = rows.collect::<rusqlite::Result<_>>()?;
+        Ok(origins.collect::<rusqlite::Result<_>>()?)
+    }
 
+    /// Models ranked by the usage recorded within a period, each with its
+    /// usage by local day.
+    pub fn models(&self, since: Option<i64>, until: Option<i64>) -> Result<Vec<ModelUsage>> {
+        let within = self.within(since, until)?;
+        let mut models: Vec<ModelUsage> = self
+            .connection
+            .prepare(&format!(
+                "SELECT model, GROUP_CONCAT(DISTINCT agent), COUNT(DISTINCT session_id), {SUMS}
+                 FROM usage WHERE model <> '' AND {within}
+                 GROUP BY model ORDER BY total DESC"
+            ))?
+            .query_map([], |row| {
+                let keys = row.get_ref(1)?.as_str()?;
+                Ok(ModelUsage {
+                    model: row.get(0)?,
+                    // In the interface's order, whichever order they were read in.
+                    agents: Agent::ALL
+                        .into_iter()
+                        .filter(|agent| keys.split(',').any(|key| key == agent.key()))
+                        .collect(),
+                    sessions: row.get(2)?,
+                    tokens: read_tokens(row, 3)?,
+                    cost_usd: row.get(9)?,
+                    daily: Vec::new(),
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+
+        let ranks: HashMap<String, usize> = models
+            .iter()
+            .enumerate()
+            .map(|(rank, model)| (model.model.clone(), rank))
+            .collect();
         let mut days = self.connection.prepare(&format!(
             "SELECT model, {LOCAL_DAY} AS day, SUM(total), SUM(cost_usd)
-             FROM usage
-             WHERE model <> ''
-               AND at >= COALESCE(?1, at)
-               AND at <= COALESCE(?2, at)
+             FROM usage WHERE model <> '' AND {within}
              GROUP BY model, day ORDER BY day"
         ))?;
-        let mut rows = days.query(params![since, until])?;
+        let mut rows = days.query([])?;
         while let Some(row) = rows.next()? {
-            let name: String = row.get(0)?;
-            if let Some(model) = models.iter_mut().find(|model| model.model == name) {
-                model.daily.push(ModelDay {
+            let model = row.get_ref(0)?.as_str().map_err(rusqlite::Error::from)?;
+            if let Some(&rank) = ranks.get(model) {
+                models[rank].daily.push(ModelDay {
                     day: row.get(1)?,
                     tokens: row.get(2)?,
                     cost_usd: row.get(3)?,
@@ -566,22 +465,18 @@ impl Store {
         Ok(models)
     }
 
-    /// Projects, by the directory their sessions worked in, ranked by the usage
-    /// recorded within a period. A session that recorded no directory belongs
-    /// to none.
+    /// Projects, the directories sessions worked in, ranked by the usage
+    /// recorded in them within a period. A session that recorded no directory
+    /// is in none.
     pub fn projects(&self, since: Option<i64>, until: Option<i64>) -> Result<Vec<ProjectUsage>> {
-        let mut statement = self.connection.prepare(
-            "SELECT sessions.cwd, COUNT(DISTINCT usage.session_id),
-                    SUM(usage.input), SUM(usage.output), SUM(usage.cache_read),
-                    SUM(usage.cache_write), SUM(usage.reasoning), SUM(usage.total),
-                    SUM(usage.cost_usd)
-             FROM usage JOIN sessions ON sessions.id = usage.session_id
-             WHERE sessions.cwd IS NOT NULL
-               AND usage.at >= COALESCE(?1, usage.at)
-               AND usage.at <= COALESCE(?2, usage.at)
-             GROUP BY sessions.cwd ORDER BY SUM(usage.total) DESC",
-        )?;
-        let rows = statement.query_map(params![since, until], |row| {
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT cwd, COUNT(DISTINCT session_id), {SUMS}
+             FROM usage JOIN (SELECT id, cwd FROM sessions) ON id = session_id
+             WHERE cwd IS NOT NULL AND {within}
+             GROUP BY cwd ORDER BY total DESC",
+            within = self.within(since, until)?,
+        ))?;
+        let rows = statement.query_map([], |row| {
             Ok(ProjectUsage {
                 project: row.get(0)?,
                 sessions: row.get(1)?,
@@ -592,24 +487,20 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Totals for the overview, bucketed into local days.
+    /// Totals for the overview, and for each local day, within a period.
     ///
     /// Sessions are those that used tokens in the period, and tokens and cost
     /// what they used within it. Days are this machine's, which is also the
-    /// reader's:
-    /// SQLite applies the local zone's rules to each instant, so a day beside a
-    /// clock change is 23 or 25 hours long rather than shifted by an hour.
+    /// reader's.
     pub fn overview(&self, since: Option<i64>, until: Option<i64>) -> Result<Overview> {
-        let mut totals = self.connection.prepare(
-            "SELECT agent, COUNT(DISTINCT session_id),
-                    SUM(input), SUM(output), SUM(cache_read), SUM(cache_write),
-                    SUM(reasoning), SUM(total), SUM(cost_usd)
-             FROM usage
-             WHERE at >= COALESCE(?1, at) AND at <= COALESCE(?2, at)
-             GROUP BY agent ORDER BY SUM(total) DESC",
-        )?;
-        let by_agent: Vec<AgentTotals> = totals
-            .query_map(params![since, until], |row| {
+        let within = self.within(since, until)?;
+        let by_agent: Vec<AgentTotals> = self
+            .connection
+            .prepare(&format!(
+                "SELECT agent, COUNT(DISTINCT session_id), {SUMS} FROM usage WHERE {within}
+                 GROUP BY agent ORDER BY total DESC"
+            ))?
+            .query_map([], |row| {
                 Ok(AgentTotals {
                     agent: row.get(0)?,
                     sessions: row.get(1)?,
@@ -618,95 +509,62 @@ impl Store {
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;
-
+        let mut whole = Sum::default();
+        for agent in &by_agent {
+            whole.add(agent.sessions, agent.tokens, agent.cost_usd);
+        }
         let daily = self
-            .spans(LOCAL_DAY, since, until)?
+            .spans(LOCAL_DAY, &within)?
             .into_iter()
-            .map(|span| DayTotals {
-                day: span.start,
-                sessions: span.sessions,
-                tokens: span.tokens,
-                cost_usd: span.cost_usd,
-                by_agent: span.by_agent,
+            .map(|(day, (sum, by_agent))| DayTotals {
+                day,
+                sessions: sum.sessions,
+                tokens: sum.tokens,
+                cost_usd: sum.cost_usd,
+                by_agent,
             })
             .collect();
-
-        let mut tokens = Tokens::default();
-        let mut cost_usd = None;
-        let mut sessions = 0;
-        for agent in &by_agent {
-            tokens.add(agent.tokens);
-            if let Some(cost) = agent.cost_usd {
-                *cost_usd.get_or_insert(0.0) += cost;
-            }
-            sessions += agent.sessions;
-        }
-
         Ok(Overview {
-            sessions,
-            tokens,
-            cost_usd,
+            sessions: whole.sessions,
+            tokens: whole.tokens,
+            cost_usd: whole.cost_usd,
             by_agent,
             daily,
         })
     }
 
     /// Totals for each local hour of a period that had any usage, oldest
-    /// first, for drawing a day by the hour.
-    ///
-    /// Sessions are those that used tokens in the hour, and tokens and cost
-    /// what was used within it. Hours are this machine's, as days are.
-    pub fn hours(&self, since: Option<i64>, until: Option<i64>) -> Result<Vec<HourTotals>> {
+    /// first. Hours are this machine's, as days are.
+    pub(crate) fn hours(&self, since: Option<i64>, until: Option<i64>) -> Result<Vec<HourTotals>> {
         Ok(self
-            .spans(LOCAL_HOUR, since, until)?
+            .spans(LOCAL_HOUR, &self.within(since, until)?)?
             .into_iter()
-            .map(|span| HourTotals {
-                hour: span.start,
-                sessions: span.sessions,
-                tokens: span.tokens,
-                cost_usd: span.cost_usd,
-                by_agent: span.by_agent,
+            .map(|(hour, (sum, by_agent))| HourTotals {
+                hour,
+                sessions: sum.sessions,
+                tokens: sum.tokens,
+                cost_usd: sum.cost_usd,
+                by_agent,
             })
             .collect())
     }
 
-    /// Usage within a period in spans of local time, oldest first, each split
-    /// by agent. `start` is [`LOCAL_DAY`] or [`LOCAL_HOUR`], the SQL placing a
-    /// usage row in its span; nothing else reaches the statement's text.
-    fn spans(&self, start: &str, since: Option<i64>, until: Option<i64>) -> Result<Vec<Span>> {
-        // A row for each agent in each span, folded into spans that keep each
-        // agent's share.
+    /// The usage rows `within` chooses, in spans of local time by the instant
+    /// each starts, each summed and split by agent. `start` is [`LOCAL_DAY`]
+    /// or [`LOCAL_HOUR`].
+    fn spans(&self, start: &str, within: &str) -> Result<BTreeMap<i64, (Sum, Vec<AgentDay>)>> {
         let mut statement = self.connection.prepare(&format!(
-            "SELECT {start} AS span, agent, COUNT(DISTINCT session_id),
-                    SUM(input), SUM(output), SUM(cache_read), SUM(cache_write),
-                    SUM(reasoning), SUM(total), SUM(cost_usd)
-             FROM usage
-             WHERE at >= COALESCE(?1, at) AND at <= COALESCE(?2, at)
+            "SELECT {start} AS span, agent, COUNT(DISTINCT session_id), {SUMS}
+             FROM usage WHERE {within}
              GROUP BY span, agent ORDER BY span, agent"
         ))?;
-        let mut spans: Vec<Span> = Vec::new();
-        let mut rows = statement.query(params![since, until])?;
+        let mut spans: BTreeMap<i64, (Sum, Vec<AgentDay>)> = BTreeMap::new();
+        let mut rows = statement.query([])?;
         while let Some(row) = rows.next()? {
-            let start = row.get(0)?;
-            let tokens = read_tokens(row, 3)?;
-            let cost_usd: Option<f64> = row.get(9)?;
-            if spans.last().is_none_or(|last| last.start != start) {
-                spans.push(Span {
-                    start,
-                    sessions: 0,
-                    tokens: Tokens::default(),
-                    cost_usd: None,
-                    by_agent: Vec::new(),
-                });
-            }
-            let span = spans.last_mut().expect("the span was just added");
-            // A session belongs to one agent, so the agents' counts add up.
-            span.sessions += row.get::<_, i64>(2)?;
-            span.tokens.add(tokens);
-            if let Some(cost) = cost_usd {
-                *span.cost_usd.get_or_insert(0.0) += cost;
-            }
-            span.by_agent.push(AgentDay {
+            let (tokens, cost_usd) = (read_tokens(row, 3)?, row.get(9)?);
+            let (sum, by_agent) = spans.entry(row.get(0)?).or_default();
+            sum.add(row.get(2)?, tokens, cost_usd);
+            by_agent.push(AgentDay {
                 agent: row.get(1)?,
                 tokens: tokens.total,
                 cost_usd,
@@ -715,8 +573,107 @@ impl Store {
         Ok(spans)
     }
 
+    /// The sessions `filter` matches, as SQL. What the caller wrote is bound,
+    /// never written into the statement; the agents and the period's instants
+    /// are, which cannot hold caller text.
+    fn listing(&self, filter: &Filter) -> Result<Listing> {
+        let mut clauses = vec!["TRUE".to_owned()];
+        let mut bindings = Vec::new();
+        if !filter.include_spawned {
+            clauses.push("spawned = 0".to_owned());
+        }
+        if let Some(search) = filter
+            .search
+            .as_deref()
+            .map(str::trim)
+            .filter(|search| !search.is_empty())
+        {
+            // Escaped, `%` and `_` match themselves rather than any text.
+            let search = search
+                .replace('\\', r"\\")
+                .replace('%', r"\%")
+                .replace('_', r"\_");
+            bindings.push(Value::Text(format!("%{search}%")));
+            let n = bindings.len();
+            clauses.push(format!(
+                r"(title LIKE ?{n} ESCAPE '\' OR cwd LIKE ?{n} ESCAPE '\'
+                   OR EXISTS (SELECT 1 FROM usage
+                              WHERE session_id = listed.id AND model LIKE ?{n} ESCAPE '\'))"
+            ));
+        }
+        if !filter.agents.is_empty() {
+            let keys: Vec<String> = filter
+                .agents
+                .iter()
+                .map(|agent| format!("'{}'", agent.key()))
+                .collect();
+            clauses.push(format!("agent IN ({})", keys.join(", ")));
+        }
+        if let Some(project) = &filter.project {
+            bindings.push(Value::Text(project.clone()));
+            clauses.push(format!("cwd = ?{}", bindings.len()));
+        }
+        if let Some(model) = &filter.model {
+            bindings.push(Value::Text(model.clone()));
+            clauses.push(format!(
+                "EXISTS (SELECT 1 FROM usage WHERE session_id = listed.id AND model = ?{})",
+                bindings.len()
+            ));
+        }
+
+        let (relation, models) = if filter.since.is_none() && filter.until.is_none() {
+            ("sessions".to_owned(), "models".to_owned())
+        } else {
+            let within = self.within(filter.since, filter.until)?;
+            let relation = format!(
+                "(SELECT id, agent, native_id, title, cwd, branch, started_at, updated_at,
+                         spawned, role, used.input, used.output, used.cache_read,
+                         used.cache_write, used.reasoning, used.total AS total_tokens,
+                         used.cost_usd, messages, tools, present, path
+                  FROM sessions
+                  JOIN (SELECT session_id, {SUMS} FROM usage WHERE {within}
+                        GROUP BY session_id) AS used ON used.session_id = id)"
+            );
+            (
+                relation,
+                shares(&format!("session_id = page.id AND {within}")),
+            )
+        };
+        Ok(Listing {
+            rows: format!("{relation} AS listed WHERE {}", clauses.join(" AND ")),
+            models,
+            bindings,
+        })
+    }
+
+    /// The condition choosing the usage rows within a period: a range of their
+    /// instants, or nothing when the period holds all the usage there is.
+    ///
+    /// Instants are written into the statement rather than bound, which an
+    /// integer allows. A range closed at both ends is what leads the planner
+    /// to the usage index, so an open end is closed at the last usage or the
+    /// first; a range holding all of them would read every row through the
+    /// index, which is slower than reading the table.
+    fn within(&self, since: Option<i64>, until: Option<i64>) -> Result<String> {
+        let extent: (Option<i64>, Option<i64>) = self.connection.query_row(
+            "SELECT (SELECT MIN(at) FROM usage), (SELECT MAX(at) FROM usage)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let (Some(first), Some(last)) = extent else {
+            return Ok("TRUE".to_owned());
+        };
+        let from = since.map_or(first, |since| since.max(first));
+        let to = until.map_or(last, |until| until.min(last));
+        Ok(if (from, to) == (first, last) {
+            "TRUE".to_owned()
+        } else {
+            format!("at BETWEEN {from} AND {to}")
+        })
+    }
+
     /// Every subscription's last successfully read limits.
-    pub fn accounts(&self) -> Result<Vec<Account>> {
+    pub(crate) fn accounts(&self) -> Result<Vec<Account>> {
         let mut statement = self.connection.prepare("SELECT account FROM accounts")?;
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
         Ok(rows
@@ -730,89 +687,53 @@ impl Store {
 
     /// When each provider last served usage, as the end of the quarter hour it
     /// was in, by the name agents give the provider.
-    pub fn last_used(&self) -> Result<Vec<(String, i64)>> {
+    pub(crate) fn last_used(&self) -> Result<Vec<(String, i64)>> {
         let mut statement = self.connection.prepare(
             "SELECT provider, MAX(at) + ?1 FROM usage WHERE provider <> '' GROUP BY provider",
         )?;
-        let rows = statement.query_map([crate::source::QUARTER_HOUR], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
+        let rows = statement.query_map([QUARTER_HOUR], |row| Ok((row.get(0)?, row.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// How many sessions the index holds.
-    pub fn count(&self) -> Result<i64> {
+    pub(crate) fn count(&self) -> Result<i64> {
         Ok(self
             .connection
             .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))?)
     }
 }
 
-/// The `WHERE` clause and bindings a filter resolves to, over the list's rows
-/// as `listed`. A period is not among them: [`Store::list`] narrows to one by
-/// reading only the usage inside it.
-///
-/// Values are bound rather than interpolated; only the sort column and the
-/// page bounds reach the SQL text, and both come from closed sets.
-fn predicate(filter: &Filter) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
-    let mut clauses = vec!["1 = 1".to_owned()];
-    let mut bindings: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-    if !filter.include_spawned {
-        clauses.push("spawned = 0".to_owned());
-    }
-    if let Some(search) = filter
-        .search
-        .as_deref()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-    {
-        // Escaped, `%` and `_` match themselves rather than any text.
-        let search = search
-            .replace('\\', r"\\")
-            .replace('%', r"\%")
-            .replace('_', r"\_");
-        bindings.push(Box::new(format!("%{search}%")));
-        let placeholder = bindings.len();
-        clauses.push(format!(
-            r"(title LIKE ?{placeholder} ESCAPE '\'
-              OR cwd LIKE ?{placeholder} ESCAPE '\'
-              OR EXISTS (SELECT 1 FROM usage
-                         WHERE usage.session_id = listed.id
-                           AND usage.model LIKE ?{placeholder} ESCAPE '\'))"
-        ));
-    }
-    if !filter.agents.is_empty() {
-        let names: Vec<String> = filter
-            .agents
-            .iter()
-            .map(|agent| format!("'{}'", agent.key()))
-            .collect();
-        // Agent keys are a closed set of identifiers, never caller text.
-        clauses.push(format!("agent IN ({})", names.join(",")));
-    }
-    if let Some(project) = &filter.project {
-        bindings.push(Box::new(project.clone()));
-        clauses.push(format!("cwd = ?{}", bindings.len()));
-    }
-    if let Some(model) = &filter.model {
-        bindings.push(Box::new(model.clone()));
-        clauses.push(format!(
-            "EXISTS (SELECT 1 FROM usage
-                     WHERE usage.session_id = listed.id AND usage.model = ?{})",
-            bindings.len()
-        ));
-    }
-    (clauses.join(" AND "), bindings)
+/// The sessions a filter matches, as SQL.
+struct Listing {
+    /// A `FROM` and `WHERE` choosing the matching rows, as `listed`, which
+    /// have the columns of the sessions table. Within a period they are the
+    /// sessions that used tokens in it, carrying that usage in place of their
+    /// whole, and have no `models`.
+    rows: String,
+    /// The expression for a row's model shares, over it as `page`.
+    models: String,
+    /// What the placeholders in `rows` bind.
+    bindings: Vec<Value>,
 }
 
-/// A scalar subquery for usage by model, largest first, as the JSON a
-/// session's `models` column holds and [`ModelSlice`] reads. `usage` is the
-/// condition choosing the usage rows, such as one session's.
+/// The column a sort key orders on. Each has an index, so no ordering the list
+/// offers sorts the whole table.
+fn sort_column(key: SortKey) -> &'static str {
+    match key {
+        SortKey::Updated => "updated_at",
+        SortKey::Started => "started_at",
+        SortKey::Tokens => "total_tokens",
+        SortKey::Cost => "cost_usd",
+        SortKey::Title => "title",
+    }
+}
+
+/// A scalar subquery for the usage rows `condition` chooses, by model and
+/// largest first, as the JSON a session's `models` column holds.
 ///
 /// Usage recorded under no model counts toward a session but is no model's,
 /// so it has no share.
-fn shares(usage: &str) -> String {
+fn shares(condition: &str) -> String {
     format!(
         "(SELECT json_group_array(json_object(
                      'model', model,
@@ -821,13 +742,29 @@ fn shares(usage: &str) -> String {
                          'cacheRead', cache_read, 'cacheWrite', cache_write,
                          'reasoning', reasoning, 'total', total),
                      'costUsd', cost_usd))
-          FROM (SELECT model, SUM(input) AS input, SUM(output) AS output,
-                       SUM(cache_read) AS cache_read, SUM(cache_write) AS cache_write,
-                       SUM(reasoning) AS reasoning, SUM(total) AS total,
-                       SUM(cost_usd) AS cost_usd
-                FROM usage WHERE {usage} AND usage.model <> ''
-                GROUP BY model ORDER BY SUM(total) DESC))"
+          FROM (SELECT model, {SUMS} FROM usage WHERE {condition} AND model <> ''
+                GROUP BY model ORDER BY total DESC))"
     )
+}
+
+/// Sessions, tokens and cost added up across agents.
+#[derive(Default)]
+struct Sum {
+    sessions: i64,
+    tokens: Tokens,
+    cost_usd: Option<f64>,
+}
+
+impl Sum {
+    /// Add one agent's share. A session belongs to one agent, so the agents'
+    /// counts of sessions add up.
+    fn add(&mut self, sessions: i64, tokens: Tokens, cost_usd: Option<f64>) {
+        self.sessions += sessions;
+        self.tokens.add(tokens);
+        if let Some(cost) = cost_usd {
+            *self.cost_usd.get_or_insert(0.0) += cost;
+        }
+    }
 }
 
 /// An agent is stored as its key.
@@ -843,9 +780,9 @@ impl FromSql for Agent {
     }
 }
 
-/// Build a session from one row of the sessions table.
-fn read_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
-    let models: String = row.get(10)?;
+/// A session from the columns [`SESSION`] names, then its model shares.
+fn read_session(row: &Row) -> rusqlite::Result<Session> {
+    let models = row.get_ref(20)?.as_str()?;
     Ok(Session {
         id: row.get(0)?,
         agent: row.get(1)?,
@@ -857,18 +794,20 @@ fn read_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
         updated_at: row.get(7)?,
         spawned: row.get(8)?,
         role: row.get(9)?,
-        models: serde_json::from_str::<Vec<ModelSlice>>(&models).unwrap_or_default(),
-        tokens: read_tokens(row, 11)?,
-        cost_usd: row.get(17)?,
-        messages: row.get(18)?,
-        tools: row.get(19)?,
-        present: row.get(20)?,
+        tokens: read_tokens(row, 10)?,
+        cost_usd: row.get(16)?,
+        messages: row.get(17)?,
+        tools: row.get(18)?,
+        present: row.get(19)?,
+        models: serde_json::from_str(models).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(20, Type::Text, error.into())
+        })?,
     })
 }
 
-/// Read the six token columns starting at `first`, in the order `Tokens`
-/// declares them: input, output, cache read, cache write, reasoning, total.
-fn read_tokens(row: &rusqlite::Row, first: usize) -> rusqlite::Result<Tokens> {
+/// The six token columns from `first` on, in the order [`Tokens`] declares
+/// them: input, output, cache read, cache write, reasoning, total.
+fn read_tokens(row: &Row, first: usize) -> rusqlite::Result<Tokens> {
     Ok(Tokens {
         input: row.get(first)?,
         output: row.get(first + 1)?,
@@ -879,13 +818,29 @@ fn read_tokens(row: &rusqlite::Row, first: usize) -> rusqlite::Result<Tokens> {
     })
 }
 
+/// A unit from its agent, path, and the modification time and size its file
+/// had when last read, from column `first` on. A file since gone has no
+/// signature, and reads as zero.
+fn read_unit(row: &Row, first: usize) -> rusqlite::Result<Unit> {
+    Ok(Unit {
+        agent: row.get(first)?,
+        path: PathBuf::from(row.get::<_, String>(first + 1)?),
+        mtime: row.get::<_, Option<i64>>(first + 2)?.unwrap_or_default(),
+        size: row.get::<_, Option<i64>>(first + 3)?.unwrap_or_default(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{Sort, SortKey};
+    use crate::session::Sort;
     use crate::source::Usage;
 
     const DAY: i64 = 86_400_000;
+
+    fn memory() -> Store {
+        Store::open(Path::new(":memory:")).expect("opens")
+    }
 
     /// Usage under the fixtures' one model, at one instant.
     fn usage(at: i64, total: i64) -> Usage {
@@ -935,8 +890,10 @@ mod tests {
         }
     }
 
+    /// Two Codex sessions in one file, and two Claude Code sessions in
+    /// another, the newest of them spawned.
     fn filled() -> Store {
-        let mut store = Store::memory().expect("opens");
+        let mut store = memory();
         store
             .put(
                 &unit("/a.jsonl"),
@@ -958,220 +915,188 @@ mod tests {
         store
     }
 
+    /// The list a filter asks for, from as many rows as there are.
     fn page(store: &Store, filter: Filter) -> SessionPage {
-        store.list(&filter).expect("lists")
+        store
+            .list(&Filter {
+                limit: filter.limit.max(50),
+                ..filter
+            })
+            .expect("lists")
+    }
+
+    /// The native ids of a page's rows, in order.
+    fn listed(page: &SessionPage) -> Vec<&str> {
+        let ids = page
+            .sessions
+            .iter()
+            .map(|session| session.native_id.as_str());
+        ids.collect()
     }
 
     #[test]
     fn the_list_hides_spawned_runs_unless_asked() {
         let store = filled();
-        let default = page(
-            &store,
-            Filter {
-                limit: 50,
-                ..Filter::default()
-            },
-        );
-        assert_eq!(default.total, 3);
-        assert!(default.sessions.iter().all(|session| !session.spawned));
+        let own = page(&store, Filter::default());
+        assert_eq!(listed(&own), ["two", "three", "one"], "least recent first");
+        assert_eq!(own.total, 3);
 
-        let all = page(
-            &store,
-            Filter {
-                include_spawned: true,
-                limit: 50,
-                ..Filter::default()
-            },
-        );
-        assert_eq!(all.total, 4);
+        let all = Filter {
+            include_spawned: true,
+            ..Filter::default()
+        };
+        assert_eq!(page(&store, all).total, 4);
     }
 
     #[test]
-    fn a_list_narrows_to_one_project_or_one_model() {
+    fn a_list_narrows_to_one_project_one_model_or_some_agents() {
         let mut store = filled();
         let mut elsewhere = summary("five", Agent::Codex, 5_000, 500, false);
         elsewhere.session.cwd = Some("/w/other".into());
         elsewhere.usage[0].model = "model-b".into();
         store.put(&unit("/c.jsonl"), &[elsewhere]).expect("writes");
 
+        let count = |filter: Filter| page(&store, filter).total;
         let in_project = |project: &str| {
-            let filter = Filter {
+            count(Filter {
                 project: Some(project.into()),
-                limit: 50,
                 ..Filter::default()
-            };
-            page(&store, filter).total
+            })
         };
         assert_eq!(in_project("/w/proj"), 3);
         assert_eq!(in_project("/w/other"), 1);
         assert_eq!(in_project("/w"), 0, "a project is matched whole");
 
         let using = |model: &str| {
-            let filter = Filter {
+            count(Filter {
                 model: Some(model.into()),
-                limit: 50,
                 ..Filter::default()
-            };
-            page(&store, filter).total
+            })
         };
         assert_eq!(using("model-a"), 3);
         assert_eq!(using("model-b"), 1);
         assert_eq!(using("model"), 0, "a model is matched whole");
-    }
 
-    #[test]
-    fn each_model_carries_its_usage_by_day() {
-        let store = filled();
-        let models = store.models(None, None).expect("ranks");
-        let daily: i64 = models[0].daily.iter().map(|day| day.tokens).sum();
-        assert_eq!(
-            daily, models[0].tokens.total,
-            "every day adds up to the model"
-        );
+        let of = |agents: Vec<Agent>| {
+            count(Filter {
+                agents,
+                include_spawned: true,
+                ..Filter::default()
+            })
+        };
+        assert_eq!(of(vec![Agent::Codex]), 3);
+        assert_eq!(of(vec![Agent::Codex, Agent::ClaudeCode]), 5);
+        assert_eq!(of(vec![Agent::Pi]), 0);
     }
 
     #[test]
     fn totals_cover_the_whole_match_not_the_page() {
         let store = filled();
-        let first = page(
-            &store,
-            Filter {
+        let first = store
+            .list(&Filter {
                 include_spawned: true,
                 limit: 1,
                 ..Filter::default()
-            },
-        );
+            })
+            .expect("lists");
         assert_eq!(first.sessions.len(), 1, "one row was asked for");
         assert_eq!(first.total, 4, "but the count covers every match");
-        // 300 + 100 + 200 + 400, computed by hand from the fixtures.
+        // 300 + 100 + 200 + 400, at 1.5 each.
         assert_eq!(first.tokens.total, 1_000);
         assert_eq!(first.cost_usd, Some(6.0));
-    }
 
-    #[test]
-    fn every_sort_key_orders_and_reverses() {
-        let store = filled();
-        for key in [
-            SortKey::Updated,
-            SortKey::Started,
-            SortKey::Tokens,
-            SortKey::Cost,
-            SortKey::Title,
-        ] {
-            for descending in [true, false] {
-                let result = page(
-                    &store,
-                    Filter {
-                        include_spawned: true,
-                        limit: 50,
-                        sort: Sort { key, descending },
-                        ..Filter::default()
-                    },
-                );
-                assert_eq!(result.sessions.len(), 4, "{key:?} returned every row");
-            }
-        }
-
-        let newest = page(
+        let none = page(
             &store,
             Filter {
-                include_spawned: true,
-                limit: 50,
-                sort: Sort {
-                    key: SortKey::Updated,
-                    descending: true,
-                },
+                search: Some("no such thing".into()),
                 ..Filter::default()
             },
         );
-        let order: Vec<_> = newest
-            .sessions
-            .iter()
-            .map(|session| session.native_id.as_str())
-            .collect();
-        assert_eq!(order, ["four", "one", "three", "two"]);
+        assert_eq!(
+            (none.total, none.tokens, none.cost_usd),
+            (0, Tokens::default(), None)
+        );
     }
 
     #[test]
-    fn paging_walks_the_whole_result_without_repeating() {
+    fn every_sort_key_orders_both_ways() {
         let store = filled();
-        let mut seen = Vec::new();
-        for offset in 0..4 {
-            let result = page(
-                &store,
-                Filter {
-                    include_spawned: true,
-                    limit: 1,
-                    offset,
-                    ..Filter::default()
-                },
-            );
-            seen.push(result.sessions[0].id.clone());
+        let sorted = |key, descending| {
+            let filter = Filter {
+                include_spawned: true,
+                sort: Sort { key, descending },
+                ..Filter::default()
+            };
+            let page = page(&store, filter);
+            listed(&page)
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        // Four was updated, started and titled after the others and used the
+        // most, and two before them and the least; "Session four" is first
+        // alphabetically.
+        let largest_first = ["four", "one", "three", "two"];
+        let smallest_first = ["two", "three", "one", "four"];
+        for key in [SortKey::Updated, SortKey::Started, SortKey::Tokens] {
+            assert_eq!(sorted(key, true), largest_first, "{key:?}");
+            assert_eq!(sorted(key, false), smallest_first, "{key:?}");
         }
-        seen.sort();
-        seen.dedup();
-        assert_eq!(seen.len(), 4, "every row appeared exactly once");
+        assert_eq!(sorted(SortKey::Title, false), largest_first);
+        assert_eq!(sorted(SortKey::Title, true), smallest_first);
+        // Every session cost the same, so the id settles the order either way.
+        for descending in [true, false] {
+            assert_eq!(
+                sorted(SortKey::Cost, descending),
+                ["four", "three", "one", "two"]
+            );
+        }
+    }
+
+    #[test]
+    fn paging_walks_the_whole_result_once_within_bounds() {
+        let store = filled();
+        let at = |offset: i64, limit: i64| {
+            let filter = Filter {
+                include_spawned: true,
+                offset,
+                limit,
+                ..Filter::default()
+            };
+            let page = store.list(&filter).expect("lists");
+            listed(&page)
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let walked: Vec<String> = (0..4).flat_map(|offset| at(offset, 1)).collect();
+        assert_eq!(walked, ["two", "three", "one", "four"]);
+        assert!(at(4, 1).is_empty(), "past the end is empty");
+        assert_eq!(at(-3, 1), ["two"], "before the start is the start");
+        assert_eq!(at(0, 10_000).len(), 4, "a page is bounded by what exists");
+        assert_eq!(at(0, 0).len(), 1, "and holds at least one row");
     }
 
     #[test]
     fn search_matches_title_directory_and_model() {
         let store = filled();
-        let by_title = page(
-            &store,
-            Filter {
-                search: Some("Session one".into()),
-                limit: 50,
-                ..Filter::default()
-            },
-        );
-        assert_eq!(by_title.total, 1);
-
-        let by_directory = page(
-            &store,
-            Filter {
-                search: Some("w/proj".into()),
+        let matching = |search: &str| {
+            let filter = Filter {
+                search: Some(search.into()),
                 include_spawned: true,
-                limit: 50,
                 ..Filter::default()
-            },
-        );
-        assert_eq!(by_directory.total, 4);
-
-        let by_model = page(
-            &store,
-            Filter {
-                search: Some("model-a".into()),
-                include_spawned: true,
-                limit: 50,
-                ..Filter::default()
-            },
-        );
-        assert_eq!(by_model.total, 4);
-
+            };
+            page(&store, filter).total
+        };
+        assert_eq!(matching("  Session one "), 1);
+        assert_eq!(matching("W/PROJ"), 4, "ignoring case");
+        assert_eq!(matching("model-a"), 4);
+        assert_eq!(matching("no such thing"), 0);
         // The model shares are also kept as JSON on the row, so a search that
         // reached that JSON would match its field names in every session.
         for structural in ["tokens", "costUsd", "cacheRead", "model\":"] {
-            let spurious = page(
-                &store,
-                Filter {
-                    search: Some(structural.into()),
-                    include_spawned: true,
-                    limit: 50,
-                    ..Filter::default()
-                },
-            );
-            assert_eq!(spurious.total, 0, "{structural} must not match every row");
+            assert_eq!(matching(structural), 0, "{structural}");
         }
-
-        let nothing = page(
-            &store,
-            Filter {
-                search: Some("no such thing".into()),
-                limit: 50,
-                ..Filter::default()
-            },
-        );
-        assert_eq!(nothing.total, 0);
     }
 
     #[test]
@@ -1184,15 +1109,9 @@ mod tests {
             let filter = Filter {
                 search: Some(search.into()),
                 include_spawned: true,
-                limit: 50,
                 ..Filter::default()
             };
-            let found = page(&store, filter).sessions;
-            found
-                .iter()
-                .map(|session| session.native_id.clone())
-                .collect::<Vec<_>>()
-                .join(" ")
+            listed(&page(&store, filter)).join(" ")
         };
         assert_eq!(matching("50%"), "five");
         assert_eq!(matching("e_c"), "five");
@@ -1201,60 +1120,9 @@ mod tests {
         assert_eq!(matching("n%o"), "");
         assert_eq!(matching("Sessio_"), "");
         assert_eq!(matching(r"\"), "");
-    }
-
-    #[test]
-    fn a_search_term_with_sql_in_it_is_bound_not_interpolated() {
-        let store = filled();
-        let hostile = page(
-            &store,
-            Filter {
-                search: Some("'; DROP TABLE sessions; --".into()),
-                limit: 50,
-                ..Filter::default()
-            },
-        );
-        assert_eq!(hostile.total, 0);
-        // The table must still be there.
-        assert_eq!(store.count().expect("counts"), 4);
-    }
-
-    #[test]
-    fn filtering_by_agent_and_period_narrows_the_match() {
-        let store = filled();
-        let codex = page(
-            &store,
-            Filter {
-                agents: vec![Agent::Codex],
-                include_spawned: true,
-                limit: 50,
-                ..Filter::default()
-            },
-        );
-        assert_eq!(codex.total, 2);
-
-        let recent = page(
-            &store,
-            Filter {
-                since: Some(2_000),
-                include_spawned: true,
-                limit: 50,
-                ..Filter::default()
-            },
-        );
-        assert_eq!(recent.total, 3);
-
-        let window = page(
-            &store,
-            Filter {
-                since: Some(2_000),
-                until: Some(3_000),
-                include_spawned: true,
-                limit: 50,
-                ..Filter::default()
-            },
-        );
-        assert_eq!(window.total, 2);
+        // SQL is bound as text, not run.
+        assert_eq!(matching("'; DROP TABLE sessions; --"), "");
+        assert_eq!(store.count().expect("counts"), 5);
     }
 
     #[test]
@@ -1277,7 +1145,7 @@ mod tests {
 
     #[test]
     fn a_session_spanning_several_files_adds_their_usage() {
-        let mut store = Store::memory().expect("opens");
+        let mut store = memory();
         // A thread resumed into a second file. Each file is read on its own,
         // and here the later one happens to be written first.
         let segment = |started: i64, updated: i64, title: &str, total: i64| {
@@ -1341,7 +1209,7 @@ mod tests {
         ];
 
         for order in [[files[0], files[1]], [files[1], files[0]]] {
-            let mut store = Store::memory().expect("opens");
+            let mut store = memory();
             for (path, read) in order {
                 store
                     .put(&unit(path), std::slice::from_ref(read))
@@ -1378,7 +1246,7 @@ mod tests {
         store
             .put_counts("codex:one", 42, 17)
             .expect("writes counts");
-        // A rescan re-summarizes the unit, which knows nothing about counts.
+        // A rescan summarizes the unit again, which knows nothing of counts.
         store
             .put(
                 &unit("/a.jsonl"),
@@ -1387,35 +1255,106 @@ mod tests {
             .expect("writes");
 
         let found = store.get("codex:one").expect("reads").expect("exists");
-        assert_eq!(found.messages, Some(42), "counts must not be cleared");
-        assert_eq!(found.tools, Some(17));
+        assert_eq!((found.messages, found.tools), (Some(42), Some(17)));
     }
 
     #[test]
-    fn retiring_a_file_keeps_its_sessions_but_marks_them_absent() {
+    fn retiring_a_file_forgets_it_but_keeps_its_sessions_marked_absent() {
         let mut store = filled();
-        store.retire(&["/a.jsonl".into()]).expect("retires");
+        let signatures = store.signatures().expect("reads");
+        assert_eq!(signatures.len(), 2);
+        assert_eq!(signatures.get("/a.jsonl"), Some(&(10, 20)));
 
+        store.retire(&["/a.jsonl".into()]).expect("retires");
         let found = store.get("codex:one").expect("reads").expect("still there");
         assert!(!found.present, "the history is kept, flagged as gone");
         assert!(
             !store.signatures().expect("reads").contains_key("/a.jsonl"),
-            "but the file is no longer tracked, so it can be re-found"
+            "but the file is no longer tracked, so it can be found again"
         );
     }
 
     #[test]
-    fn signatures_drive_incremental_rescans() {
-        let store = filled();
-        let signatures = store.signatures().expect("reads");
-        assert_eq!(signatures.get("/a.jsonl"), Some(&(10, 20)));
-        assert_eq!(signatures.len(), 2);
+    fn locating_a_session_names_its_file_and_native_id() {
+        let mut store = filled();
+        let (unit, native_id) = store.locate("codex:one").expect("reads").expect("exists");
+        assert_eq!(
+            (
+                unit.agent,
+                unit.path,
+                unit.mtime,
+                unit.size,
+                native_id.as_str()
+            ),
+            (Agent::Codex, PathBuf::from("/a.jsonl"), 10, 20, "one")
+        );
+        assert!(store.locate("codex:missing").expect("reads").is_none());
+
+        // A file since gone has no signature, but its session is still where
+        // it was.
+        store.retire(&["/a.jsonl".into()]).expect("retires");
+        let (gone, _) = store.locate("codex:one").expect("reads").expect("exists");
+        assert_eq!(
+            (gone.path, gone.mtime, gone.size),
+            (PathBuf::from("/a.jsonl"), 0, 0)
+        );
     }
 
     #[test]
-    fn models_rank_by_recorded_usage() {
-        let mut store = Store::memory().expect("opens");
-        let mut multi = summary("m1", Agent::ClaudeCode, 5_000, 300, false);
+    fn origins_are_every_match_newest_first_with_where_each_was_read() {
+        let store = filled();
+        let origins = |filter: Filter| {
+            let found = store.origins(&filter).expect("finds");
+            let found = found.into_iter().map(|origin| {
+                let unit = origin.unit;
+                (origin.session.native_id, unit.agent, unit.path, unit.size)
+            });
+            found.collect::<Vec<_>>()
+        };
+        let expected = |rows: &[(&str, Agent, &str)]| {
+            let rows = rows
+                .iter()
+                .map(|&(id, agent, path)| (id.to_owned(), agent, PathBuf::from(path), 20));
+            rows.collect::<Vec<_>>()
+        };
+        // A search, an order and a window do not narrow it.
+        let every = origins(Filter {
+            search: Some("no such thing".into()),
+            sort: Sort {
+                key: SortKey::Title,
+                descending: false,
+            },
+            offset: 2,
+            limit: 1,
+            ..Filter::default()
+        });
+        assert_eq!(
+            every,
+            expected(&[
+                ("one", Agent::Codex, "/a.jsonl"),
+                ("three", Agent::ClaudeCode, "/b.jsonl"),
+                ("two", Agent::Codex, "/a.jsonl"),
+            ])
+        );
+        // Everything else does, as it narrows the list.
+        let recent = origins(Filter {
+            since: Some(2_500),
+            include_spawned: true,
+            ..Filter::default()
+        });
+        assert_eq!(
+            recent,
+            expected(&[
+                ("four", Agent::ClaudeCode, "/b.jsonl"),
+                ("one", Agent::Codex, "/a.jsonl"),
+            ])
+        );
+    }
+
+    #[test]
+    fn models_rank_by_recorded_usage_and_split_it_by_day() {
+        let mut store = memory();
+        let mut multi = summary("m1", Agent::ClaudeCode, DAY + 5_000, 0, false);
         multi.usage = vec![
             Usage {
                 model: "haiku".into(),
@@ -1427,18 +1366,43 @@ mod tests {
                 cost_usd: Some(2.0),
                 ..usage(5_000, 250)
             },
+            Usage {
+                model: "opus".into(),
+                cost_usd: Some(0.5),
+                ..usage(DAY + 5_000, 60)
+            },
         ];
         store.put(&unit("/m.jsonl"), &[multi]).expect("writes");
 
         let ranked = store.models(None, None).expect("ranks");
-        assert_eq!(ranked.len(), 2);
-        assert_eq!(ranked[0].model, "opus");
-        assert_eq!(ranked[0].tokens.total, 250);
-        assert_eq!(ranked[0].cost_usd, Some(2.0));
-        assert_eq!(ranked[0].sessions, 1);
-        assert_eq!(ranked[0].agents, [Agent::ClaudeCode]);
-        assert_eq!(ranked[1].model, "haiku");
-        assert_eq!(ranked[1].cost_usd, None, "unpriced is not free");
+        let summary: Vec<_> = ranked
+            .iter()
+            .map(|model| {
+                (
+                    model.model.as_str(),
+                    model.tokens.total,
+                    model.cost_usd,
+                    model.sessions,
+                    model.agents.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("opus", 310, Some(2.5), 1, vec![Agent::ClaudeCode]),
+                ("haiku", 50, None, 1, vec![Agent::ClaudeCode]),
+            ],
+            "unpriced is not free"
+        );
+        // A day apart, the two uses of opus fall on two local days.
+        let daily: Vec<_> = ranked[0]
+            .daily
+            .iter()
+            .map(|day| (day.tokens, day.cost_usd))
+            .collect();
+        assert_eq!(daily, [(250, Some(2.0)), (60, Some(0.5))]);
+        assert_eq!(ranked[1].daily.len(), 1);
 
         // The session's own shares come largest first too.
         let session = store.get("claude_code:m1").expect("reads").expect("exists");
@@ -1447,23 +1411,13 @@ mod tests {
             .iter()
             .map(|slice| (slice.model.as_str(), slice.cost_usd))
             .collect();
-        assert_eq!(shares, [("opus", Some(2.0)), ("haiku", None)]);
-        assert_eq!(session.cost_usd, Some(2.0));
-    }
-
-    #[test]
-    fn a_models_period_excludes_work_outside_it() {
-        let store = filled();
-        assert_eq!(
-            store.models(Some(3_500), None).expect("ranks")[0].sessions,
-            1
-        );
-        assert!(store.models(Some(99_000), None).expect("ranks").is_empty());
+        assert_eq!(shares, [("opus", Some(2.5)), ("haiku", None)]);
+        assert_eq!(session.cost_usd, Some(2.5));
     }
 
     #[test]
     fn a_models_agents_are_in_the_interfaces_order() {
-        let mut store = Store::memory().expect("opens");
+        let mut store = memory();
         // Grok's is written first, and its key sorts first too.
         for (path, agent) in [
             ("/g.jsonl", Agent::GrokBuild),
@@ -1487,41 +1441,40 @@ mod tests {
             .put(&unit("/c.jsonl"), &[elsewhere, nowhere])
             .expect("writes");
 
-        // By hand from the fixtures: 300 + 100 + 200 + 400 in /w/proj and 500
-        // in /w/other, each usage priced at 1.5. The 600 with no directory is
-        // in neither.
-        let all = store.projects(None, None).expect("ranks");
-        let ranked: Vec<_> = all
-            .iter()
-            .map(|project| {
+        let ranked = |since| {
+            let projects = store.projects(since, None).expect("ranks").into_iter();
+            let ranked = projects.map(|project| {
                 (
-                    project.project.as_str(),
+                    project.project,
                     project.sessions,
                     project.tokens.total,
                     project.cost_usd,
                 )
-            })
-            .collect();
+            });
+            ranked.collect::<Vec<_>>()
+        };
+        // 300 + 100 + 200 + 400 in /w/proj and 500 in /w/other, each priced at
+        // 1.5. The 600 with no directory is in neither.
         assert_eq!(
-            ranked,
+            ranked(None),
             [
-                ("/w/proj", 4, 1_000, Some(6.0)),
-                ("/w/other", 1, 500, Some(1.5))
+                ("/w/proj".to_owned(), 4, 1_000, Some(6.0)),
+                ("/w/other".to_owned(), 1, 500, Some(1.5)),
             ]
         );
-
         // From 3,500 on, only four's 400 and five's 500 were used.
-        let recent = store.projects(Some(3_500), None).expect("ranks");
-        let ranked: Vec<_> = recent
-            .iter()
-            .map(|project| (project.project.as_str(), project.tokens.total))
-            .collect();
-        assert_eq!(ranked, [("/w/other", 500), ("/w/proj", 400)]);
+        assert_eq!(
+            ranked(Some(3_500)),
+            [
+                ("/w/other".to_owned(), 1, 500, Some(1.5)),
+                ("/w/proj".to_owned(), 1, 400, Some(1.5)),
+            ]
+        );
     }
 
     #[test]
     fn a_period_counts_only_the_usage_inside_it() {
-        let mut store = Store::memory().expect("opens");
+        let mut store = memory();
         // A session that used 100 tokens on its first day and 40 on its second.
         let mut spanning = summary("span", Agent::Codex, DAY + DAY / 2, 140, false);
         spanning.usage = vec![usage(DAY / 2, 100), usage(DAY + DAY / 2, 40)];
@@ -1530,16 +1483,20 @@ mod tests {
         let second = store.overview(Some(DAY), None).expect("totals");
         assert_eq!(second.tokens.total, 40, "the first day's usage is outside");
         assert_eq!(second.sessions, 1, "but the session used tokens in it");
+        assert_eq!(second.daily.len(), 1);
+        let models = store.models(Some(DAY), None).expect("ranks");
+        assert_eq!((models[0].tokens.total, models[0].sessions), (40, 1));
+        assert!(store.models(Some(2 * DAY), None).expect("ranks").is_empty());
+
         // The list narrows the same way, by when tokens were used, and counts
         // the same usage.
         let listed = |since, until| {
             let filter = Filter {
                 since,
                 until,
-                limit: 50,
                 ..Filter::default()
             };
-            store.list(&filter).expect("lists")
+            page(&store, filter)
         };
         let later = listed(Some(DAY), None);
         assert_eq!(later.total, 1);
@@ -1549,15 +1506,14 @@ mod tests {
         assert_eq!(row.models[0].tokens.total, 40);
         let first = listed(None, Some(DAY - 1));
         assert_eq!(first.sessions[0].tokens.total, 100, "a period can end, too");
+        let both = listed(Some(DAY / 2), Some(DAY + DAY / 2));
+        assert_eq!(both.sessions[0].tokens.total, 140, "and holds its ends");
         assert_eq!(
             listed(Some(2 * DAY), None).total,
             0,
             "nothing was used after"
         );
         assert_eq!(listed(None, Some(DAY / 2 - 1)).total, 0, "nor before");
-        assert_eq!(second.daily.len(), 1);
-        let models = store.models(Some(DAY), None).expect("ranks");
-        assert_eq!(models[0].tokens.total, 40);
 
         let all = store.overview(None, None).expect("totals");
         let days: Vec<_> = all.daily.iter().map(|day| day.tokens.total).collect();
@@ -1569,7 +1525,7 @@ mod tests {
 
     #[test]
     fn a_period_orders_and_totals_the_list_by_what_was_used_in_it() {
-        let mut store = Store::memory().expect("opens");
+        let mut store = memory();
         let used = |at, total, cost| Usage {
             cost_usd: Some(cost),
             ..usage(at, total)
@@ -1588,14 +1544,7 @@ mod tests {
         ];
         store.put(&unit("/s.jsonl"), &[busy, late]).expect("writes");
 
-        let list = |filter: Filter| {
-            store
-                .list(&Filter {
-                    limit: 50,
-                    ..filter
-                })
-                .expect("lists")
-        };
+        let list = |filter: Filter| page(&store, filter);
         let ranked = |page: &SessionPage| -> Vec<(String, i64)> {
             page.sessions
                 .iter()
@@ -1672,12 +1621,15 @@ mod tests {
         );
 
         // Paging and narrowing work within a period as they do without one.
-        let rest = list(Filter {
-            since: Some(DAY),
-            sort: largest(SortKey::Tokens),
-            offset: 1,
-            ..Filter::default()
-        });
+        let rest = store
+            .list(&Filter {
+                since: Some(DAY),
+                sort: largest(SortKey::Tokens),
+                offset: 1,
+                limit: 1,
+                ..Filter::default()
+            })
+            .expect("lists");
         assert_eq!(ranked(&rest), [("busy".into(), 10)]);
         let narrowed = list(Filter {
             since: Some(DAY),
@@ -1685,8 +1637,7 @@ mod tests {
             search: Some("late".into()),
             ..Filter::default()
         });
-        assert_eq!(narrowed.total, 1);
-        assert_eq!(narrowed.sessions[0].native_id, "late");
+        assert_eq!(listed(&narrowed), ["late"]);
     }
 
     #[test]
@@ -1696,9 +1647,16 @@ mod tests {
         assert_eq!(overview.sessions, 4);
         assert_eq!(overview.tokens.total, 1_000);
         assert_eq!(overview.cost_usd, Some(6.0));
+        let agents: Vec<_> = overview
+            .by_agent
+            .iter()
+            .map(|agent| (agent.agent, agent.sessions, agent.tokens.total))
+            .collect();
+        assert_eq!(
+            agents,
+            [(Agent::ClaudeCode, 2, 600), (Agent::Codex, 2, 400)]
+        );
 
-        let summed: i64 = overview.by_agent.iter().map(|a| a.tokens.total).sum();
-        assert_eq!(summed, overview.tokens.total);
         let daily: i64 = overview.daily.iter().map(|day| day.tokens.total).sum();
         assert_eq!(daily, overview.tokens.total, "all usage lands in a day");
         for day in &overview.daily {
@@ -1709,7 +1667,7 @@ mod tests {
 
     #[test]
     fn days_break_at_local_midnight_even_beside_a_clock_change() {
-        let mut store = Store::memory().expect("opens");
+        let mut store = memory();
         // Every three hours through the weeks North America and Europe change
         // their clocks: from 2026-03-01 for 35 days, and 2026-10-20 for 16.
         let every = |start: i64, days: i64| (0..days * 8).map(move |step| start + step * 10_800);
@@ -1740,7 +1698,7 @@ mod tests {
 
     #[test]
     fn hours_are_whole_local_hours_even_beside_a_clock_change() {
-        let mut store = Store::memory().expect("opens");
+        let mut store = memory();
         // Every quarter hour through the days North America and Europe change
         // their clocks in 2026: 8 and 29 March, 25 October and 1 November.
         let quarters = |from: i64, to: i64| (from..to).step_by(900).map(|seconds| seconds * 1_000);
@@ -1751,25 +1709,21 @@ mod tests {
             .chain(quarters(autumn.0, autumn.1))
             .map(|at| usage(at, 1))
             .collect();
-        let recorded = clock.usage.len() as i64;
+        let recorded: i64 = clock.usage.iter().map(|used| used.tokens.total).sum();
         store.put(&unit("/c.jsonl"), &[clock]).expect("writes");
 
         let hours = store.hours(None, None).expect("totals");
         let counted: i64 = hours.iter().map(|hour| hour.tokens.total).sum();
         assert_eq!(counted, recorded, "every quarter hour lands in an hour");
-        let daily = store.overview(None, None).expect("totals").daily;
-        assert_eq!(
-            daily.iter().map(|day| day.tokens.total).sum::<i64>(),
-            counted
-        );
 
         // The ends of each run may start or stop part-way into a local hour.
+        let within = |at: i64| {
+            [spring, autumn]
+                .iter()
+                .any(|&(from, to)| (from * 1_000 + 3_600_000..to * 1_000 - 3_600_000).contains(&at))
+        };
         for pair in hours.windows(2) {
             let (before, after) = (&pair[0], &pair[1]);
-            let within = |at: i64| {
-                (spring.0 * 1_000 + 3_600_000..spring.1 * 1_000 - 3_600_000).contains(&at)
-                    || (autumn.0 * 1_000 + 3_600_000..autumn.1 * 1_000 - 3_600_000).contains(&at)
-            };
             if !within(before.hour) || !within(after.hour) {
                 continue;
             }
@@ -1796,7 +1750,7 @@ mod tests {
 
     #[test]
     fn a_subscriptions_accounts_replace_only_what_was_kept_for_it() {
-        let mut store = Store::memory().expect("opens");
+        let mut store = memory();
         let account = |id: &str, provider: Provider, read_at: Option<i64>| Account {
             id: id.into(),
             provider,
@@ -1830,63 +1784,20 @@ mod tests {
             )
             .expect("writes");
 
-        let mut kept: Vec<String> = store
+        let mut kept: Vec<_> = store
             .accounts()
             .expect("reads")
             .into_iter()
-            .map(|account| account.id)
+            .map(|account| (account.id, account.read_at))
             .collect();
         kept.sort();
-        assert_eq!(kept, ["codex:a", "grok:c"]);
-    }
-
-    #[test]
-    fn a_page_cannot_be_asked_for_more_than_the_maximum() {
-        let store = filled();
-        let huge = page(
-            &store,
-            Filter {
-                limit: 10_000,
-                include_spawned: true,
-                ..Filter::default()
-            },
+        assert_eq!(
+            kept,
+            [
+                ("codex:a".to_owned(), Some(2)),
+                ("grok:c".to_owned(), Some(1))
+            ]
         );
-        assert_eq!(huge.sessions.len(), 4, "bounded by what exists");
-
-        // A zero or negative limit must still return a usable page rather than
-        // an empty one or a SQL error.
-        let zero = page(
-            &store,
-            Filter {
-                limit: 0,
-                include_spawned: true,
-                ..Filter::default()
-            },
-        );
-        assert_eq!(zero.sessions.len(), 1);
-    }
-
-    #[test]
-    fn locating_a_session_names_its_file_and_native_id() {
-        let store = filled();
-        let (unit, native_id) = store.locate("codex:one").expect("reads").expect("exists");
-        assert_eq!(unit.path, PathBuf::from("/a.jsonl"));
-        assert_eq!(unit.agent, Agent::Codex);
-        assert_eq!(native_id, "one");
-        assert!(store.locate("codex:missing").expect("reads").is_none());
-    }
-
-    #[test]
-    fn a_file_that_is_not_a_database_is_discarded_and_rebuilt() {
-        let directory = tempfile::tempdir().expect("temp dir");
-        let path = directory.path().join("index.sqlite");
-        let wal = directory.path().join("index.sqlite-wal");
-        std::fs::write(&path, b"this is not a database, and it is long enough").expect("writes");
-        // A journal left beside it would be replayed into the new index.
-        std::fs::write(&wal, b"stale").expect("writes");
-        let store = Store::open(&path).expect("rebuilds");
-        assert_eq!(store.count().expect("counts"), 0);
-        assert_ne!(std::fs::read(&wal).ok().as_deref(), Some(&b"stale"[..]));
     }
 
     #[test]
@@ -1898,6 +1809,8 @@ mod tests {
             old.execute_batch(
                 "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                  INSERT INTO meta VALUES ('schema', '1');
+                 CREATE TABLE sessions (id TEXT);
+                 INSERT INTO sessions VALUES ('codex:old');
                  CREATE TABLE retired (id TEXT);",
             )
             .expect("an older index");
@@ -1913,5 +1826,18 @@ mod tests {
             .expect("reads");
         assert_eq!(retired, 0, "a table this shape has no use for is gone");
         assert_eq!(store.count().expect("counts"), 0);
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_database_is_discarded_and_rebuilt() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("index.sqlite");
+        let wal = directory.path().join("index.sqlite-wal");
+        std::fs::write(&path, b"this is not a database, and it is long enough").expect("writes");
+        // A journal left beside it would be replayed into the new index.
+        std::fs::write(&wal, b"stale").expect("writes");
+        let store = Store::open(&path).expect("rebuilds");
+        assert_eq!(store.count().expect("counts"), 0);
+        assert_ne!(std::fs::read(&wal).ok().as_deref(), Some(&b"stale"[..]));
     }
 }

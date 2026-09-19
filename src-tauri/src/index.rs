@@ -1,77 +1,78 @@
-//! Building and refreshing the index.
+//! Keeping the index current, and reading what it points to.
 //!
-//! A scan does three things: stat every source file, parse only the ones whose
-//! modification time or size moved since last time, and write what they say.
-//! An unchanged corpus therefore costs a directory walk and nothing else, and
-//! a changed one costs only the files that actually changed.
-//!
-//! Parsing runs on every core. Writing runs on one thread, because SQLite has
-//! a single writer and the work is entirely in the parsing anyway.
+//! A scan stats every source file, parses only those whose modification time
+//! or size moved since the last scan, and writes what they say, so an
+//! unchanged corpus costs a directory walk. Parsing runs on every core;
+//! writing runs on one thread, because SQLite has a single writer and the
+//! work is in the parsing.
 //!
 //! Searching what was said in every conversation reads the agents' files the
-//! same way, on every core, since no conversation's text is kept here.
+//! same way, since the index keeps no conversation's text.
 
+use std::collections::BTreeSet;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, mpsc};
+use std::sync::{Mutex, MutexGuard, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::session::{
-    Account, Agent, Filter, Limit, Mention, Provider, Searched, Status, Transcript,
+    Account, Agent, Filter, Limit, Mark, Mention, Provider, Searched, Status, Transcript,
 };
 use crate::source::{self, Unit};
-use crate::store::Store;
+use crate::store::{Origin, Store};
 
 /// How often a long scan reports how far it has got.
 ///
 /// Often enough that the window fills in as files are read, and long enough
-/// that the everyday rescan, which reads a handful of files, finishes before it
-/// would report and so never shows progress.
+/// that the everyday rescan, which reads a handful of files, finishes before
+/// it would report and so never shows progress.
 const PROGRESS: Duration = Duration::from_millis(250);
 
 /// How often a search hands over what it has found so far.
 const FOUND: Duration = Duration::from_millis(100);
 
 /// The most sessions a search answers with. It looks through the newest first,
-/// so these are the most recent; a search that finds more is narrowed down
-/// rather than read through.
+/// so these are the most recent.
 const MOST: usize = 200;
+
+/// The most problems a scan reports, so a corpus of unreadable files does not
+/// fill the interface.
+const PROBLEMS: usize = 20;
 
 /// The index and the machinery that keeps it current.
 ///
-/// Scans are not guarded against overlapping. Callers run them one at a time;
-/// while the app is open, its one background thread is the only caller of
-/// [`Index::scan`].
+/// Scans are not guarded against overlapping: the app's one background thread
+/// is the only caller of [`Index::scan`]. Where two locks are held at once,
+/// `open` is taken before `store`.
 pub struct Index {
     store: Mutex<Store>,
     /// Where the agents' directories live. Overridable so tests never read a
     /// real agent's home.
     home: PathBuf,
-    /// What the last scan found, for the status command.
+    /// What the engine knows so far, for the status command.
     status: Mutex<Status>,
     /// The conversation most recently read, so paging through it is free.
     open: Mutex<Option<Held>>,
     /// The sessions the last scan read anything new of.
-    changed: Mutex<Vec<String>>,
+    changed: Mutex<BTreeSet<String>>,
     /// Counts searches begun and stopped, so a running search sees it has been
     /// overtaken and stops.
     searches: AtomicU64,
 }
 
-/// A conversation held after its first read, and where it was read from.
+/// A conversation held after its first read, and the file it was read from.
 struct Held {
-    /// The session it belongs to.
     id: String,
-    /// The file it was read from, as the index names it.
-    path: String,
+    path: PathBuf,
     transcript: Transcript,
 }
 
 impl Index {
-    /// Open the index beside the application's other data.
+    /// Open the index in `data_dir`, reading the agents' history under `home`.
     pub fn open(data_dir: &Path, home: PathBuf) -> Result<Index> {
-        std::fs::create_dir_all(data_dir).map_err(|source| crate::error::Error::Read {
+        std::fs::create_dir_all(data_dir).map_err(|source| Error::Write {
             path: data_dir.display().to_string(),
             source,
         })?;
@@ -88,26 +89,29 @@ impl Index {
             home,
             status: Mutex::new(status),
             open: Mutex::new(None),
-            changed: Mutex::new(Vec::new()),
+            changed: Mutex::new(BTreeSet::new()),
             searches: AtomicU64::new(0),
         })
     }
 
     /// Borrow the store for a read.
     pub fn read<T>(&self, action: impl FnOnce(&Store) -> Result<T>) -> Result<T> {
-        let store = self.store.lock().expect("the index lock is never poisoned");
-        action(&store)
+        action(&lock(&self.store))
     }
 
     /// Borrow the store for a write.
-    pub fn write<T>(&self, action: impl FnOnce(&mut Store) -> Result<T>) -> Result<T> {
-        let mut store = self.store.lock().expect("the index lock is never poisoned");
-        action(&mut store)
+    pub(crate) fn write<T>(&self, action: impl FnOnce(&mut Store) -> Result<T>) -> Result<T> {
+        action(&mut lock(&self.store))
     }
 
     /// What the engine knows so far.
-    pub fn status(&self) -> Status {
-        self.status.lock().expect("never poisoned").clone()
+    pub(crate) fn status(&self) -> Status {
+        lock(&self.status).clone()
+    }
+
+    /// Note a change to the reported status.
+    fn mark(&self, change: impl FnOnce(&mut Status)) {
+        change(&mut lock(&self.status));
     }
 
     /// Bring the index up to date with what is on disk.
@@ -116,16 +120,97 @@ impl Index {
     /// sessions as their files are read rather than all at once at the end.
     pub fn scan(&self, report: impl Fn(&Status)) -> Result<Status> {
         self.mark(|status| status.scanning = true);
-
         let outcome = self.run(&report).and_then(|()| self.note_use());
-
+        // Cleared before the status is answered, so a caller is never told a
+        // scan is running when it has finished.
         self.mark(|status| {
             status.scanning = false;
             status.progress = None;
         });
-        // Report the status after clearing the flag, so a caller is never told
-        // a scan is still running when it has already finished.
         outcome.map(|()| self.status())
+    }
+
+    /// One pass over every agent's history.
+    fn run(&self, report: &impl Fn(&Status)) -> Result<()> {
+        let agents = source::present(&self.home);
+        let units: Vec<Unit> = agents
+            .iter()
+            .flat_map(|(agent, root)| source::discover(*agent, root))
+            .collect();
+
+        // A unit is read again when its modification time or size moved: some
+        // agents rewrite a file in place. What is left of what the index knew
+        // is no longer on disk.
+        let mut known = self.read(Store::signatures)?;
+        let mut changed: Vec<&Unit> = units
+            .iter()
+            .filter(|unit| {
+                known.remove(unit.path.to_string_lossy().as_ref()) != Some((unit.mtime, unit.size))
+            })
+            .collect();
+        // Newest first: what someone is most likely to look for appears first,
+        // and older history then lands below it in the list rather than above.
+        changed.sort_by_key(|unit| std::cmp::Reverse(unit.mtime));
+
+        lock(&self.changed).clear();
+        self.mark(|status| {
+            status.files_read = changed.len() as i64;
+            status.agents = agents.iter().map(|(agent, _)| *agent).collect();
+            status.problems.clear();
+        });
+        let problems = self.absorb(&changed, report);
+        self.release_if_stale(&changed)?;
+        if !known.is_empty() {
+            let gone: Vec<String> = known.into_keys().collect();
+            self.write(|store| store.retire(&gone))?;
+        }
+
+        let sessions = self.read(Store::count)?;
+        self.mark(|status| {
+            status.sessions = sessions;
+            status.problems = problems;
+        });
+        Ok(())
+    }
+
+    /// Parse every changed unit on every core, writing each as soon as it is
+    /// read, and answer the problems met on the way.
+    ///
+    /// A unit that cannot be read is reported and skipped: one unreadable file
+    /// must not cost the whole scan. `report` hears how far the scan has got
+    /// every [`PROGRESS`].
+    fn absorb(&self, changed: &[&Unit], report: &impl Fn(&Status)) -> Vec<String> {
+        let total = changed.len() as i64;
+        let mut problems = fan_out(
+            changed,
+            |unit| Some((*unit, source::summarize(unit))),
+            || false,
+            |summarized| {
+                let mut problems = Vec::new();
+                let mut reported = Instant::now();
+                for (done, (unit, read)) in (1..).zip(summarized) {
+                    let written = read.and_then(|summaries| {
+                        self.write(|store| store.put(unit, &summaries))?;
+                        Ok(summaries)
+                    });
+                    match written {
+                        Ok(summaries) => lock(&self.changed)
+                            .extend(summaries.into_iter().map(|summary| summary.session.id)),
+                        Err(error) => problems.push(error.to_string()),
+                    }
+                    if reported.elapsed() >= PROGRESS {
+                        self.mark(|status| status.progress = Some((done, total)));
+                        report(&self.status());
+                        reported = Instant::now();
+                    }
+                }
+                problems
+            },
+        );
+        problems.sort();
+        problems.dedup();
+        problems.truncate(PROBLEMS);
+        problems
     }
 
     /// Note when each subscription was last used by a session on this machine.
@@ -148,168 +233,31 @@ impl Index {
         Ok(())
     }
 
-    /// Note a change to the reported status.
-    fn mark(&self, change: impl FnOnce(&mut Status)) {
-        change(&mut self.status.lock().expect("never poisoned"));
-    }
-
-    /// One pass over every agent's history.
-    fn run(&self, report: &impl Fn(&Status)) -> Result<()> {
-        let agents = source::present(&self.home);
-        let mut units = Vec::new();
-        for (agent, root) in &agents {
-            units.extend(source::discover(*agent, root));
-        }
-
-        let known = self.read(Store::signatures)?;
-        // A unit is re-read only when its file actually moved. Modification
-        // time alone is not enough: some agents rewrite a file in place.
-        let mut changed: Vec<Unit> = units
-            .iter()
-            .filter(|unit| {
-                let path = unit.path.to_string_lossy();
-                known.get(path.as_ref()) != Some(&(unit.mtime, unit.size))
-            })
-            .cloned()
-            .collect();
-        // Newest first: what someone is most likely to look for appears first,
-        // and older history then lands below it in the list rather than above.
-        changed.sort_by_key(|unit| std::cmp::Reverse(unit.mtime));
-
-        let files_read = changed.len() as i64;
-        self.changed.lock().expect("never poisoned").clear();
-        self.mark(|status| {
-            status.files_read = files_read;
-            status.agents = agents.iter().map(|(agent, _)| *agent).collect();
-            status.problems.clear();
-        });
-
-        let problems = self.absorb(&changed, report);
-        self.release_if_stale(&changed)?;
-
-        // Files the index knows about that are no longer on disk.
-        let live: std::collections::HashSet<String> = units
-            .iter()
-            .map(|unit| unit.path.to_string_lossy().into_owned())
-            .collect();
-        let gone: Vec<String> = known
-            .keys()
-            .filter(|path| !live.contains(*path))
-            .cloned()
-            .collect();
-        if !gone.is_empty() {
-            self.write(|store| store.retire(&gone))?;
-        }
-
-        let sessions = self.read(Store::count)?;
-        self.mark(|status| {
-            status.sessions = sessions;
-            status.problems = problems;
-        });
-        Ok(())
-    }
-
-    /// Parse every changed unit in parallel and write what they say.
-    ///
-    /// Returns the problems encountered. A unit that cannot be read is reported
-    /// and skipped: one unreadable file must not cost the whole scan. Each unit
-    /// is written as soon as it is read, and `report` hears how far the scan
-    /// has got every [`PROGRESS`].
-    fn absorb(&self, changed: &[Unit], report: &impl Fn(&Status)) -> Vec<String> {
-        if changed.is_empty() {
-            return Vec::new();
-        }
-        let workers = std::thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
-            .unwrap_or(4)
-            .min(changed.len());
-
-        let next = AtomicUsize::new(0);
-        let (send, receive) = mpsc::channel();
-        let mut problems = Vec::new();
-
-        std::thread::scope(|scope| {
-            for _ in 0..workers {
-                let send = send.clone();
-                let next = &next;
-                scope.spawn(move || {
-                    loop {
-                        let position = next.fetch_add(1, Ordering::Relaxed);
-                        let Some(unit) = changed.get(position) else {
-                            return;
-                        };
-                        let read = source::summarize(unit);
-                        // The receiver lives until every worker has finished,
-                        // so a send failure means the scan is being torn down.
-                        if send.send((unit.clone(), read)).is_err() {
-                            return;
-                        }
-                    }
-                });
-            }
-            drop(send);
-
-            let total = changed.len() as i64;
-            let mut reported = Instant::now();
-            for (done, (unit, read)) in (1..).zip(receive) {
-                match read {
-                    Ok(summaries) => match self.write(|store| store.put(&unit, &summaries)) {
-                        Ok(()) => self
-                            .changed
-                            .lock()
-                            .expect("never poisoned")
-                            .extend(summaries.iter().map(|summary| summary.session.id.clone())),
-                        Err(error) => problems.push(error.to_string()),
-                    },
-                    Err(error) => problems.push(error.to_string()),
-                }
-                if reported.elapsed() >= PROGRESS {
-                    self.mark(|status| status.progress = Some((done, total)));
-                    report(&self.status());
-                    reported = Instant::now();
-                }
-            }
-        });
-
-        // A corpus with thousands of unreadable files should not produce
-        // thousands of identical lines in the interface.
-        problems.sort();
-        problems.dedup();
-        problems.truncate(20);
-        problems
-    }
-
     /// The sessions the last scan read anything new of, each once, so a window
     /// showing one can read it again without asking about the rest.
-    pub fn changed(&self) -> Vec<String> {
-        let mut changed = self.changed.lock().expect("never poisoned").clone();
-        changed.sort();
-        changed.dedup();
-        changed
+    pub(crate) fn changed(&self) -> Vec<String> {
+        lock(&self.changed).iter().cloned().collect()
     }
 
     /// A window of one session's conversation.
     ///
     /// The whole conversation is parsed on the first request and held, so
     /// scrolling through a long session costs one read rather than one per
-    /// page. Only the most recent session is kept: someone reads one
-    /// conversation at a time, and the largest on this machine holds fifty
-    /// megabytes of tool output.
-    ///
-    /// The counts of messages and tool calls are a by-product of that read, so
-    /// they are stored rather than being made a reason to read the file twice.
+    /// page. Only the most recent is kept: someone reads one conversation at a
+    /// time, and the largest on this machine holds fifty megabytes of tool
+    /// output.
     pub fn transcript(&self, id: &str, offset: i64, limit: i64) -> Result<Transcript> {
         self.held(id, |transcript| transcript.window(offset, limit))
     }
 
     /// Where every turn of a session's conversation falls, for its timeline.
-    pub fn timeline(&self, id: &str) -> Result<Vec<crate::session::Mark>> {
+    pub(crate) fn timeline(&self, id: &str) -> Result<Vec<Mark>> {
         self.held(id, Transcript::marks)
     }
 
     /// The turns of a session's conversation that contain `query`, ignoring
     /// case, as [`Transcript::find`] finds them.
-    pub fn find(&self, id: &str, query: &str) -> Result<Vec<i64>> {
+    pub(crate) fn find(&self, id: &str, query: &str) -> Result<Vec<i64>> {
         self.held(id, |transcript| transcript.find(query))
     }
 
@@ -318,28 +266,27 @@ impl Index {
     ///
     /// The lock is kept for the whole read, so a second request for a session
     /// still being parsed waits for that parse instead of starting another.
+    /// The counts of messages and tool calls are a by-product of the parse, so
+    /// they are stored rather than being a reason to read the file again.
     fn held<T>(&self, id: &str, read: impl FnOnce(&Transcript) -> T) -> Result<T> {
-        let mut open = self.open.lock().expect("never poisoned");
+        let mut open = lock(&self.open);
         if let Some(held) = open.as_ref()
             && held.id == id
         {
             return Ok(read(&held.transcript));
         }
 
-        let located = self.read(|store| store.locate(id))?;
-        let Some((unit, native_id)) = located else {
-            return Err(crate::error::Error::NotFound(format!("session {id}")));
-        };
+        let (unit, native_id) = self
+            .read(|store| store.locate(id))?
+            .ok_or_else(|| Error::NotFound(format!("session {id}")))?;
         let transcript = source::transcript(&unit, &native_id)?;
         self.write(|store| store.put_counts(id, transcript.messages, transcript.tools))?;
-
-        let result = read(&transcript);
-        *open = Some(Held {
+        let held = open.insert(Held {
             id: id.to_owned(),
-            path: unit.path.to_string_lossy().into_owned(),
+            path: unit.path,
             transcript,
         });
-        Ok(result)
+        Ok(read(&held.transcript))
     }
 
     /// Forget the held conversation if a scan changed what it was read from:
@@ -350,26 +297,21 @@ impl Index {
     /// change would parse a long conversation again for nearly every page read
     /// from it. A file that has gone leaves it held: what was read is still
     /// that session's history, and there is nothing newer to read.
-    ///
-    /// Locks the held conversation before the store, as [`Index::held`] does.
-    fn release_if_stale(&self, changed: &[Unit]) -> Result<()> {
+    fn release_if_stale(&self, changed: &[&Unit]) -> Result<()> {
         if changed.is_empty() {
             return Ok(());
         }
-        let mut open = self.open.lock().expect("never poisoned");
+        let mut open = lock(&self.open);
         let Some(held) = open.as_ref() else {
             return Ok(());
         };
-        let rewritten = changed
-            .iter()
-            .any(|unit| unit.path.to_string_lossy() == held.path);
-        if !rewritten {
-            let located = self.read(|store| store.locate(&held.id))?;
-            if located.is_some_and(|(unit, _)| unit.path.to_string_lossy() == held.path) {
-                return Ok(());
-            }
+        let stale = changed.iter().any(|unit| unit.path == held.path)
+            || self
+                .read(|store| store.locate(&held.id))?
+                .is_none_or(|(unit, _)| unit.path != held.path);
+        if stale {
+            *open = None;
         }
-        *open = None;
         Ok(())
     }
 
@@ -378,11 +320,11 @@ impl Index {
     /// `found` each batch of sessions that mention it as they turn up.
     ///
     /// Conversations are read from the agents' files, on every core, and one
-    /// whose files cannot contain the query is passed over unread. The search
-    /// ends when it has looked through them all, when it has found [`MOST`],
-    /// when a later search or [`Index::stop_searching`] overtakes it, or when
-    /// `found` answers that nobody is listening any more. A conversation that
-    /// cannot be read is passed over, as it would be by a scan.
+    /// whose files cannot contain the query is passed over unread, as is one
+    /// that cannot be read. The search ends when it has looked through them
+    /// all, when it has found [`MOST`], when a later search or
+    /// [`Index::stop_searching`] overtakes it, or when `found` answers that
+    /// nobody is listening any more.
     pub fn search(
         &self,
         query: &str,
@@ -395,108 +337,77 @@ impl Index {
             return Ok(Searched::default());
         }
         let origins = self.read(|store| store.origins(filter))?;
-        let total = origins.len() as i64;
         let library = source::Library::new(&self.home, &needle);
-        let workers = std::thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
-            .unwrap_or(4)
-            .min(origins.len().max(1));
-
-        let next = AtomicUsize::new(0);
         let searched = AtomicUsize::new(0);
         let done = AtomicBool::new(false);
-        let (send, receive) = mpsc::channel();
-        let mut capped = false;
 
-        std::thread::scope(|scope| {
-            for _ in 0..workers {
-                let send = send.clone();
-                let (next, searched, done, origins, needle, library) =
-                    (&next, &searched, &done, &origins, &needle, &library);
-                scope.spawn(move || {
-                    while !done.load(Ordering::Relaxed)
-                        && self.searches.load(Ordering::Relaxed) == search
-                    {
-                        let Some(origin) = origins.get(next.fetch_add(1, Ordering::Relaxed)) else {
-                            return;
-                        };
-                        let mentioned = library
-                            .may_mention(&origin.unit, &origin.native_id)
-                            .then(|| library.transcript(&origin.unit, &origin.native_id).ok())
-                            .flatten()
-                            .and_then(|transcript| transcript.mentions(needle));
-                        searched.fetch_add(1, Ordering::Relaxed);
-                        if let Some(mentioned) = mentioned {
-                            let mention = Mention {
-                                session: origin.session.clone(),
-                                turns: mentioned.turns,
-                                first: mentioned.first,
-                                excerpt: mentioned.excerpt,
-                            };
-                            // The receiver lives until every worker has
-                            // finished, so a failure means the search is over.
-                            if send.send(mention).is_err() {
-                                return;
-                            }
+        let capped = fan_out(
+            &origins,
+            |Origin { session, unit }| {
+                let mentioned = library
+                    .may_mention(unit, &session.native_id)
+                    .then(|| library.transcript(unit, &session.native_id).ok())
+                    .flatten()
+                    .and_then(|transcript| transcript.mentions(&needle));
+                searched.fetch_add(1, Ordering::Relaxed);
+                mentioned.map(|mentioned| Mention {
+                    session: session.clone(),
+                    turns: mentioned.turns,
+                    first: mentioned.first,
+                    excerpt: mentioned.excerpt,
+                })
+            },
+            || done.load(Ordering::Relaxed) || self.searches.load(Ordering::Relaxed) != search,
+            |mentions| {
+                // Handed over together every so often rather than one message
+                // each, and never past the most a search answers with.
+                let mut batch = Vec::new();
+                let mut handed = 0;
+                let mut last = Instant::now();
+                loop {
+                    let ended = match mentions.recv_timeout(FOUND) {
+                        Ok(mention) => {
+                            batch.push(mention);
+                            false
                         }
-                    }
-                });
-            }
-            drop(send);
-
-            // Found sessions are handed over together every so often, rather
-            // than one message each, and never past the most a search answers.
-            let mut batch = Vec::new();
-            let mut handed = 0;
-            let mut last = Instant::now();
-            loop {
-                let ended = match receive.recv_timeout(FOUND) {
-                    Ok(mention) => {
-                        batch.push(mention);
-                        false
-                    }
-                    Err(mpsc::RecvTimeoutError::Timeout) => false,
-                    Err(mpsc::RecvTimeoutError::Disconnected) => true,
-                };
-                if handed + batch.len() >= MOST {
+                        Err(mpsc::RecvTimeoutError::Timeout) => false,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => true,
+                    };
+                    let capped = handed + batch.len() >= MOST;
                     batch.truncate(MOST - handed);
-                    capped = true;
-                    done.store(true, Ordering::Relaxed);
-                }
-                if !batch.is_empty() && (ended || capped || last.elapsed() >= FOUND) {
-                    handed += batch.len();
-                    if !found(std::mem::take(&mut batch)) {
-                        done.store(true, Ordering::Relaxed);
+                    if !batch.is_empty() && (ended || capped || last.elapsed() >= FOUND) {
+                        handed += batch.len();
+                        if !found(std::mem::take(&mut batch)) {
+                            done.store(true, Ordering::Relaxed);
+                        }
+                        last = Instant::now();
                     }
-                    last = Instant::now();
+                    if ended || capped {
+                        done.store(true, Ordering::Relaxed);
+                        return capped;
+                    }
                 }
-                if ended || capped {
-                    break;
-                }
-            }
-            // Anything a worker sends after this is dropped with the receiver.
-            done.store(true, Ordering::Relaxed);
-        });
-
+            },
+        );
         Ok(Searched {
-            searched: searched.load(Ordering::Relaxed) as i64,
-            total,
+            searched: searched.into_inner() as i64,
+            total: origins.len() as i64,
             capped,
         })
     }
 
     /// Stop any search that is running.
-    pub fn stop_searching(&self) {
+    pub(crate) fn stop_searching(&self) {
         self.searches.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Forget the held conversation, so its memory is returned.
     pub fn close(&self) {
-        *self.open.lock().expect("never poisoned") = None;
+        *lock(&self.open) = None;
     }
 
     /// Agents present on this machine, with where their history lives.
-    pub fn agents(&self) -> Vec<(Agent, PathBuf)> {
+    pub(crate) fn agents(&self) -> Vec<(Agent, PathBuf)> {
         source::present(&self.home)
     }
 
@@ -507,7 +418,7 @@ impl Index {
     /// sign-in to any more is dropped. An account whose limits rose since a
     /// read shortly before is in use. What was read is kept for the next
     /// launch.
-    pub fn record(&self, provider: Provider, mut accounts: Vec<Account>) -> Result<()> {
+    pub(crate) fn record(&self, provider: Provider, mut accounts: Vec<Account>) -> Result<()> {
         self.mark(|status| {
             for account in &mut accounts {
                 let Some(known) = status.accounts.iter().find(|known| known.id == account.id)
@@ -541,6 +452,53 @@ impl Index {
     }
 }
 
+/// Lock a mutex, recovering it from a thread that panicked while holding it.
+///
+/// Nothing guarded here is left half-made by a panic that matters: a store
+/// transaction rolls back when dropped, and the rest is replaced whole by the
+/// next scan, read or record.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Run `work` on each item on every core, and hand what it answers to `take`
+/// on this thread as it arrives, answering what `take` does.
+///
+/// A worker stops taking items once `stop` says so, or once `take` has
+/// returned and dropped the channel; the channel closes when every worker has
+/// finished.
+fn fan_out<'a, T: Sync, R: Send, A>(
+    items: &'a [T],
+    work: impl Fn(&'a T) -> Option<R> + Sync,
+    stop: impl Fn() -> bool + Sync,
+    take: impl FnOnce(mpsc::Receiver<R>) -> A,
+) -> A {
+    let workers = std::thread::available_parallelism()
+        .map_or(4, NonZeroUsize::get)
+        .min(items.len());
+    let next = AtomicUsize::new(0);
+    let (send, receive) = mpsc::channel();
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let (send, next, work, stop) = (send.clone(), &next, &work, &stop);
+            scope.spawn(move || {
+                while !stop() {
+                    let Some(item) = items.get(next.fetch_add(1, Ordering::Relaxed)) else {
+                        break;
+                    };
+                    if let Some(result) = work(item)
+                        && send.send(result).is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(send);
+        take(receive)
+    })
+}
+
 /// Put accounts in the order the interface lists them.
 fn order(accounts: &mut [Account]) {
     accounts.sort_by(|a, b| (a.provider, &a.id).cmp(&(b.provider, &b.id)));
@@ -566,9 +524,9 @@ fn rose(before: &Account, after: &Account) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{Filter, Problem};
-    use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
+
+    use crate::session::Problem;
 
     /// A home directory holding one Claude Code session.
     fn home() -> tempfile::TempDir {
@@ -579,6 +537,7 @@ mod tests {
         directory
     }
 
+    /// A Claude Code session of one prompt and one reply that used `tokens`.
     fn write_session(path: &Path, id: &str, prompt: &str, tokens: i64) {
         // A format string built by `concat!` cannot capture names inline.
         let contents = format!(
@@ -592,8 +551,7 @@ mod tests {
             id = id,
             tokens = tokens
         );
-        let mut file = std::fs::File::create(path).expect("creates");
-        file.write_all(contents.as_bytes()).expect("writes");
+        std::fs::write(path, contents).expect("writes");
     }
 
     fn index(home: &tempfile::TempDir) -> Index {
@@ -628,20 +586,6 @@ mod tests {
         assert_eq!(found.tokens.total, 500);
         // 500 input tokens at Opus's $5 per million.
         assert_eq!(found.cost_usd, Some(0.0025));
-    }
-
-    #[test]
-    fn rescanning_an_unchanged_corpus_reads_nothing() {
-        let home = home();
-        let index = index(&home);
-        index.scan(|_| {}).expect("first scan");
-
-        let second = index.scan(|_| {}).expect("second scan");
-        assert_eq!(
-            second.files_read, 0,
-            "the unchanged file is not parsed again"
-        );
-        assert_eq!(second.sessions, 1);
     }
 
     #[test]
@@ -849,21 +793,20 @@ mod tests {
         assert_eq!(first.turns[0].text, "Prompt 0");
 
         let second = index
-            .transcript("claude_code:paged", 10, 10)
+            .transcript("claude_code:paged", 20, 10)
             .expect("reads");
-        assert_eq!(second.turns[0].text, "Prompt 10");
+        let texts: Vec<_> = second.turns.iter().map(|turn| turn.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "Prompt 20",
+                "Prompt 21",
+                "Prompt 22",
+                "Prompt 23",
+                "Prompt 24"
+            ]
+        );
         assert_eq!(second.total, 25);
-
-        // Past the end is an empty page, not an error.
-        let past = index
-            .transcript("claude_code:paged", 25, 10)
-            .expect("reads");
-        assert!(past.turns.is_empty());
-        assert_eq!(past.total, 25);
-
-        // A negative offset reads from the start rather than panicking.
-        let negative = index.transcript("claude_code:paged", -5, 3).expect("reads");
-        assert_eq!(negative.turns[0].text, "Prompt 0");
     }
 
     #[test]
@@ -1053,17 +996,18 @@ mod tests {
     }
 
     #[test]
-    fn the_index_survives_being_reopened() {
+    fn an_unchanged_corpus_is_not_read_again_even_after_a_relaunch() {
         let home = home();
-        {
-            let index = index(&home);
-            index.scan(|_| {}).expect("scans");
-        }
+        let engine = index(&home);
+        engine.scan(|_| {}).expect("first scan");
+        let second = engine.scan(|_| {}).expect("second scan");
+        assert_eq!((second.files_read, second.sessions), (0, 1));
+
+        drop(engine);
         let reopened = index(&home);
-        // Reopening must not rebuild: the count is read back from the store.
-        assert_eq!(reopened.status().sessions, 1);
-        let second = reopened.scan(|_| {}).expect("scans");
-        assert_eq!(second.files_read, 0, "signatures survived the reopen");
+        assert_eq!(reopened.status().sessions, 1, "known before any scan");
+        let third = reopened.scan(|_| {}).expect("third scan");
+        assert_eq!((third.files_read, third.sessions), (0, 1));
     }
 
     #[test]

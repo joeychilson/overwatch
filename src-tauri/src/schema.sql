@@ -1,9 +1,6 @@
 -- The index: one row per session, what each session used and when, and what
--- makes rescanning incremental.
---
--- No transcript text is stored. Bodies stay in the agents' own files and are
--- read when a conversation is opened, which is why this database stays small
--- and can be rebuilt from those files at any time.
+-- makes rescanning incremental. No transcript text is stored, so the index
+-- stays small and can be rebuilt from the agents' files at any time.
 
 CREATE TABLE sessions (
     id           TEXT PRIMARY KEY,
@@ -16,9 +13,8 @@ CREATE TABLE sessions (
     updated_at   INTEGER NOT NULL,
     spawned      INTEGER NOT NULL DEFAULT 0,
     role         TEXT,
-    -- The model shares as JSON, and the totals below, are sums of the session's
-    -- usage, kept on the row so a list row needs no join. A list narrowed to a
-    -- period sums the usage inside it instead.
+    -- The model shares as JSON, and the totals below, sum all of the session's
+    -- usage, kept on the row so the list needs no join outside a period.
     models       TEXT    NOT NULL DEFAULT '[]',
     input        INTEGER NOT NULL DEFAULT 0,
     output       INTEGER NOT NULL DEFAULT 0,
@@ -37,9 +33,8 @@ CREATE TABLE sessions (
 );
 
 -- Every ordering the list offers reaches one of these, so sorting never scans
--- the table. The filtered indexes match the default view, which hides runs an
--- agent spawned for itself. Within a period, tokens and cost are summed from
--- the usage inside it, so ordering by them sorts that period's sessions.
+-- the table. The filtered index matches the default view, which hides runs an
+-- agent spawned for itself.
 CREATE INDEX sessions_updated ON sessions (updated_at DESC);
 CREATE INDEX sessions_started ON sessions (started_at DESC);
 CREATE INDEX sessions_tokens  ON sessions (total_tokens DESC);
@@ -49,21 +44,20 @@ CREATE INDEX sessions_agent   ON sessions (agent, updated_at DESC);
 CREATE INDEX sessions_path    ON sessions (path);
 CREATE INDEX sessions_own     ON sessions (updated_at DESC) WHERE spawned = 0;
 
--- What each session used, by quarter hour, provider and model, so a period or
--- a day counts only the usage inside it. Each file a session spans keeps its
--- own rows under the file's name: a thread continued in a new file adds to
--- them, and a file moved to an archive replaces its own. Agent is repeated so
--- totals by agent need no join.
+-- What each session used, by quarter hour, provider and model, so a period
+-- counts only the usage inside it. Each file a session spans keeps its own
+-- rows under the file's name, `source`: a thread continued in a new file adds
+-- to them, and a file moved to an archive replaces its own. Agent is repeated
+-- so totals by agent need no join.
 CREATE TABLE usage (
-    session_id  TEXT    NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+    session_id  TEXT    NOT NULL,
     source      TEXT    NOT NULL,
     at          INTEGER NOT NULL,
     -- Who served it, as the agent names them, such as `anthropic`; empty when
     -- the agent recorded none.
     provider    TEXT    NOT NULL,
     -- The model's name: the id the agent recorded, less any path in front of
-    -- it, such as OpenRouter's `google/`. Empty when the agent recorded no
-    -- model.
+    -- it, such as OpenRouter's `google/`. Empty when the agent recorded none.
     model       TEXT    NOT NULL,
     agent       TEXT    NOT NULL,
     input       INTEGER NOT NULL,
@@ -79,7 +73,7 @@ CREATE TABLE usage (
 CREATE INDEX usage_at ON usage (at);
 
 -- What each source file looked like when it was last read. A file whose
--- modification time and size both match is skipped entirely.
+-- modification time and size both match is not read again.
 CREATE TABLE files (
     path   TEXT PRIMARY KEY,
     mtime  INTEGER NOT NULL,

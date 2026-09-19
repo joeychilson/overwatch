@@ -1,22 +1,19 @@
 //! What the frontend is given.
 //!
-//! Every type here is a wire type: it is what a command returns, serialized as
-//! camelCase JSON. There is no separate internal model and no translation
-//! layer, because nothing needs one — the readers in [`crate::source`] produce
-//! these types directly and the store round-trips them through columns of the
-//! same name.
+//! Every type here is a wire type, serialized as camelCase JSON and mirrored
+//! by hand in `src/lib/api/backend.ts`. The readers in [`crate::source`]
+//! produce these types directly and the store keeps them in columns of the
+//! same names, so there is no separate internal model.
 //!
-//! Counts are plain JSON numbers. The largest total any agent records is a few
-//! billion tokens, which is nowhere near the 2^53 that JavaScript represents
-//! exactly, so exact-decimal strings buy nothing and cost every caller a parse.
+//! Counts are plain JSON numbers: the largest total any agent records is a few
+//! billion tokens, far below the 2^53 that JavaScript represents exactly.
 
 use serde::{Deserialize, Serialize};
 
 /// A coding agent whose history this application reads.
 ///
-/// A closed set: an agent is supported when a reader exists for its format, so
-/// there is no case for an unrecognized value. Serialized as the snake_case
-/// name, which is also the key used in the database and the interface.
+/// A closed set: an agent is supported when a reader exists for its format.
+/// Serialized as its [`Agent::key`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Agent {
@@ -34,7 +31,7 @@ pub enum Agent {
 
 impl Agent {
     /// Every agent, in the order the interface offers them.
-    pub const ALL: [Agent; 5] = [
+    pub(crate) const ALL: [Agent; 5] = [
         Agent::ClaudeCode,
         Agent::Codex,
         Agent::OpenCode,
@@ -54,7 +51,7 @@ impl Agent {
     }
 
     /// The agent a stored key names.
-    pub fn from_key(key: &str) -> Option<Agent> {
+    pub(crate) fn from_key(key: &str) -> Option<Agent> {
         Agent::ALL.into_iter().find(|agent| agent.key() == key)
     }
 }
@@ -63,7 +60,7 @@ impl Agent {
 ///
 /// Every field is a count the source recorded. Nothing is inferred: an agent
 /// that does not distinguish cache reads reports zero for them rather than
-/// having its input tokens split by a guess.
+/// having its input split by a guess.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Tokens {
@@ -87,7 +84,7 @@ impl Tokens {
     /// Add another measurement, for totals across sessions. Each count
     /// saturates rather than overflows, since counts come from the agents'
     /// files and a corrupt one can hold any number.
-    pub fn add(&mut self, other: Tokens) {
+    pub(crate) fn add(&mut self, other: Tokens) {
         self.input = self.input.saturating_add(other.input);
         self.output = self.output.saturating_add(other.output);
         self.cache_read = self.cache_read.saturating_add(other.cache_read);
@@ -97,7 +94,7 @@ impl Tokens {
     }
 
     /// Whether the source established any usage at all.
-    pub fn is_empty(self) -> bool {
+    pub(crate) fn is_empty(self) -> bool {
         self == Tokens::default()
     }
 }
@@ -194,11 +191,8 @@ pub struct ToolCall {
     pub failed: bool,
 }
 
-/// One readable part of a conversation, in source order.
-///
-/// A turn carries its text rather than a handle to fetch it with. Bodies come
-/// off local disk in the same pass that produced the turn, so a second call to
-/// collect them would cost a round trip to save nothing.
+/// One readable part of a conversation, in source order, carrying its text:
+/// the body comes off local disk in the same pass that found the turn.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Turn {
@@ -221,8 +215,8 @@ pub struct Turn {
 ///
 /// `turns` is the requested window; `total` is how many the session has. A
 /// long session is delivered a page at a time because the payload, not the
-/// reading, is what would be slow: the largest rollout on this machine holds
-/// twelve thousand turns and fifty megabytes of tool output.
+/// reading, is what would be slow: a rollout can hold twelve thousand turns
+/// and fifty megabytes of tool output.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Transcript {
@@ -241,7 +235,7 @@ pub struct Transcript {
 impl Transcript {
     /// A whole conversation, counted from its turns: messages are what the
     /// person and the model said, and tools the calls made.
-    pub fn new(session_id: String, turns: Vec<Turn>) -> Transcript {
+    pub(crate) fn new(session_id: String, turns: Vec<Turn>) -> Transcript {
         let messages = turns
             .iter()
             .filter(|turn| matches!(turn.speaker, Speaker::User | Speaker::Assistant))
@@ -256,12 +250,13 @@ impl Transcript {
         }
     }
 
-    /// The window of turns starting at `offset`, leaving `total` unchanged.
-    pub fn window(&self, offset: i64, limit: i64) -> Transcript {
-        // Bounded against the turns actually held rather than against `total`,
-        // which is the whole session's count and exceeds them in any transcript
-        // that is itself already a window.
-        let start = offset.max(0).min(self.turns.len() as i64) as usize;
+    /// The window of at most `limit` turns, from one to 2,000, starting at
+    /// `offset`, leaving `total` unchanged. An offset before the start reads
+    /// from the start, and one past the end reads nothing.
+    pub(crate) fn window(&self, offset: i64, limit: i64) -> Transcript {
+        // Bounded by the turns held rather than by `total`, which exceeds them
+        // in a transcript that is itself a window.
+        let start = usize::try_from(offset).unwrap_or(0).min(self.turns.len());
         let end = start
             .saturating_add(limit.clamp(1, 2_000) as usize)
             .min(self.turns.len());
@@ -277,12 +272,13 @@ impl Transcript {
     /// The turns that contain `query`, ignoring case, in order: in what was
     /// said or thought or what the harness added, or in a tool call's name,
     /// arguments or result. A query of nothing but space finds nothing.
-    pub fn find(&self, query: &str) -> Vec<i64> {
+    pub(crate) fn find(&self, query: &str) -> Vec<i64> {
         let needle = query.trim().to_lowercase();
         if needle.is_empty() {
             return Vec::new();
         }
-        let holds = |text: &str| text.to_lowercase().contains(&needle);
+        let ascii = needle.is_ascii();
+        let holds = |text: &str| contains(text, &needle, ascii);
         self.turns
             .iter()
             .filter(|turn| {
@@ -302,12 +298,13 @@ impl Transcript {
     /// the first of them, and a line of it around the first mention. `None`
     /// when nothing said does. Thinking, tool calls and what the harness added
     /// are left out, since they would find every session that read a file.
-    pub fn mentions(&self, needle: &str) -> Option<Mentioned> {
+    pub(crate) fn mentions(&self, needle: &str) -> Option<Mentioned> {
+        let ascii = needle.is_ascii();
         let mut said = self
             .turns
             .iter()
             .filter(|turn| matches!(turn.speaker, Speaker::User | Speaker::Assistant))
-            .filter(|turn| turn.text.to_lowercase().contains(needle));
+            .filter(|turn| contains(&turn.text, needle, ascii));
         let first = said.next()?;
         Some(Mentioned {
             turns: 1 + said.count() as i64,
@@ -317,7 +314,7 @@ impl Transcript {
     }
 
     /// Where each turn falls, for the session's timeline.
-    pub fn marks(&self) -> Vec<Mark> {
+    pub(crate) fn marks(&self) -> Vec<Mark> {
         self.turns
             .iter()
             .map(|turn| Mark {
@@ -335,15 +332,46 @@ impl Transcript {
     }
 }
 
+/// Whether `haystack` holds `needle`, which is lowercase, ignoring case.
+///
+/// An ASCII needle is matched in the text's bytes as it stands, since
+/// lowercasing a conversation for every search costs its size each time; only
+/// the rare folding of a non-ASCII character into ASCII, such as the Kelvin
+/// sign's, is missed. Any other needle is matched in the text lowercased.
+fn contains(haystack: &str, needle: &str, ascii: bool) -> bool {
+    if ascii {
+        holds(haystack.as_bytes(), needle.as_bytes())
+    } else {
+        haystack.to_lowercase().contains(needle)
+    }
+}
+
+/// Whether `haystack` holds `needle`, which is lowercase, ignoring the case of
+/// ASCII letters.
+///
+/// It jumps a vector's width at a time to each place the needle's first letter
+/// stands, in either case, and compares the rest only there: a search of every
+/// conversation reads every file on the machine this way.
+pub(crate) fn holds(haystack: &[u8], needle: &[u8]) -> bool {
+    let Some((&first, rest)) = needle.split_first() else {
+        return true;
+    };
+    memchr::memchr2_iter(first, first.to_ascii_uppercase(), haystack).any(|at| {
+        haystack
+            .get(at + 1..at + 1 + rest.len())
+            .is_some_and(|tail| tail.eq_ignore_ascii_case(rest))
+    })
+}
+
 /// How what was said in one conversation mentions a search.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Mentioned {
+pub(crate) struct Mentioned {
     /// How many things said contain it.
-    pub turns: i64,
+    pub(crate) turns: i64,
     /// The index of the first that does.
-    pub first: i64,
+    pub(crate) first: i64,
     /// A line of that turn around the mention.
-    pub excerpt: String,
+    pub(crate) excerpt: String,
 }
 
 /// How many characters of context an excerpt keeps before a mention.
@@ -480,7 +508,8 @@ pub struct Filter {
     pub sort: Sort,
     /// Rows to skip, for scrolling.
     pub offset: i64,
-    /// Rows to return. Clamped to a sane maximum by the store.
+    /// Rows to return, of which the store answers at least one and at most
+    /// five hundred.
     pub limit: i64,
 }
 
@@ -496,10 +525,9 @@ pub struct Sort {
 
 /// A column the session list can be ordered by.
 ///
-/// Closed, and every value maps to an indexed column, so the list cannot be
-/// asked for an ordering that would make the database sort the whole table.
-/// Within a period, tokens and cost are what was used in it, so ordering by
-/// them sorts the sessions of that period instead.
+/// Closed, and every value has an index, so the list cannot be asked for an
+/// ordering that would make the database sort the whole table. Within a
+/// period, tokens and cost are what was used in it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SortKey {
@@ -514,19 +542,6 @@ pub enum SortKey {
     Cost,
     /// Title, alphabetically.
     Title,
-}
-
-impl SortKey {
-    /// The column this orders on.
-    pub fn column(self) -> &'static str {
-        match self {
-            SortKey::Updated => "updated_at",
-            SortKey::Started => "started_at",
-            SortKey::Tokens => "total_tokens",
-            SortKey::Cost => "cost_usd",
-            SortKey::Title => "title",
-        }
-    }
 }
 
 /// A page of the session list, with the totals of the whole match.
@@ -608,7 +623,7 @@ pub enum Provider {
 
 impl Provider {
     /// Every subscription, in the order the interface lists them.
-    pub const ALL: [Provider; 4] = [
+    pub(crate) const ALL: [Provider; 4] = [
         Provider::Claude,
         Provider::Codex,
         Provider::Grok,
@@ -626,7 +641,7 @@ impl Provider {
     }
 
     /// The subscription as a person names it.
-    pub fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Provider::Claude => "Claude",
             Provider::Codex => "Codex",
@@ -637,7 +652,7 @@ impl Provider {
 
     /// The subscription that usage served by a model provider draws on, by the
     /// name agents give the provider; `None` for one paid as it goes.
-    pub fn serving(provider: &str) -> Option<Provider> {
+    pub(crate) fn serving(provider: &str) -> Option<Provider> {
         match provider {
             "anthropic" => Some(Provider::Claude),
             "openai" | "openai-codex" => Some(Provider::Codex),
@@ -680,7 +695,7 @@ pub struct Account {
 
 impl Account {
     /// How recently a subscription must have been used to count as in use.
-    pub const IN_USE: i64 = 30 * 60_000;
+    pub(crate) const IN_USE: i64 = 30 * 60_000;
 }
 
 /// One usage limit of a subscription.
@@ -823,21 +838,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn agent_keys_round_trip() {
+    fn an_agent_is_its_key_in_the_database_and_on_the_wire() {
+        let keys = Agent::ALL.map(Agent::key);
+        assert_eq!(
+            keys,
+            ["claude_code", "codex", "open_code", "pi", "grok_build"]
+        );
         for agent in Agent::ALL {
             assert_eq!(Agent::from_key(agent.key()), Some(agent));
-        }
-        assert_eq!(Agent::from_key("nonexistent"), None);
-    }
-
-    #[test]
-    fn agent_keys_match_the_wire_encoding() {
-        // The interface keys off the same strings the database stores, so a
-        // rename in one place must not silently diverge from the other.
-        for agent in Agent::ALL {
             let json = serde_json::to_string(&agent).expect("agent serializes");
             assert_eq!(json, format!("\"{}\"", agent.key()));
         }
+        assert_eq!(Agent::from_key("nonexistent"), None);
     }
 
     #[test]
