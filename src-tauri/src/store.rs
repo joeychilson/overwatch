@@ -499,7 +499,11 @@ impl Store {
             let agents: String = row.get(1)?;
             Ok(ModelUsage {
                 model: row.get(0)?,
-                agents: agents.split(',').filter_map(Agent::from_key).collect(),
+                // In the interface's order, whichever order they were read in.
+                agents: Agent::ALL
+                    .into_iter()
+                    .filter(|agent| agents.split(',').any(|key| key == agent.key()))
+                    .collect(),
                 sessions: row.get(2)?,
                 tokens: read_tokens(row, 3)?,
                 cost_usd: row.get(9)?,
@@ -1423,6 +1427,21 @@ mod tests {
             1
         );
         assert!(store.models(Some(99_000), None).expect("ranks").is_empty());
+    }
+
+    #[test]
+    fn a_models_agents_are_in_the_interfaces_order() {
+        let mut store = Store::memory().expect("opens");
+        // Grok's is written first, and its key sorts first too.
+        for (path, agent) in [
+            ("/g.jsonl", Agent::GrokBuild),
+            ("/o.jsonl", Agent::OpenCode),
+        ] {
+            let used = summary("s", agent, 1_000, 10, false);
+            store.put(&unit(path), &[used]).expect("writes");
+        }
+        let ranked = store.models(None, None).expect("ranks");
+        assert_eq!(ranked[0].agents, [Agent::OpenCode, Agent::GrokBuild]);
     }
 
     #[test]
