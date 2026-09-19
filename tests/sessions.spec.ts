@@ -254,6 +254,20 @@ test("what the list shows lives in its address, so coming back finds it as left"
   ).toBe(reads);
 });
 
+test("the search box shows the address's search when a link changes it", async ({ page }) => {
+  const rows = sessionPage([session("codex:ses_a", "Fix the parser")]);
+  await page.goto("/sessions?q=parser");
+  await settle(page, "get_status", status({ agents: ["codex"] }));
+  await settle(page, "list_sessions", rows);
+  await expect(page.getByLabel("Search sessions")).toHaveValue("parser");
+
+  // A sidebar agent link names no search, so the box must not keep one.
+  await page.getByRole("complementary").getByRole("link", { name: "Codex", exact: true }).click();
+  await settle(page, "list_sessions", rows);
+  await expect(page.getByLabel("Search sessions")).toHaveValue("");
+  expect((await lastFilter(page)).search).toBeNull();
+});
+
 test("a row's project or model narrows the list to the sessions that share it", async ({
   page,
 }) => {

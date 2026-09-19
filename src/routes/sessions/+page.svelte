@@ -135,7 +135,7 @@
   const sort = $derived(parseSort(params.get("sort"), SORT_KEYS, NEWEST_FIRST));
 
   /** What is in the search box; it reaches the address once typing settles. */
-  let search = $state("");
+  let search = $state(page.url.searchParams.get("q") ?? "");
   let searchBox = $state<HTMLInputElement>();
   let rows = $state<ReturnType<typeof SessionRows>>();
 
@@ -201,12 +201,12 @@
   }
 
   /**
-   * Read whenever the address changes. Arriving from another page, the search
-   * box shows the address's search; while someone types here, the box leads
-   * and the address follows.
+   * Read whenever the address changes. While someone types here, the box leads
+   * and the address follows; anything else that changes the address, such as
+   * a link to another agent, leads the box.
    */
-  afterNavigate(({ from }) => {
-    if (from?.url?.pathname !== page.url.pathname) search = params.get("q") ?? "";
+  afterNavigate(({ type }) => {
+    if (type !== "goto") search = params.get("q") ?? "";
     load();
   });
 
