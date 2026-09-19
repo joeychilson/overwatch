@@ -45,6 +45,9 @@
     return groups.filter((group) => group.accounts.length > 0);
   });
 
+  /** The day it is, which changes only at midnight however often the clock ticks. */
+  const day = $derived(startOfDay(clock.now.getTime()));
+
   /**
    * What today has used, read again when the index changes and when the day
    * does. A failed read shows as unknown and is tried again with the next
@@ -138,7 +141,7 @@
     <!-- The row holds its place while today is read, so the panel does not jump. -->
     <svelte:boundary>
       {#snippet pending()}{@render todayItem("")}{/snippet}
-      {@const today = await readToday(engine.revision, startOfDay(clock.now.getTime()))}
+      {@const today = await readToday(engine.revision, day)}
       {@render todayItem(
         today === null
           ? UNKNOWN
