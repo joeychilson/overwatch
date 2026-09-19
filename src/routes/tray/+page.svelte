@@ -2,7 +2,7 @@
   /**
    * The panel the menu bar item drops down: how much of each subscription is
    * left, the ones in use first, since those are what the menu bar's figure
-   * follows.
+   * follows, and what today has used so far, which opens the overview of it.
    *
    * It is drawn on its window's material, which takes the window's appearance,
    * so the window is given the app's: the light theme's text on a dark material
@@ -14,8 +14,10 @@
   import { mode } from "mode-watcher";
   import Mark from "#lib/components/marks/Mark.svelte";
   import LimitRow from "#lib/components/limits/LimitRow.svelte";
-  import { openWindow, quit } from "#lib/api/backend.ts";
+  import { getOverview, openWindow, quit } from "#lib/api/backend.ts";
+  import { UNKNOWN, formatCountCompact, formatUsd } from "#lib/format.ts";
   import { PROVIDERS, byUrgency, explain, inUse } from "#lib/limits.ts";
+  import { periodStart, startOfDay } from "#lib/periods.ts";
   import { getEngine } from "#lib/state/engine.svelte.ts";
   import { getClock } from "#lib/state/clock.svelte.ts";
 
@@ -42,6 +44,16 @@
           ];
     return groups.filter((group) => group.accounts.length > 0);
   });
+
+  /**
+   * What today has used, read again when the index changes and when the day
+   * does. A failed read shows as unknown and is tried again with the next
+   * change, rather than taking the limits down with it.
+   */
+  async function readToday(revision: number, day: number) {
+    void revision;
+    return getOverview(periodStart(1, day)).catch(() => null);
+  }
 
   let width = $state(0);
   let height = $state(0);
@@ -112,6 +124,22 @@
   </div>
 
   <div class="mx-1 grid border-t border-text/10 py-1.5">
+    <svelte:boundary>
+      {#snippet pending()}{/snippet}
+      {@const today = await readToday(engine.revision, startOfDay(clock.now.getTime()))}
+      <button
+        class="{ITEM} justify-between gap-3"
+        title="Open the overview of today"
+        onclick={() => openWindow("/?period=today")}
+      >
+        <span>Today</span>
+        <span class="text-meta text-muted tabular-nums">
+          {today === null
+            ? UNKNOWN
+            : `${formatCountCompact(today.tokens.total)} tokens · ${formatUsd(today.costUsd)}`}
+        </span>
+      </button>
+    </svelte:boundary>
     <button class={ITEM} onclick={() => openWindow()}>Open Overwatch</button>
     <button class={ITEM} onclick={() => quit()}>Quit Overwatch</button>
   </div>

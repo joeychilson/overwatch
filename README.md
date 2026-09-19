@@ -18,7 +18,7 @@ It reads what **Claude Code, Codex, OpenCode, Pi, and Grok Build** already keep 
 - **Sessions**: search every session and read it as a conversation with a timeline of turns and tool calls. Copy a message, a block of code, a tool's output, or the whole conversation as Markdown.
 - **Models**: usage, cost, and trend for each model.
 - **Subscriptions**: what's left of your Claude, Codex, Grok, and OpenCode Go limits, with a notification before one runs out.
-- **Menu bar**: your tightest limit at a glance. Close the window and it keeps watching.
+- **Menu bar**: your tightest limit at a glance, and what today has used. Close the window and it keeps watching.
 
 New sessions show up within seconds while you work.
 

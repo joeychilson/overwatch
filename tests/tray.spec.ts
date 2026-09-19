@@ -5,7 +5,7 @@
  * those first and set them apart, and its ways out must reach the engine.
  */
 import { expect, test } from "@playwright/test";
-import { account, emitTo, installIpc, settle, status } from "./ipc.ts";
+import { account, emitTo, installIpc, overview, settle, status } from "./ipc.ts";
 
 test.beforeEach(async ({ page }) => {
   await installIpc(page);
@@ -63,4 +63,24 @@ test("a destination the app's menu sends its window leaves the panel where it is
   expect(await emitTo(page, "main", "open", "/sessions")).toBe(0);
   await expect(page).toHaveURL(/\/tray$/);
   await expect(page.getByRole("button", { name: "Open Overwatch" })).toBeVisible();
+});
+
+test("what today has used so far opens the overview of today", async ({ page }) => {
+  await page.goto("/tray");
+  await settle(page, "get_status", status({ accounts: [account()] }));
+  await settle(page, "get_overview", overview());
+
+  const midnight = await page.evaluate(() => new Date().setHours(0, 0, 0, 0));
+  const asked = await page.evaluate(
+    () => window.__ipc.calls.filter((call) => call.cmd === "get_overview").at(-1)?.args,
+  );
+  expect(asked).toMatchObject({ since: midnight });
+
+  const today = page.getByRole("button", { name: /^Today/ });
+  await expect(today).toContainText("3.0M tokens · $12.50");
+  await today.click();
+  const opened = await page.evaluate(
+    () => window.__ipc.calls.filter((call) => call.cmd === "open_window").at(-1)?.args,
+  );
+  expect(opened).toEqual({ path: "/?period=today" });
 });
