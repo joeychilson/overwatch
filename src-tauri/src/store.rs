@@ -731,14 +731,19 @@ fn predicate(filter: &Filter) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
         .map(str::trim)
         .filter(|text| !text.is_empty())
     {
+        // Escaped, `%` and `_` match themselves rather than any text.
+        let search = search
+            .replace('\\', r"\\")
+            .replace('%', r"\%")
+            .replace('_', r"\_");
         bindings.push(Box::new(format!("%{search}%")));
         let placeholder = bindings.len();
         clauses.push(format!(
-            "(title LIKE ?{placeholder}
-              OR cwd LIKE ?{placeholder}
+            r"(title LIKE ?{placeholder} ESCAPE '\'
+              OR cwd LIKE ?{placeholder} ESCAPE '\'
               OR EXISTS (SELECT 1 FROM usage
                          WHERE usage.session_id = listed.id
-                           AND usage.model LIKE ?{placeholder}))"
+                           AND usage.model LIKE ?{placeholder} ESCAPE '\'))"
         ));
     }
     if !filter.agents.is_empty() {
@@ -1131,6 +1136,35 @@ mod tests {
             },
         );
         assert_eq!(nothing.total, 0);
+    }
+
+    #[test]
+    fn a_search_matches_what_was_written() {
+        let mut store = filled();
+        let mut literal = summary("five", Agent::Codex, 5_000, 500, false);
+        literal.session.title = Some("Cut 50% of snake_case".into());
+        store.put(&unit("/c.jsonl"), &[literal]).expect("writes");
+        let matching = |search: &str| {
+            let filter = Filter {
+                search: Some(search.into()),
+                include_spawned: true,
+                limit: 50,
+                ..Filter::default()
+            };
+            let found = page(&store, filter).sessions;
+            found
+                .iter()
+                .map(|session| session.native_id.clone())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert_eq!(matching("50%"), "five");
+        assert_eq!(matching("e_c"), "five");
+        // As wildcards, these would match "Session one", "Session four" and
+        // every other title.
+        assert_eq!(matching("n%o"), "");
+        assert_eq!(matching("Sessio_"), "");
+        assert_eq!(matching(r"\"), "");
     }
 
     #[test]
