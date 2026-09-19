@@ -83,6 +83,11 @@ pub struct Usage {
     pub cost_usd: Option<f64>,
 }
 
+/// The most one record's usage can plausibly have cost, in dollars. A cost
+/// beyond it, below zero or not a number is corrupt, so unknown; bounding each
+/// keeps every sum of them finite.
+const MOST_COST: f64 = 1e9;
+
 /// A session's usage, counted as a reader goes.
 #[derive(Default)]
 pub struct Tally {
@@ -117,7 +122,7 @@ impl Tally {
             .entry((quarter, provider.to_owned(), model_name(id).to_owned()))
             .or_default();
         sum.add(tokens);
-        if let Some(cost) = cost_usd {
+        if let Some(cost) = cost_usd.filter(|cost| (0.0..=MOST_COST).contains(cost)) {
             *spent.get_or_insert(0.0) += cost;
         }
     }
@@ -636,6 +641,28 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::Write;
+
+    #[test]
+    fn a_cost_no_record_could_have_is_unknown() {
+        let tokens = Tokens {
+            input: 10,
+            total: 10,
+            ..Tokens::default()
+        };
+        let counted = |costs: &[f64]| {
+            let mut tally = Tally::default();
+            for &cost in costs {
+                tally.add(0, "opencode", "m", tokens, Some(cost));
+            }
+            let (tokens, cost) = tally.buckets.into_values().next().expect("one bucket");
+            (tokens.total, cost)
+        };
+        assert_eq!(counted(&[0.25, 0.5]), (20, Some(0.75)));
+        // Two corrupt figures would add up to infinity; each is unknown
+        // instead, and the tokens still count.
+        assert_eq!(counted(&[f64::MAX, f64::MAX, -1.0]), (30, None));
+        assert_eq!(counted(&[f64::MAX, 0.5]), (20, Some(0.5)));
+    }
 
     #[test]
     fn a_file_is_passed_over_only_when_it_cannot_hold_the_needle() {
