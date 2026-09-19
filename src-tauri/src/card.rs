@@ -2,10 +2,10 @@
 //!
 //! The window draws the card itself and sends the PNG over as base64, which is
 //! what a canvas's data URL already carries. Nothing here interprets the image
-//! beyond checking that it is one: the bytes are decoded, the name is reduced
-//! to something a file system will take, and the file is written under a name
-//! that was free, so saving the same period twice keeps both.
+//! beyond checking that it is one.
 
+use std::fs::File;
+use std::io::{ErrorKind, Write as _};
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
@@ -71,39 +71,37 @@ fn stem(name: &str) -> String {
     }
 }
 
-/// The first path in `folder` that `stem` can have without displacing a file.
-///
-/// `stem.png`, then `stem-2.png`, and so on, falling back to the first name
-/// once every number is taken, which no file system reaches. Two saves racing
-/// for one name is not worth guarding against here: the window saves a card
-/// when someone asks it to, one at a time.
-fn destination(folder: &Path, stem: &str) -> PathBuf {
-    let first = folder.join(format!("{stem}.{EXTENSION}"));
-    if !first.exists() {
-        return first;
-    }
-    for number in 2..u32::MAX {
-        let next = folder.join(format!("{stem}-{number}.{EXTENSION}"));
-        if !next.exists() {
-            return next;
-        }
-    }
-    first
-}
-
 /// Write a card into `folder` under a name derived from `name`, and answer
 /// with where it went.
+///
+/// It takes the first of `stem.png`, `stem-2.png`, and so on that is free.
+/// Each is created only if it does not exist, so a card never displaces a
+/// file, even one that appears while it is being saved.
 ///
 /// # Errors
 ///
 /// Returns [`Error::Write`] when the file cannot be created or written.
 pub fn write(folder: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf> {
-    let path = destination(folder, &stem(name));
-    std::fs::write(&path, bytes).map_err(|source| Error::Write {
-        path: path.display().to_string(),
-        source,
-    })?;
-    Ok(path)
+    let stem = stem(name);
+    let mut number = 1_u32;
+    loop {
+        let path = folder.join(match number {
+            1 => format!("{stem}.{EXTENSION}"),
+            _ => format!("{stem}-{number}.{EXTENSION}"),
+        });
+        match File::create_new(&path).and_then(|mut file| file.write_all(bytes)) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists && number < u32::MAX => {
+                number += 1;
+            }
+            Err(source) => {
+                return Err(Error::Write {
+                    path: path.display().to_string(),
+                    source,
+                });
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -123,24 +121,23 @@ mod tests {
 
     #[test]
     fn anything_that_is_not_a_png_is_refused() {
-        let text = STANDARD.encode(b"GIF89a and the rest");
-        let error = decode(&text).expect_err("refuses");
-        assert_eq!(
-            serde_json::to_value(&error).expect("serializes")["kind"],
-            "invalid"
-        );
-
-        let nonsense = decode("not base64 at all!!").expect_err("refuses");
-        assert_eq!(
-            serde_json::to_value(&nonsense).expect("serializes")["kind"],
-            "invalid"
-        );
+        let gif = STANDARD.encode(b"GIF89a and the rest");
+        assert!(matches!(decode(&gif), Err(Error::Invalid(_))));
+        assert!(matches!(
+            decode("not base64 at all!!"),
+            Err(Error::Invalid(_))
+        ));
     }
 
     #[test]
     fn a_card_larger_than_the_limit_is_refused_before_it_is_decoded() {
-        let oversized = "A".repeat(LARGEST / 3 * 4 + 8);
-        assert!(decode(&oversized).is_err());
+        // A PNG's signature and a zero byte, then zeros past the limit: a PNG
+        // by every other measure.
+        let oversized = format!("iVBORw0KGgoA{}", "A".repeat(LARGEST / 3 * 4));
+        assert!(matches!(
+            decode(&oversized),
+            Err(Error::Invalid(message)) if message.contains("too large")
+        ));
     }
 
     #[test]
@@ -176,14 +173,9 @@ mod tests {
     fn a_folder_that_is_not_there_is_reported_rather_than_panicked_over() {
         let folder = tempfile::tempdir().expect("a temporary folder");
         let missing = folder.path().join("no-such-folder");
-        let error = write(&missing, "overwatch", &png()).expect_err("fails");
-        let json = serde_json::to_value(&error).expect("serializes");
-        assert_eq!(json["kind"], "write_failed");
-        assert!(
-            json["message"]
-                .as_str()
-                .expect("message is text")
-                .contains("no-such-folder")
-        );
+        assert!(matches!(
+            write(&missing, "overwatch", &png()),
+            Err(Error::Write { path, .. }) if path.contains("no-such-folder")
+        ));
     }
 }
