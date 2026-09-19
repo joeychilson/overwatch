@@ -210,7 +210,7 @@
   });
 
   /** Why nothing matches, when nothing does. */
-  const empty = $derived.by(() => {
+  const unmatched = $derived.by(() => {
     if (query !== "") return "Try a different search.";
     if (
       hour !== null ||
@@ -237,9 +237,15 @@
   </div>
 {/snippet}
 
-{#snippet rowsOf(sessions: readonly Session[], busy: boolean, searched?: boolean)}
+{#snippet rowsOf(
+  sessions: readonly Session[],
+  busy: boolean,
+  empty: { title: string; description: string },
+  searched = false,
+)}
   <div class="mt-4" aria-busy={busy}>
     <SessionRows
+      {empty}
       bind:this={rows}
       {sessions}
       {sort}
@@ -357,13 +363,16 @@
     />
   {:else if found.length === 0 && conversations.phase === "searching"}
     {@render skeleton()}
-  {:else if found.length === 0}
-    <div class="mt-6 grid justify-items-start gap-2">
-      <p>No conversation mentions that.</p>
-      <p class="text-muted">Try other words, or a list narrowed to less.</p>
-    </div>
   {:else}
-    {@render rowsOf(found, conversations.phase === "searching", true)}
+    {@render rowsOf(
+      found,
+      conversations.phase === "searching",
+      {
+        title: "No conversation mentions that",
+        description: "Try other words, or a list narrowed to less.",
+      },
+      true,
+    )}
   {/if}
 {:else if list.phase === "error" && list.sessions.length === 0}
   <Failure
@@ -374,13 +383,11 @@
   />
 {:else if list.phase === "initial"}
   {@render skeleton()}
-{:else if list.sessions.length === 0}
-  <div class="mt-6 grid justify-items-start gap-2">
-    <p>No sessions match.</p>
-    <p class="text-muted">{empty}</p>
-  </div>
 {:else}
-  {@render rowsOf(list.sessions, list.phase === "updating")}
+  {@render rowsOf(list.sessions, list.phase === "updating", {
+    title: "No sessions match",
+    description: unmatched,
+  })}
   <div class="h-px" {@attach onReach(() => list.more())}></div>
 
   {#if list.pageError !== null}

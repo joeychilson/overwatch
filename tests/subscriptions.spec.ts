@@ -99,6 +99,6 @@ test("no subscriptions explains where limits come from", async ({ page }) => {
   await page.goto("/subscriptions");
   await settle(page, "get_status", status());
 
-  await expect(page.getByText("No subscriptions found.")).toBeVisible();
+  await expect(page.getByText("No subscriptions found")).toBeVisible();
   await expect(page.getByText(/^Overwatch reads/)).toBeVisible();
 });

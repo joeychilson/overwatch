@@ -11,7 +11,8 @@
    * The chart is one slider: pointing at a column, or moving along with the
    * arrow keys, reads that column out, in a card and to assistive technology.
    * Clicking a column, or pressing Enter on it, opens the sessions that used
-   * tokens in its hour, day or week.
+   * tokens in its hour, day or week. With no usage at all it keeps its frame
+   * and says why it is empty.
    */
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
@@ -29,9 +30,11 @@
     /** Local midnight when the period began; unset for all of history. */
     since: number | undefined;
     measure: Measure;
+    /** What to say when the period has no usage. */
+    empty: string;
   }
 
-  let { days, hours, since, measure }: Props = $props();
+  let { days, hours, since, measure, empty }: Props = $props();
 
   /** Heights in pixels: the whole chart, the dates beneath it, and headroom above. */
   const HEIGHT = 208;
@@ -85,7 +88,12 @@
     return { columns: drawn, grain: laid.grain, agents };
   });
 
-  const axis = $derived(ticks(Math.max(0, ...chart.columns.map((column) => column.total ?? 0))));
+  const used = $derived(chart.agents.length > 0);
+  const axis = $derived(
+    used
+      ? ticks(Math.max(0, ...chart.columns.map((column) => column.total ?? 0)))
+      : [0, 1, 2, 3, 4],
+  );
   const band = $derived((width - GUTTER) / chart.columns.length);
   const thickness = $derived(Math.min(28, band * 0.75));
 
@@ -223,13 +231,15 @@
           y2={y(tick)}
           shape-rendering="crispEdges"
         />
-        <text
-          class="fill-muted text-[11px] tabular-nums"
-          x={GUTTER - 8}
-          y={y(tick)}
-          dy="0.32em"
-          text-anchor="end">{tickLabel(tick, measure === "cost")}</text
-        >
+        {#if used}
+          <text
+            class="fill-muted text-[11px] tabular-nums"
+            x={GUTTER - 8}
+            y={y(tick)}
+            dy="0.32em"
+            text-anchor="end">{tickLabel(tick, measure === "cost")}</text
+          >
+        {/if}
       {/each}
 
       {#each stacks as stack, index (index)}
@@ -253,6 +263,16 @@
         {/if}
       {/each}
     </svg>
+  {/if}
+
+  {#if !used && width > 0}
+    <!-- Backed by the page, so the gridline behind it does not run through it. -->
+    <p
+      class="pointer-events-none absolute grid place-items-center text-muted"
+      style:inset="{TOP}px 0 {FOOT}px {GUTTER}px"
+    >
+      <span class="bg-content px-3">{empty}</span>
+    </p>
   {/if}
 
   {#if reading}

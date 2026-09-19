@@ -6,6 +6,7 @@
    * says why.
    */
   import CreditCard from "@lucide/svelte/icons/credit-card";
+  import Empty from "#lib/components/ui/Empty.svelte";
   import PageHeader, { pageIcon } from "#lib/components/ui/PageHeader.svelte";
   import Mark from "#lib/components/marks/Mark.svelte";
   import LimitRow from "#lib/components/limits/LimitRow.svelte";
@@ -37,14 +38,11 @@
 </PageHeader>
 
 {#if accounts.length === 0}
-  <div class="grid justify-items-start gap-2">
-    <p>No subscriptions found.</p>
-    <p class="max-w-prose text-muted">
-      Overwatch reads Codex, Claude, Grok and OpenCode Go limits with the sign-ins that Codex,
-      Claude Code, Grok Build, OpenCode and Pi keep on this Mac. Sign in to a subscription in any of
-      them and its limits appear here.
-    </p>
-  </div>
+  <Empty
+    icon={CreditCard}
+    title="No subscriptions found"
+    description="Overwatch reads Codex, Claude, Grok and OpenCode Go limits with the sign-ins that Codex, Claude Code, Grok Build, OpenCode and Pi keep on this Mac. Sign in to a subscription in any of them and its limits appear here."
+  />
 {:else}
   <div class="grid gap-8">
     {#each accounts as account (account.id)}

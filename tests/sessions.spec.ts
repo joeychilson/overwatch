@@ -305,7 +305,7 @@ test("an empty result explains itself", async ({ page }) => {
   await settle(page, "get_status", status());
   await settle(page, "list_sessions", sessionPage([], { total: 0 }));
 
-  await expect(page.getByText("No sessions match.")).toBeVisible();
+  await expect(page.getByText("No sessions match", { exact: true })).toBeVisible();
   await expect(page.getByText("No conversations have been indexed yet.")).toBeVisible();
 
   await page.getByLabel("Search sessions").fill("nothing matches this");
@@ -417,11 +417,11 @@ test("new work found keeps an empty result on screen while it reads again", asyn
   await page.goto("/sessions?q=nothing");
   await settle(page, "get_status", status());
   await settle(page, "list_sessions", sessionPage([], { total: 0 }));
-  await expect(page.getByText("No sessions match.")).toBeVisible();
+  await expect(page.getByText("No sessions match", { exact: true })).toBeVisible();
 
   await emit(page, "index_changed", status({ filesRead: 1 }));
   await pendingRead(page, 0);
-  await expect(page.getByText("No sessions match.")).toBeVisible();
+  await expect(page.getByText("No sessions match", { exact: true })).toBeVisible();
 });
 
 test("the arrow keys move from the search box through the rows and back", async ({ page }) => {

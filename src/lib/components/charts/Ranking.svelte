@@ -11,8 +11,9 @@
    * Items rank by the measure shown. By cost, one with no price ranks below
    * every priced one, since unknown is not zero.
    */
-  import type { Snippet } from "svelte";
+  import type { ComponentProps, Snippet } from "svelte";
   import type { Tokens } from "#lib/api/backend.ts";
+  import Empty from "#lib/components/ui/Empty.svelte";
   import { formatMeasure, type Measure } from "#lib/format.ts";
   import { sorted } from "#lib/sort.ts";
 
@@ -24,9 +25,11 @@
     href: (item: T) => string;
     /** What one item is, ahead of its bar. */
     row: Snippet<[T]>;
+    /** What stands in for the items when there are none. */
+    empty: Pick<ComponentProps<typeof Empty>, "icon" | "title">;
   }
 
-  let { items, measure, label, href, row }: Props = $props();
+  let { items, measure, label, href, row, empty }: Props = $props();
 
   function amount(item: T): number | null {
     return measure === "cost" ? item.costUsd : item.tokens.total;
@@ -57,6 +60,6 @@
       </a>
     </li>
   {:else}
-    <li class="px-2.5 py-2 text-muted">None in this period.</li>
+    <li><Empty {...empty} class="py-6" /></li>
   {/each}
 </ul>

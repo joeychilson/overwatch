@@ -13,10 +13,12 @@
    */
   import { on } from "svelte/events";
   import { resolve } from "$app/paths";
+  import SquareTerminal from "@lucide/svelte/icons/square-terminal";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
   import type { Session, Sort, SortKey } from "#lib/api/backend.ts";
   import { isLive, sessionLabel } from "#lib/agents.ts";
   import AgentMark from "#lib/components/marks/AgentMark.svelte";
+  import Empty from "#lib/components/ui/Empty.svelte";
   import SortButton from "#lib/components/ui/SortButton.svelte";
   import { now } from "#lib/state/clock.ts";
   import { findPattern } from "#lib/transcript.ts";
@@ -46,9 +48,11 @@
      * session's id.
      */
     found?: { query: string; quotes: ReadonlyMap<string, { excerpt: string; turns: number }> };
+    /** What stands in for the rows when there are none, and why. */
+    empty: { title: string; description: string };
   }
 
-  let { sessions, sort, onsort, projectHref, modelHref, onabove, found }: Props = $props();
+  let { sessions, sort, onsort, projectHref, modelHref, onabove, found, empty }: Props = $props();
 
   let list = $state<HTMLUListElement>();
 
@@ -238,5 +242,7 @@
         {/if}
       </span>
     </li>
+  {:else}
+    <li><Empty icon={SquareTerminal} {...empty} /></li>
   {/each}
 </ul>

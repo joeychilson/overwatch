@@ -12,7 +12,9 @@
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import Folder from "@lucide/svelte/icons/folder";
+  import Layers from "@lucide/svelte/icons/layers";
   import LayoutGrid from "@lucide/svelte/icons/layout-grid";
+  import SquareTerminal from "@lucide/svelte/icons/square-terminal";
   import Failure from "#lib/components/ui/Failure.svelte";
   import PageHeader, { pageIcon } from "#lib/components/ui/PageHeader.svelte";
   import Segmented from "#lib/components/ui/Segmented.svelte";
@@ -44,6 +46,7 @@
   import { getEngine } from "#lib/state/engine.svelte.ts";
   import { ALL_TIME, NEWEST_FIRST } from "#lib/state/sessions.svelte.ts";
   import {
+    UNKNOWN,
     formatCount,
     formatCountCompact,
     formatDay,
@@ -55,6 +58,8 @@
   } from "#lib/format.ts";
 
   const engine = getEngine();
+
+  const READING = "Reading your agents' history…";
 
   const MEASURES: readonly { value: Measure; label: string }[] = [
     { value: "tokens", label: "Tokens" },
@@ -199,19 +204,18 @@
     overview.sessions === 0 ? undefined : card({ overview, models, days, measure, now: now() }),
   )}
 
-  {#if overview.sessions === 0}
-    <p class="text-muted">
-      {engine.status.scanning
-        ? "Reading your agents' history…"
-        : "No sessions used tokens in this period."}
-    </p>
-  {:else}
-    <dl class="flex flex-wrap gap-x-12 gap-y-4">
-      {@render stat(
-        "Estimated cost",
-        formatUsd(overview.costUsd),
-        change(overview.costUsd, before?.costUsd),
-      )}
+  <!-- While the first index is read, what the period used is not known yet, which is not zero. -->
+  {@const reading = engine.status.scanning && overview.sessions === 0}
+  <!-- Nothing used costs nothing; usage with no listed price is still unknown. -->
+  {@const cost = overview.tokens.total === 0 ? 0 : overview.costUsd}
+
+  <dl class="flex flex-wrap gap-x-12 gap-y-4">
+    {#if reading}
+      {@render stat("Estimated cost", UNKNOWN, null)}
+      {@render stat("Tokens", UNKNOWN, null)}
+      {@render stat("Sessions", UNKNOWN, null)}
+    {:else}
+      {@render stat("Estimated cost", formatUsd(cost), change(cost, before?.costUsd))}
       {@render stat(
         "Tokens",
         formatCountCompact(overview.tokens.total),
@@ -222,84 +226,107 @@
         formatCount(overview.sessions),
         change(overview.sessions, before?.sessions),
       )}
-    </dl>
+    {/if}
+  </dl>
 
-    <section class="mt-10">
-      {@render heading("Usage")}
-      <div class="mt-4">
-        <UsageChart days={overview.daily} {hours} {since} {measure} />
+  <section class="mt-10">
+    {@render heading("Usage")}
+    <div class="mt-4">
+      <UsageChart
+        days={overview.daily}
+        {hours}
+        {since}
+        {measure}
+        empty={reading
+          ? READING
+          : days === 1
+            ? "Nothing has used tokens yet today"
+            : "Nothing used tokens in this period"}
+      />
+    </div>
+  </section>
+
+  <!-- Tracks that cannot grow past the page, so a long title truncates. -->
+  <div class="mt-10 grid grid-cols-1 gap-10 lg:grid-cols-2">
+    <section>
+      {@render heading("Top models", {
+        href: withParams(
+          { pathname: resolve("/models"), search: "" },
+          { period: periodParam(days), sort: sortParam(largest, MOST_TOKENS) },
+        ),
+        label: "All models",
+      })}
+      <div class="mt-2">
+        <Ranking
+          label="Top models"
+          items={models}
+          {measure}
+          empty={{
+            icon: Layers,
+            title: reading ? READING : "No model used tokens in this period",
+          }}
+          href={(model) => sessionsHref({ model: model.model })}
+        >
+          {#snippet row(model)}
+            <span class="flex shrink-0 items-center gap-1">
+              {#each model.agents as agent (agent)}
+                <AgentMark {agent} size={14} class="text-muted" />
+              {/each}
+            </span>
+            <span class="truncate font-mono text-meta" title={model.model}>{model.model}</span>
+          {/snippet}
+        </Ranking>
       </div>
     </section>
 
-    <!-- Tracks that cannot grow past the page, so a long title truncates. -->
-    <div class="mt-10 grid grid-cols-1 gap-10 lg:grid-cols-2">
-      <section>
-        {@render heading("Top models", {
-          href: withParams(
-            { pathname: resolve("/models"), search: "" },
-            { period: periodParam(days), sort: sortParam(largest, MOST_TOKENS) },
-          ),
-          label: "All models",
-        })}
-        <div class="mt-2">
-          <Ranking
-            label="Top models"
-            items={models}
-            {measure}
-            href={(model) => sessionsHref({ model: model.model })}
-          >
-            {#snippet row(model)}
-              <span class="flex shrink-0 items-center gap-1">
-                {#each model.agents as agent (agent)}
-                  <AgentMark {agent} size={14} class="text-muted" />
-                {/each}
-              </span>
-              <span class="truncate font-mono text-meta" title={model.model}>{model.model}</span>
-            {/snippet}
-          </Ranking>
-        </div>
-      </section>
+    <section>
+      {@render heading("Top projects")}
+      <div class="mt-2">
+        <Ranking
+          label="Top projects"
+          items={projects}
+          {measure}
+          empty={{
+            icon: Folder,
+            title: reading ? READING : "No project used tokens in this period",
+          }}
+          href={(project) => sessionsHref({ project: project.project })}
+        >
+          {#snippet row(project)}
+            <Folder class="shrink-0 text-muted" size={14} aria-hidden="true" />
+            <span class="truncate" title={project.project}>{projectName(project.project)}</span>
+          {/snippet}
+        </Ranking>
+      </div>
+    </section>
 
-      <section>
-        {@render heading("Top projects")}
-        <div class="mt-2">
-          <Ranking
-            label="Top projects"
-            items={projects}
-            {measure}
-            href={(project) => sessionsHref({ project: project.project })}
-          >
-            {#snippet row(project)}
-              <Folder class="shrink-0 text-muted" size={14} aria-hidden="true" />
-              <span class="truncate" title={project.project}>{projectName(project.project)}</span>
-            {/snippet}
-          </Ranking>
-        </div>
-      </section>
-
-      <section class="lg:col-span-2">
-        {@render heading("Top sessions", { href: sessionsHref(), label: "All sessions" })}
-        <div class="mt-2">
-          <Ranking
-            label="Top sessions"
-            items={sessions}
-            {measure}
-            href={(session) => resolve("/sessions/[id]", { id: session.id })}
-          >
-            {#snippet row(session)}
-              <AgentMark agent={session.agent} size={14} class="shrink-0 text-muted" />
-              <span class="truncate" title={session.title ?? undefined}>
-                {sessionLabel(session)}
+    <section class="lg:col-span-2">
+      {@render heading("Top sessions", { href: sessionsHref(), label: "All sessions" })}
+      <div class="mt-2">
+        <Ranking
+          label="Top sessions"
+          items={sessions}
+          {measure}
+          empty={{
+            icon: SquareTerminal,
+            // The spawned runs a period's sessions count are not ranked here.
+            title: reading ? READING : "No conversation used tokens in this period",
+          }}
+          href={(session) => resolve("/sessions/[id]", { id: session.id })}
+        >
+          {#snippet row(session)}
+            <AgentMark agent={session.agent} size={14} class="shrink-0 text-muted" />
+            <span class="truncate" title={session.title ?? undefined}>
+              {sessionLabel(session)}
+            </span>
+            {#if session.cwd !== null}
+              <span class="ml-auto hidden shrink-0 text-meta text-muted sm:block">
+                {projectName(session.cwd)}
               </span>
-              {#if session.cwd !== null}
-                <span class="ml-auto hidden shrink-0 text-meta text-muted sm:block">
-                  {projectName(session.cwd)}
-                </span>
-              {/if}
-            {/snippet}
-          </Ranking>
-        </div>
-      </section>
-    </div>
-  {/if}
+            {/if}
+          {/snippet}
+        </Ranking>
+      </div>
+    </section>
+  </div>
 </svelte:boundary>

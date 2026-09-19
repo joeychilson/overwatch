@@ -14,6 +14,8 @@
   import { on } from "svelte/events";
   import { SvelteSet } from "svelte/reactivity";
   import ArrowDown from "@lucide/svelte/icons/arrow-down";
+  import MessageSquare from "@lucide/svelte/icons/message-square";
+  import Empty from "#lib/components/ui/Empty.svelte";
   import Failure from "#lib/components/ui/Failure.svelte";
   import { onReach } from "#lib/attachments.ts";
   import type { Conversation } from "#lib/state/conversation.svelte.ts";
@@ -153,7 +155,11 @@
 </script>
 
 {#if conversation.turns.length === 0}
-  <p class="text-muted">This session recorded nothing readable.</p>
+  <Empty
+    icon={MessageSquare}
+    title="Nothing to read"
+    description="This session recorded no messages or tool calls."
+  />
 {:else}
   <div class="grid grid-cols-[minmax(0,1fr)] gap-3" {@attach marks(highlight, revealed)}>
     {#each blocks(conversation.turns) as block (block.index)}

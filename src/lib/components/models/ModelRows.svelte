@@ -15,7 +15,9 @@
    * bar, so a model coming into use or falling out of it shows at a glance; a
    * period of one day has none. The share is of all the period's tokens.
    */
+  import Layers from "@lucide/svelte/icons/layers";
   import type { ModelUsage } from "#lib/api/backend.ts";
+  import Empty from "#lib/components/ui/Empty.svelte";
   import AgentMark from "#lib/components/marks/AgentMark.svelte";
   import Sparkline from "#lib/components/charts/Sparkline.svelte";
   import SortButton from "#lib/components/ui/SortButton.svelte";
@@ -155,6 +157,14 @@
           {formatUsd(model.costUsd)}
         </span>
       </a>
+    </li>
+  {:else}
+    <li>
+      <Empty
+        icon={Layers}
+        title="No model used tokens in this period"
+        description="Models appear here as your agents use them."
+      />
     </li>
   {/each}
 </ul>

@@ -180,3 +180,45 @@ test("today is drawn by the hour, and an hour opens the sessions of it", async (
     "false",
   );
 });
+
+test("a period with no usage keeps the page's shape and says why each part is empty", async ({
+  page,
+}) => {
+  await page.goto("/?period=today");
+  await settle(page, "get_status", status());
+  const nothing = { sessions: 0, tokens: tokens(0), costUsd: null, byAgent: [], daily: [] };
+  await expect.poll(() => page.evaluate(() => window.__ipc.pendingCount("get_overview"))).toBe(2);
+  await settle(page, "get_overview", nothing);
+  await settle(page, "list_models", []);
+  await settle(page, "list_projects", []);
+  await settle(page, "list_hours", []);
+  await settle(page, "list_sessions", sessionPage([]));
+
+  const totals = page.locator("dl");
+  await expect(totals.getByText("$0.00")).toBeVisible();
+  await expect(totals.getByText("0", { exact: true })).toHaveCount(2);
+  // The chart keeps every hour of the day, and says why it has nothing in them.
+  await expect(page.getByRole("slider", { name: "Tokens by hour" })).toBeVisible();
+  await expect(page.getByText("Nothing has used tokens yet today")).toBeVisible();
+  for (const name of ["model", "project", "conversation"]) {
+    await expect(page.getByText(`No ${name} used tokens in this period`)).toBeVisible();
+  }
+  await expect(page.getByRole("button", { name: "Share this period" })).toBeDisabled();
+});
+
+test("while the first index is read, a period's usage is not claimed to be none", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await settle(page, "get_status", status({ scanning: true, sessions: 0 }));
+  const nothing = { sessions: 0, tokens: tokens(0), costUsd: null, byAgent: [], daily: [] };
+  await expect.poll(() => page.evaluate(() => window.__ipc.pendingCount("get_overview"))).toBe(2);
+  await settle(page, "get_overview", nothing);
+  await settle(page, "list_models", []);
+  await settle(page, "list_projects", []);
+  await settle(page, "list_sessions", sessionPage([]));
+
+  await expect(page.locator("dl").getByText("—")).toHaveCount(3);
+  await expect(page.getByText("Reading your agents' history…")).toHaveCount(4);
+  await expect(page.getByText("$0.00")).toHaveCount(0);
+});

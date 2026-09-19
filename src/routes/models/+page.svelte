@@ -101,11 +101,7 @@
           .join(" · "),
   )}
 
-  {#if models.length === 0}
-    <p class="text-muted">No usage was recorded in this period.</p>
-  {:else}
-    <div aria-busy={$effect.pending() > 0}>
-      <ModelRows {models} {tokens} {since} {sort} onsort={toggleSort} {sessionsHref} />
-    </div>
-  {/if}
+  <div aria-busy={$effect.pending() > 0}>
+    <ModelRows {models} {tokens} {since} {sort} onsort={toggleSort} {sessionsHref} />
+  </div>
 </svelte:boundary>
