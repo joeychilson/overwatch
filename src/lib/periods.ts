@@ -31,10 +31,10 @@ export function periodParam(
 
 /**
  * Local midnight on the first of the last `days` days, today included, or
- * nothing for all of history.
+ * nothing for all of history. Today is the day `now` falls in.
  */
-export function periodStart(days: number | null): number | undefined {
-  return days === null ? undefined : addDays(startOfDay(Date.now()), 1 - days);
+export function periodStart(days: number | null, now = Date.now()): number | undefined {
+  return days === null ? undefined : addDays(startOfDay(now), 1 - days);
 }
 
 /** Local midnight at the start of the day `at` falls in. */

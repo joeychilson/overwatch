@@ -134,7 +134,7 @@ export function card(input: {
 }): Card {
   const { overview, models, days, measure } = input;
   const now = input.now ?? new Date();
-  const since = periodStart(days);
+  const since = periodStart(days, now.getTime());
   const first = since ?? overview.daily[0]?.day;
 
   const used = overview.byAgent
