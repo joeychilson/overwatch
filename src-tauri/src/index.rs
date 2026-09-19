@@ -38,7 +38,16 @@ pub struct Index {
     /// What the last scan found, for the status command.
     status: Mutex<Status>,
     /// The conversation most recently read, so paging through it is free.
-    open: Mutex<Option<(String, Transcript)>>,
+    open: Mutex<Option<Held>>,
+}
+
+/// A conversation held after its first read, and where it was read from.
+struct Held {
+    /// The session it belongs to.
+    id: String,
+    /// The file it was read from, as the index names it.
+    path: String,
+    transcript: Transcript,
 }
 
 impl Index {
@@ -154,11 +163,8 @@ impl Index {
             status.problems.clear();
         });
 
-        if !changed.is_empty() {
-            // A held conversation may be one of the files that just changed.
-            self.close();
-        }
         let problems = self.absorb(&changed, report);
+        self.release_if_stale(&changed)?;
 
         // Files the index knows about that are no longer on disk.
         let live: std::collections::HashSet<String> = units
@@ -275,10 +281,10 @@ impl Index {
     /// still being parsed waits for that parse instead of starting another.
     fn held<T>(&self, id: &str, read: impl FnOnce(&Transcript) -> T) -> Result<T> {
         let mut open = self.open.lock().expect("never poisoned");
-        if let Some((held, transcript)) = open.as_ref()
-            && held == id
+        if let Some(held) = open.as_ref()
+            && held.id == id
         {
-            return Ok(read(transcript));
+            return Ok(read(&held.transcript));
         }
 
         let located = self.read(|store| store.locate(id))?;
@@ -289,8 +295,43 @@ impl Index {
         self.write(|store| store.put_counts(id, transcript.messages, transcript.tools))?;
 
         let result = read(&transcript);
-        *open = Some((id.to_owned(), transcript));
+        *open = Some(Held {
+            id: id.to_owned(),
+            path: unit.path.to_string_lossy().into_owned(),
+            transcript,
+        });
         Ok(result)
+    }
+
+    /// Forget the held conversation if a scan changed what it was read from:
+    /// its file was rewritten, or its session has moved on to a newer file, as
+    /// a resumed Codex thread does.
+    ///
+    /// Agents write every few seconds while they work, so releasing it on any
+    /// change would parse a long conversation again for nearly every page read
+    /// from it. A file that has gone leaves it held: what was read is still
+    /// that session's history, and there is nothing newer to read.
+    ///
+    /// Locks the held conversation before the store, as [`Index::held`] does.
+    fn release_if_stale(&self, changed: &[Unit]) -> Result<()> {
+        if changed.is_empty() {
+            return Ok(());
+        }
+        let mut open = self.open.lock().expect("never poisoned");
+        let Some(held) = open.as_ref() else {
+            return Ok(());
+        };
+        let rewritten = changed
+            .iter()
+            .any(|unit| unit.path.to_string_lossy() == held.path);
+        if !rewritten {
+            let located = self.read(|store| store.locate(&held.id))?;
+            if located.is_some_and(|(unit, _)| unit.path.to_string_lossy() == held.path) {
+                return Ok(());
+            }
+        }
+        *open = None;
+        Ok(())
     }
 
     /// Forget the held conversation, so its memory is returned.
@@ -690,6 +731,42 @@ mod tests {
             again.turns[0].text,
             "A completely different and longer opening prompt"
         );
+    }
+
+    #[test]
+    fn a_rescan_of_other_files_keeps_a_held_conversation() {
+        let home = home();
+        let index = index(&home);
+        index.scan(|_| {}).expect("scans");
+        index.transcript("claude_code:abc", 0, 10).expect("reads");
+
+        let projects = home.path().join(".claude/projects/-w-proj");
+        write_session(&projects.join("other.jsonl"), "other", "Elsewhere", 100);
+        let rescan = index.scan(|_| {}).expect("rescans");
+        assert_eq!(rescan.files_read, 1, "only the other session's file");
+
+        // Rewritten after the scan, so reading the file again would show this
+        // prompt; seeing the first one shows the held copy was kept.
+        write_session(&projects.join("abc.jsonl"), "abc", "Not yet scanned", 500);
+        let kept = index.transcript("claude_code:abc", 0, 10).expect("reads");
+        assert_eq!(kept.turns[0].text, "First prompt");
+    }
+
+    #[test]
+    fn a_session_moving_to_a_newer_file_releases_a_held_conversation() {
+        let home = home();
+        let index = index(&home);
+        index.scan(|_| {}).expect("scans");
+        index.transcript("claude_code:abc", 0, 10).expect("reads");
+
+        // The same session carried on in a file of its own, as a resumed
+        // thread is; the file the held copy came from is untouched.
+        let projects = home.path().join(".claude/projects/-w-proj");
+        write_session(&projects.join("resumed.jsonl"), "abc", "Carried on", 700);
+        index.scan(|_| {}).expect("rescans");
+
+        let moved = index.transcript("claude_code:abc", 0, 10).expect("reads");
+        assert_eq!(moved.turns[0].text, "Carried on");
     }
 
     #[test]
