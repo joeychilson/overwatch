@@ -7,7 +7,7 @@
  * need different recoveries.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { engineError, installIpc, session, sessionPage, settle, status } from "./ipc.ts";
+import { emit, engineError, installIpc, session, sessionPage, settle, status } from "./ipc.ts";
 
 test.beforeEach(async ({ page }) => {
   await installIpc(page);
@@ -314,4 +314,115 @@ test("an empty result explains itself", async ({ page }) => {
   await page.getByLabel("Search sessions").fill("nothing matches this");
   await settle(page, "list_sessions", sessionPage([], { total: 0 }));
   await expect(page.getByText("Try a different search.")).toBeVisible();
+});
+
+/** `count` sessions numbered from `from`, in the order the engine lists them. */
+function numbered(from: number, count: number) {
+  return Array.from({ length: count }, (_, offset) =>
+    session(`codex:ses_${from + offset}`, `Session ${from + offset}`),
+  );
+}
+
+/** The list's read from `offset` once it is waiting to be answered. */
+async function pendingRead(page: Page, offset: number) {
+  const find = () =>
+    page.evaluate((at) => {
+      const call = window.__ipc
+        .pendingCalls("list_sessions")
+        .find((each) => (each.args.filter as { offset: number }).offset === at);
+      return call === undefined
+        ? null
+        : { id: call.id, limit: (call.args.filter as { limit: number }).limit };
+    }, offset);
+  await expect.poll(find).not.toBeNull();
+  const read = await find();
+  if (read === null) throw new Error(`no read from ${offset} is waiting`);
+  return read;
+}
+
+/** Answer the list's read from `offset` as an engine holding `rows`, in order, would. */
+async function answerRead(page: Page, offset: number, rows: ReturnType<typeof session>[]) {
+  const { id, limit } = await pendingRead(page, offset);
+  const answer = sessionPage(rows.slice(offset, offset + limit), { total: rows.length });
+  await page.evaluate(([call, data]) => window.__ipc.settleCall(call, "resolve", data), [
+    id,
+    answer,
+  ] as const);
+}
+
+/** Scroll to the end of the loaded rows, which asks for the next page. */
+async function reachEnd(page: Page) {
+  await page.getByRole("main").evaluate((main) => main.scrollTo(0, main.scrollHeight));
+}
+
+test("new work found while scrolled down keeps every loaded row, and the place in them", async ({
+  page,
+}) => {
+  const rows = numbered(0, 300);
+  await page.goto("/sessions");
+  await settle(page, "get_status", status());
+  await answerRead(page, 0, rows);
+  await reachEnd(page);
+  await answerRead(page, 100, rows);
+
+  const listed = page.getByRole("list", { name: "Sessions" }).getByRole("listitem");
+  await expect(listed).toHaveCount(200);
+  const reading = page.getByRole("link", { name: "Session 150", exact: true });
+  await reading.evaluate((row) => row.scrollIntoView({ block: "center" }));
+
+  // A session begun meanwhile arrives at the top and pushes the rest down one.
+  await emit(page, "index_changed", status({ filesRead: 1 }));
+  await answerRead(page, 0, [session("codex:ses_new", "Just begun"), ...rows]);
+
+  await expect(page.getByRole("link", { name: "Just begun" })).toBeAttached();
+  await expect(listed).toHaveCount(200);
+  await expect(reading).toBeInViewport();
+});
+
+test("a page that repeats a row already loaded leaves it out", async ({ page }) => {
+  const rows = numbered(0, 300);
+  await page.goto("/sessions");
+  await settle(page, "get_status", status());
+  await answerRead(page, 0, rows);
+  await reachEnd(page);
+
+  // A session begun after the first page was read pushed every row down one,
+  // so the second page opens with the first page's last row.
+  await answerRead(page, 100, [session("codex:ses_new", "Just begun"), ...rows]);
+
+  const listed = page.getByRole("list", { name: "Sessions" }).getByRole("listitem");
+  await expect(listed).toHaveCount(199);
+  await expect(page.getByRole("link", { name: "Session 99", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("link", { name: "Session 198", exact: true })).toBeAttached();
+});
+
+test("new work found while a page loads leaves the list able to load more", async ({ page }) => {
+  const rows = numbered(0, 300);
+  await page.goto("/sessions");
+  await settle(page, "get_status", status());
+  await answerRead(page, 0, rows);
+  await reachEnd(page);
+  await pendingRead(page, 100);
+
+  await emit(page, "index_changed", status({ filesRead: 1 }));
+  await pendingRead(page, 0);
+  // The page arrives first, for rows the refresh is about to replace.
+  await answerRead(page, 100, rows);
+  await answerRead(page, 0, rows);
+
+  // It is read again after the refreshed rows, rather than lost.
+  await answerRead(page, 100, rows);
+  await expect(page.getByRole("list", { name: "Sessions" }).getByRole("listitem")).toHaveCount(200);
+  await expect(page.getByText("Loading more sessions…")).toBeHidden();
+});
+
+test("new work found keeps an empty result on screen while it reads again", async ({ page }) => {
+  await page.goto("/sessions?q=nothing");
+  await settle(page, "get_status", status());
+  await settle(page, "list_sessions", sessionPage([], { total: 0 }));
+  await expect(page.getByText("No sessions match.")).toBeVisible();
+
+  await emit(page, "index_changed", status({ filesRead: 1 }));
+  await pendingRead(page, 0);
+  await expect(page.getByText("No sessions match.")).toBeVisible();
 });

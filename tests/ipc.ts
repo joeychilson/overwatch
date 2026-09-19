@@ -14,7 +14,13 @@ import { expect, type Page } from "@playwright/test";
 export interface ScriptedIpc {
   calls: { id: number; cmd: string; args: Record<string, unknown> }[];
   settle(cmd: string, kind: "resolve" | "reject", value: unknown): number;
+  /** Settle one call by its id, leaving any others of its command pending. */
+  settleCall(id: number, kind: "resolve" | "reject", value: unknown): boolean;
   pendingCount(cmd: string): number;
+  /** The calls of a command still waiting to be settled, oldest first. */
+  pendingCalls(cmd: string): { id: number; args: Record<string, unknown> }[];
+  /** Deliver an event to every listener the page registered for it. */
+  emit(event: string, payload: unknown): number;
 }
 
 declare global {
@@ -31,6 +37,8 @@ export async function installIpc(page: Page) {
       { cmd: string; resolve: (v: unknown) => void; reject: (e: unknown) => void }
     >();
     const callbacks = new Map<number, (payload: unknown) => void>();
+    /** The callback registered for each listened-to event. */
+    const listeners: { event: string; handler: number }[] = [];
     const calls: { id: number; cmd: string; args: Record<string, unknown> }[] = [];
     let nextId = 1;
 
@@ -49,10 +57,31 @@ export async function installIpc(page: Page) {
         }
         return settled;
       },
+      settleCall(id, kind, value) {
+        const entry = pending.get(id);
+        if (!entry) return false;
+        pending.delete(id);
+        if (kind === "resolve") entry.resolve(value);
+        else entry.reject(value);
+        return true;
+      },
       pendingCount(cmd) {
         let count = 0;
         for (const entry of pending.values()) if (entry.cmd === cmd) count += 1;
         return count;
+      },
+      pendingCalls(cmd) {
+        return calls.filter((call) => call.cmd === cmd && pending.has(call.id));
+      },
+      emit(event, payload) {
+        let delivered = 0;
+        for (const listener of listeners) {
+          const callback = callbacks.get(listener.handler);
+          if (listener.event !== event || !callback) continue;
+          callback({ event, id: 0, payload });
+          delivered += 1;
+        }
+        return delivered;
       },
     };
 
@@ -62,7 +91,10 @@ export async function installIpc(page: Page) {
         calls.push({ id, cmd, args: args ?? {} });
         // The event plugin's own commands answer immediately; only engine
         // commands are held open for the test to settle.
-        if (cmd === "plugin:event|listen") return Promise.resolve(id);
+        if (cmd === "plugin:event|listen") {
+          listeners.push({ event: args.event as string, handler: args.handler as number });
+          return Promise.resolve(id);
+        }
         if (cmd === "plugin:event|unlisten") return Promise.resolve(null);
         return new Promise((resolve, reject) => {
           pending.set(id, { cmd, resolve, reject });
@@ -98,6 +130,15 @@ export async function settle(page: Page, cmd: string, value: unknown) {
     cmd,
     value,
   ] as const);
+}
+
+/** Deliver an engine event to the page, once it listens for it. */
+export async function emit(page: Page, event: string, payload: unknown) {
+  await expect
+    .poll(() =>
+      page.evaluate(([e, data]) => window.__ipc.emit(e as string, data), [event, payload] as const),
+    )
+    .toBeGreaterThan(0);
 }
 
 /** A serialized engine failure. */
