@@ -1,12 +1,8 @@
 //! The commands the app's window and the menu bar item's panel call.
 //!
-//! Each one is a thin wrapper that asks the index and returns the payload.
-//! There is no envelope, no revision to carry, no view to open and release, and
-//! no cursor: a list request is a filter and an offset.
-//!
-//! Every command runs on Tauri's thread pool rather than the main thread, so a
-//! slow one — a long conversation read for the first time — never stops the
-//! window.
+//! Each asks the index and returns its payload as it stands. Every command runs
+//! on Tauri's thread pool rather than the main thread, so a slow one — a long
+//! conversation read for the first time — never stops the window.
 
 use std::sync::Arc;
 

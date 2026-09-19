@@ -7,7 +7,7 @@
 use serde_json::Value;
 
 use super::{Identity, Location, Reader, Source, Usage};
-use crate::session::{Limit, Problem};
+use crate::session::Problem;
 use crate::timestamp::from_json;
 
 const URL: &str = "https://api.anthropic.com/api/oauth/usage";
@@ -36,11 +36,7 @@ fn identity(_token: &str) -> Identity {
 
 /// Ask for the limits of the plan a token belongs to.
 fn fetch(token: &str, _identity: &Identity, _now: i64) -> Result<Usage, Problem> {
-    let headers = [
-        format!("Authorization: Bearer {token}"),
-        "anthropic-beta: oauth-2025-04-20".to_owned(),
-    ];
-    super::get(URL, &headers, parse)
+    super::get(URL, token, &["anthropic-beta: oauth-2025-04-20"], parse)
 }
 
 /// The limits in a usage answer.
@@ -58,13 +54,12 @@ fn parse(body: &Value) -> Option<Usage> {
                 "seven_day" => ("Weekly", None),
                 other => ("Weekly", Some(words(other.strip_prefix("seven_day_")?))),
             };
-            Some(Limit {
-                name: name.to_owned(),
+            super::limit(
+                name.to_owned(),
                 scope,
-                used_percent: super::percent(&window["utilization"])?,
-                runs_out_at: None,
-                resets_at: from_json(&window["resets_at"]),
-            })
+                &window["utilization"],
+                from_json(&window["resets_at"]),
+            )
         })
         .collect();
     super::usage(None, limits)

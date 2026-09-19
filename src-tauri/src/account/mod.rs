@@ -1,17 +1,13 @@
 //! Subscription usage limits, read with the sign-ins already on this machine.
 //!
-//! A subscription is not an agent. One ChatGPT plan can be signed into from
-//! Codex, OpenCode and Pi at once, so each subscription lists every place a
+//! A subscription is not an agent: one ChatGPT plan can be signed into from
+//! Codex, OpenCode and Pi at once. So each subscription lists every place a
 //! sign-in to it can be kept, groups the sign-ins it finds by the account they
-//! belong to, and reads each account with whichever of its sign-ins works. A
-//! person with no Codex installed but a ChatGPT plan connected to Pi still sees
-//! its limits, and one account held by three apps is still one account.
+//! belong to, and reads each account with whichever of its sign-ins works.
 //!
-//! This is the application's only network traffic: a request to each
-//! subscription's own usage endpoint. Sign-ins are only ever read. None is
-//! renewed here, because renewing rotates the token an app holds and would
-//! sign that app out; an expired sign-in waits for its app to renew it, and the
-//! renewal is picked up within half a minute.
+//! This is the application's only network traffic. Sign-ins are only ever
+//! read, never renewed: renewing rotates the token an app holds and would sign
+//! that app out, so an expired sign-in waits for its app to renew it.
 //!
 //! Requests go through the system's `/usr/bin/curl` rather than an HTTP client
 //! compiled into the application: a few small requests every few minutes do not
@@ -272,17 +268,21 @@ fn claims(token: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
-/// Request a provider's usage and read its limits out of the answer.
+/// Request a provider's usage with `token` and read its limits out of the
+/// answer.
 ///
-/// `headers` go to the provider as written, the credential among them.
+/// `headers` are any the provider needs besides the credential.
 fn get(
     url: &str,
-    headers: &[String],
+    token: &str,
+    headers: &[&str],
     parse: impl FnOnce(&Value) -> Option<Usage>,
 ) -> Result<Usage, Problem> {
+    let authorization = format!("Authorization: Bearer {token}");
+    let lines = [&[authorization.as_str()], headers].concat();
     // A line break inside a header would let a malformed sign-in add headers
     // of its own to the request.
-    if headers.iter().any(|header| header.contains(['\r', '\n'])) {
+    if lines.iter().any(|line| line.contains(['\r', '\n'])) {
         return Err(Problem::SignIn);
     }
     let mut curl = Command::new("/usr/bin/curl")
@@ -297,6 +297,11 @@ fn get(
             "20",
             "--max-filesize",
             "1048576",
+            // A provider's own `User-Agent` header replaces this one.
+            "--user-agent",
+            "Overwatch",
+            "--header",
+            "Accept: application/json",
             "--header",
             "@-",
             // The status goes to standard error so the body arrives intact.
@@ -309,15 +314,7 @@ fn get(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|_| Problem::Unavailable)?;
-    let agent = if headers
-        .iter()
-        .any(|header| header.starts_with("User-Agent:"))
-    {
-        ""
-    } else {
-        "User-Agent: Overwatch\n"
-    };
-    let request = format!("Accept: application/json\n{agent}{}\n", headers.join("\n"));
+    let request = lines.join("\n") + "\n";
     let sent = curl
         .stdin
         .take()
@@ -350,13 +347,24 @@ fn usage(plan: Option<String>, limits: Vec<Limit>) -> Option<Usage> {
     (!limits.is_empty()).then_some(Usage { plan, limits })
 }
 
-/// A usage percentage, or nothing when the value is not one.
+/// A limit as a provider reported it, or nothing when `used` is not a usage
+/// percentage.
 ///
-/// Above 100 is kept: providers report it once a limit is exceeded.
-fn percent(value: &Value) -> Option<f64> {
-    value
-        .as_f64()
-        .filter(|percent| percent.is_finite() && *percent >= 0.0)
+/// Above 100 is kept: providers report it once a limit is exceeded. When the
+/// limit runs out is forecast later, from several reads.
+fn limit(
+    name: String,
+    scope: Option<String>,
+    used: &Value,
+    resets_at: Option<i64>,
+) -> Option<Limit> {
+    Some(Limit {
+        name,
+        scope,
+        used_percent: used.as_f64().filter(|percent| *percent >= 0.0)?,
+        resets_at,
+        runs_out_at: None,
+    })
 }
 
 /// A window's length, said the way a person would say it.
@@ -364,11 +372,9 @@ fn span(seconds: i64) -> String {
     const HOUR: i64 = 3_600;
     const DAY: i64 = 24 * HOUR;
     if seconds < 23 * HOUR {
-        let hours = ((seconds + HOUR / 2) / HOUR).max(1);
-        return if hours == 1 {
-            "Hourly".to_owned()
-        } else {
-            format!("{hours} hours")
+        return match ((seconds + HOUR / 2) / HOUR).max(1) {
+            1 => "Hourly".to_owned(),
+            hours => format!("{hours} hours"),
         };
     }
     // Rounded to whole days, because a period that crosses a clock change is
@@ -484,11 +490,14 @@ mod tests {
     }
 
     #[test]
-    fn a_percentage_must_be_a_real_nonnegative_number() {
-        assert_eq!(percent(&json!(42)), Some(42.0));
-        assert_eq!(percent(&json!(104.5)), Some(104.5));
-        assert_eq!(percent(&json!(-1)), None);
-        assert_eq!(percent(&json!("42")), None);
-        assert_eq!(percent(&Value::Null), None);
+    fn a_limit_needs_a_nonnegative_percentage() {
+        let used = |value: Value| {
+            limit("Weekly".into(), None, &value, None).map(|found| found.used_percent)
+        };
+        assert_eq!(used(json!(42)), Some(42.0));
+        assert_eq!(used(json!(104.5)), Some(104.5));
+        assert_eq!(used(json!(-1)), None);
+        assert_eq!(used(json!("42")), None);
+        assert_eq!(used(Value::Null), None);
     }
 }

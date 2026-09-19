@@ -9,13 +9,19 @@
 use serde_json::Value;
 
 use super::{Identity, Location, OPENCODE, PI, Reader, Source, Usage};
-use crate::session::{Limit, Problem};
+use crate::session::Problem;
 use crate::timestamp::from_json;
 
 const URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 
-/// A released Grok CLI version, which the proxy requires a client to name.
-const CLIENT_VERSION: &str = "1.0.30";
+/// The headers the Grok CLI sends besides the credential.
+const HEADERS: &[&str] = &[
+    "X-XAI-Token-Auth: xai-grok-cli",
+    "x-grok-client-identifier: grok-shell",
+    // A released Grok CLI version.
+    "x-grok-client-version: 1.0.30",
+    "User-Agent: xai-grok-cli",
+];
 
 /// Grok Build keys its sign-in by issuer and client, and the client is fixed.
 const GROK_BUILD_TOKEN: &str = "/https:~1~1auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828/key";
@@ -64,33 +70,20 @@ fn identity(token: &str) -> Identity {
 
 /// Ask for the pool a token draws on, as the Grok CLI does.
 fn fetch(token: &str, _identity: &Identity, _now: i64) -> Result<Usage, Problem> {
-    let headers = [
-        format!("Authorization: Bearer {token}"),
-        "X-XAI-Token-Auth: xai-grok-cli".to_owned(),
-        "x-grok-client-identifier: grok-shell".to_owned(),
-        format!("x-grok-client-version: {CLIENT_VERSION}"),
-        "User-Agent: xai-grok-cli".to_owned(),
-    ];
-    super::get(URL, &headers, parse)
+    super::get(URL, token, HEADERS, parse)
 }
 
 /// The pool in a billing answer: how much is used, and when the period ends.
 fn parse(body: &Value) -> Option<Usage> {
     let config = &body["config"];
-    let used_percent = super::percent(&config["creditUsagePercent"])?;
     let period = &config["currentPeriod"];
     let (start, end) = (from_json(&period["start"]), from_json(&period["end"]));
     let length = start
         .zip(end)
         .and_then(|(start, end)| end.checked_sub(start))
         .filter(|length| *length > 0);
-    let limit = Limit {
-        name: length.map_or_else(|| "Usage".to_owned(), |length| super::span(length / 1_000)),
-        scope: None,
-        used_percent,
-        resets_at: end,
-        runs_out_at: None,
-    };
+    let name = length.map_or_else(|| "Usage".to_owned(), |length| super::span(length / 1_000));
+    let limit = super::limit(name, None, &config["creditUsagePercent"], end)?;
     super::usage(None, vec![limit])
 }
 

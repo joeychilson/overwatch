@@ -45,7 +45,14 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 &[
                     &PredefinedMenuItem::about(app, None, None)?,
                     &separator()?,
-                    &login(app)?,
+                    &CheckMenuItem::with_id(
+                        app,
+                        LOGIN,
+                        "Open at Login",
+                        true,
+                        opens_at_login(app),
+                        None::<&str>,
+                    )?,
                     &separator()?,
                     &PredefinedMenuItem::services(app, None)?,
                     &separator()?,
@@ -114,12 +121,6 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     )
 }
 
-/// The item that turns opening at login on or off, checked while it is on.
-fn login<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<CheckMenuItem<R>> {
-    let opens = opens_at_login(app);
-    CheckMenuItem::with_id(app, LOGIN, "Open at Login", true, opens, None::<&str>)
-}
-
 /// Whether the app opens when the user logs in.
 fn opens_at_login<R: Runtime>(app: &AppHandle<R>) -> bool {
     app.autolaunch().is_enabled().unwrap_or(false)
@@ -161,13 +162,12 @@ fn toggle_login<R: Runtime>(app: &AppHandle<R>) {
     }
 
     // A check item flips itself when chosen, whether or not the change took.
-    let opens = opens_at_login(app);
     let item = app
         .menu()
         .and_then(|menu| menu.get(APP))
         .and_then(|submenu| submenu.as_submenu()?.get(LOGIN))
         .and_then(|item| item.as_check_menuitem().cloned());
     if let Some(item) = item {
-        let _ = item.set_checked(opens);
+        let _ = item.set_checked(opens_at_login(app));
     }
 }

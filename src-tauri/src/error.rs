@@ -1,9 +1,9 @@
 //! Failures a command can report.
 //!
-//! One small enum. A command either returns its payload or one of these, and
-//! the frontend shows `message`. A source file that cannot be read is not an
-//! error here — indexing records it as a problem in [`crate::session::Status`]
-//! and carries on with every other source.
+//! A command either returns its payload or one of these, and the frontend
+//! shows `message`. A source file that cannot be read is not an error here:
+//! indexing records it as a problem in [`crate::session::Status`] and carries
+//! on with every other source.
 
 use serde::Serialize;
 
@@ -95,21 +95,17 @@ mod tests {
         let json = serde_json::to_value(&error).expect("serializes");
         assert_eq!(json["kind"], "not_found");
         assert_eq!(json["message"], "session abc was not found");
-    }
 
-    #[test]
-    fn read_failures_name_the_file() {
         let error = Error::Read {
             path: "/tmp/history.jsonl".into(),
-            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            source: std::io::ErrorKind::PermissionDenied.into(),
         };
         let json = serde_json::to_value(&error).expect("serializes");
         assert_eq!(json["kind"], "read_failed");
         assert!(
             json["message"]
                 .as_str()
-                .expect("message is text")
-                .contains("/tmp/history.jsonl")
+                .is_some_and(|message| message.contains("/tmp/history.jsonl"))
         );
     }
 }

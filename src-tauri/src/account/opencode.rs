@@ -7,7 +7,7 @@
 use serde_json::Value;
 
 use super::{Identity, Location, OPENCODE, PI, Reader, Source, Usage};
-use crate::session::{Limit, Problem};
+use crate::session::Problem;
 use crate::timestamp::from_json;
 
 const URL: &str = "https://opencode.ai/zen/go/v1/usage";
@@ -35,6 +35,9 @@ pub(super) const READER: Reader = Reader {
 };
 
 /// The account a key belongs to, as an FNV-1a hash of the key.
+///
+/// The hash is written out because account ids are kept across launches, and
+/// the standard library's hasher may change between Rust releases.
 fn identity(key: &str) -> Identity {
     let hash = key.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
@@ -47,7 +50,7 @@ fn identity(key: &str) -> Identity {
 
 /// Ask for the limits of the plan a key belongs to.
 fn fetch(key: &str, _identity: &Identity, _now: i64) -> Result<Usage, Problem> {
-    super::get(URL, &[format!("Authorization: Bearer {key}")], parse)
+    super::get(URL, key, &[], parse)
 }
 
 /// The limits in a usage answer.
@@ -61,13 +64,12 @@ fn parse(body: &Value) -> Option<Usage> {
     .into_iter()
     .filter_map(|(key, name)| {
         let window = &usage[key];
-        Some(Limit {
-            name: name.to_owned(),
-            scope: None,
-            used_percent: super::percent(&window["percent"])?,
-            runs_out_at: None,
-            resets_at: from_json(&window["resetsAt"]),
-        })
+        super::limit(
+            name.to_owned(),
+            None,
+            &window["percent"],
+            from_json(&window["resetsAt"]),
+        )
     })
     .collect();
     super::usage(Some("Go".to_owned()), limits)
@@ -103,7 +105,6 @@ mod tests {
     fn a_key_is_its_own_account_without_being_kept() {
         // FNV-1a of "a" is the published test vector af63dc4c8601ec8c.
         assert_eq!(identity("a").key, "af63dc4c8601ec8c");
-        assert_eq!(identity("key-one").key, identity("key-one").key);
         assert_ne!(identity("key-one").key, identity("key-two").key);
     }
 }

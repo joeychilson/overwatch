@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use crate::session::Account;
+use crate::session::{Account, Limit};
 
 /// How far back readings count toward a rate.
 ///
@@ -25,7 +25,7 @@ const LEAST: i64 = 15 * 60_000;
 const HORIZON: i64 = 24 * 60 * 60_000;
 
 /// A notification worth showing.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Alert {
     /// The subscription, and the account when it has a label.
     pub title: String,
@@ -103,41 +103,7 @@ impl Pace {
                 if limit.scope.is_some() {
                     continue;
                 }
-                let reached = limit.used_percent >= 100.0;
-                let (said, body) = match (tracked.said, reached, limit.runs_out_at, limit.resets_at)
-                {
-                    (Said::Reached, true, _, _) => (Said::Reached, None),
-                    (_, true, _, Some(resets_at)) => (
-                        Said::Reached,
-                        Some(format!(
-                            "{}: limit reached. Back in {}.",
-                            limit.name,
-                            duration(resets_at - now)
-                        )),
-                    ),
-                    (_, true, _, None) => (
-                        Said::Reached,
-                        Some(format!("{}: limit reached.", limit.name)),
-                    ),
-                    (Said::Reached, false, _, _) => (
-                        Said::Nothing,
-                        Some(format!("{}: available again.", limit.name)),
-                    ),
-                    (Said::Nothing, false, Some(runs_out_at), Some(resets_at))
-                        if runs_out_at - now <= HORIZON =>
-                    {
-                        (
-                            Said::RunningOut,
-                            Some(format!(
-                                "{}: at this pace, runs out in about {}. It resets in {}.",
-                                limit.name,
-                                duration(runs_out_at - now),
-                                duration(resets_at - now)
-                            )),
-                        )
-                    }
-                    (said, false, _, _) => (said, None),
-                };
+                let (said, body) = say(tracked.said, limit, now);
                 tracked.said = said;
                 if let Some(body) = body.filter(|_| seen) {
                     alerts.push(Alert {
@@ -148,6 +114,38 @@ impl Pace {
             }
         }
         alerts
+    }
+}
+
+/// What to say about a limit on all usage after a reading, given what was said
+/// before: what has then been said, and the notification if one is due.
+fn say(said: Said, limit: &Limit, now: i64) -> (Said, Option<String>) {
+    let name = &limit.name;
+    let reached = limit.used_percent >= 100.0;
+    match (said, reached, limit.runs_out_at, limit.resets_at) {
+        (Said::Reached, true, ..) => (Said::Reached, None),
+        (_, true, _, Some(resets_at)) => (
+            Said::Reached,
+            Some(format!(
+                "{name}: limit reached. Back in {}.",
+                duration(resets_at - now)
+            )),
+        ),
+        (_, true, _, None) => (Said::Reached, Some(format!("{name}: limit reached."))),
+        (Said::Reached, false, ..) => (Said::Nothing, Some(format!("{name}: available again."))),
+        (Said::Nothing, false, Some(runs_out_at), Some(resets_at))
+            if runs_out_at - now <= HORIZON =>
+        {
+            (
+                Said::RunningOut,
+                Some(format!(
+                    "{name}: at this pace, runs out in about {}. It resets in {}.",
+                    duration(runs_out_at - now),
+                    duration(resets_at - now)
+                )),
+            )
+        }
+        (said, false, ..) => (said, None),
     }
 }
 
@@ -182,7 +180,7 @@ fn duration(milliseconds: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{Limit, Provider};
+    use crate::session::Provider;
 
     const MINUTE: i64 = 60_000;
 

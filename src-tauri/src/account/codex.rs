@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use super::{Identity, Location, OPENCODE, PI, Reader, Source, Usage};
 use crate::session::{Limit, Problem};
+use crate::timestamp::from_unix_number;
 
 const URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 
@@ -58,12 +59,14 @@ fn identity(token: &str) -> Identity {
 
 /// Ask for the limits of the workspace a token was issued for.
 fn fetch(token: &str, identity: &Identity, now: i64) -> Result<Usage, Problem> {
-    let mut headers = vec![format!("Authorization: Bearer {token}")];
     // Selects the workspace when one person belongs to several.
-    if !identity.key.is_empty() {
-        headers.push(format!("ChatGPT-Account-Id: {}", identity.key));
-    }
-    super::get(URL, &headers, |body| parse(body, now))
+    let workspace = format!("ChatGPT-Account-Id: {}", identity.key);
+    let headers: &[&str] = if identity.key.is_empty() {
+        &[]
+    } else {
+        &[&workspace]
+    };
+    super::get(URL, token, headers, |body| parse(body, now))
 }
 
 /// The limits in a usage answer.
@@ -93,23 +96,23 @@ fn windows(rate: &Value, scope: Option<&str>, now: i64) -> Vec<Limit> {
             let seconds = window["limit_window_seconds"]
                 .as_i64()
                 .filter(|seconds| *seconds > 0)?;
-            Some(Limit {
-                name: super::span(seconds),
-                scope: scope.map(str::to_owned),
-                runs_out_at: None,
-                used_percent: super::percent(&window["used_percent"])?,
-                // An unknown reset instant arrives as zero; the countdown
-                // beside it still says when.
-                resets_at: window["reset_at"]
-                    .as_i64()
-                    .and_then(crate::timestamp::from_unix_number)
-                    .or_else(|| {
-                        let after = window["reset_after_seconds"]
-                            .as_i64()
-                            .filter(|seconds| *seconds >= 0)?;
-                        now.checked_add(after.checked_mul(1_000)?)
-                    }),
-            })
+            // An unknown reset instant arrives as zero; the countdown beside
+            // it still says when.
+            let resets_at = window["reset_at"]
+                .as_i64()
+                .and_then(from_unix_number)
+                .or_else(|| {
+                    let after = window["reset_after_seconds"]
+                        .as_i64()
+                        .filter(|seconds| *seconds >= 0)?;
+                    now.checked_add(after.checked_mul(1_000)?)
+                });
+            super::limit(
+                super::span(seconds),
+                scope.map(str::to_owned),
+                &window["used_percent"],
+                resets_at,
+            )
         })
         .collect()
 }

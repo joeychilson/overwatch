@@ -2,17 +2,12 @@
 //! opening the window.
 //!
 //! Its icon is the app's mark with the ring drawn only as far round as the
-//! tightest limit on all usage of the subscriptions in use has left, and that
-//! figure sits beside it. With none in use, the ones used last stand in, so the
-//! figure stays on what was last worked with rather than on a subscription that
-//! is idle.
-//!
-//! Clicking it drops down a panel with every account's limits, on the same
-//! material as a menu, which hides again once anything else is clicked, as a
-//! menu does.
+//! limit it follows has left, and that figure sits beside it. Clicking it drops
+//! down a panel with every account's limits, which hides again once anything
+//! else is clicked, as a menu does.
 
 use std::f64::consts::TAU;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use tauri::image::Image;
@@ -95,7 +90,7 @@ pub fn create<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
 /// Redraw the item for the accounts as they stand at `now`.
 ///
-/// Drawing waits on the main thread, so this must be called from another.
+/// Blocks until the main thread has drawn it.
 pub fn update<R: Runtime>(app: &AppHandle<R>, accounts: &[Account], now: i64) {
     let followed = followed(accounts, now);
     let shown = Shown {
@@ -108,7 +103,7 @@ pub fn update<R: Runtime>(app: &AppHandle<R>, accounts: &[Account], now: i64) {
     let (Some(tray), Some(item)) = (app.tray_by_id(ID), app.try_state::<Item>()) else {
         return;
     };
-    let mut last = item.shown.lock().expect("never poisoned");
+    let mut last = item.shown.lock().unwrap_or_else(PoisonError::into_inner);
     if *last == shown {
         return;
     }
@@ -126,7 +121,10 @@ pub fn update<R: Runtime>(app: &AppHandle<R>, accounts: &[Account], now: i64) {
 /// Hide the panel once it loses focus.
 pub fn dismiss<R: Runtime>(panel: &Window<R>) {
     if let Some(item) = panel.try_state::<Item>() {
-        *item.dismissed.lock().expect("never poisoned") = Some(Instant::now());
+        *item
+            .dismissed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
     }
     let _ = panel.hide();
 }
@@ -136,18 +134,17 @@ fn toggle<R: Runtime>(app: &AppHandle<R>, icon: Rect) {
     let (Some(panel), Some(item)) = (app.get_webview_window(PANEL), app.try_state::<Item>()) else {
         return;
     };
-    // A click on the item can take focus from the panel before the click
-    // itself arrives, and then the panel has already been put away.
-    let dismissed = item
-        .dismissed
-        .lock()
-        .expect("never poisoned")
-        .is_some_and(|at| at.elapsed() < Duration::from_millis(300));
     if panel.is_visible().unwrap_or(false) {
         let _ = panel.hide();
         return;
     }
-    if dismissed {
+    // A click on the item can take focus from the panel before the click
+    // itself arrives, and then the panel has already been put away.
+    let dismissed = *item
+        .dismissed
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if dismissed.is_some_and(|at| at.elapsed() < Duration::from_millis(300)) {
         return;
     }
     // The item reports where it is in physical pixels. The panel goes under
