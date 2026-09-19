@@ -426,3 +426,30 @@ test("new work found keeps an empty result on screen while it reads again", asyn
   await pendingRead(page, 0);
   await expect(page.getByText("No sessions match.")).toBeVisible();
 });
+
+test("the arrow keys move from the search box through the rows and back", async ({ page }) => {
+  await page.goto("/sessions");
+  await settle(page, "get_status", status());
+  await settle(
+    page,
+    "list_sessions",
+    sessionPage([session("codex:ses_a", "First"), session("codex:ses_b", "Second")]),
+  );
+
+  const search = page.getByLabel("Search sessions");
+  await search.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("link", { name: "First", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("link", { name: "Second", exact: true })).toBeFocused();
+  // From a row's project link too, the arrows move by row.
+  await page.getByRole("link", { name: "demo", exact: true }).last().focus();
+  await page.keyboard.press("ArrowUp");
+  await expect(page.getByRole("link", { name: "First", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(search).toBeFocused();
+
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/sessions\/codex:ses_a$/);
+});

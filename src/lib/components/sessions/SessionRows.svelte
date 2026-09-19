@@ -9,7 +9,8 @@
    * Models page.
    *
    * Each row opens its session, and its project or model narrows the list to
-   * the sessions that share it.
+   * the sessions that share it. The arrow keys move between rows from anything
+   * in one, so the list reads from the keyboard as a native one does.
    */
   import { resolve } from "$app/paths";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
@@ -37,9 +38,43 @@
     projectHref: (cwd: string) => string;
     /** Where the list narrowed to one model is. */
     modelHref: (model: string) => string;
+    /** Called when the up arrow is pressed on the first row. */
+    onabove?: () => void;
   }
 
-  let { sessions, sort, now, onsort, projectHref, modelHref }: Props = $props();
+  let { sessions, sort, now, onsort, projectHref, modelHref, onabove }: Props = $props();
+
+  let list = $state<HTMLUListElement>();
+
+  /** Each row's own link, in order. */
+  function rows(): HTMLAnchorElement[] {
+    return list ? [...list.querySelectorAll<HTMLAnchorElement>("a[data-row]")] : [];
+  }
+
+  /** Put focus on the first row, answering whether there was one. */
+  export function focusFirst(): boolean {
+    const first = rows()[0];
+    first?.focus();
+    return first !== undefined;
+  }
+
+  /** Move focus a row up or down with the arrow keys, from whatever in a row has it. */
+  function arrows(node: HTMLElement) {
+    function step(event: KeyboardEvent) {
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const links = rows();
+      const row = (event.target as Element).closest("li");
+      const at = links.findIndex((link) => link.closest("li") === row);
+      if (at === -1) return;
+      event.preventDefault();
+      const next = at + (event.key === "ArrowDown" ? 1 : -1);
+      if (next < 0) onabove?.();
+      else links[next]?.focus();
+    }
+    node.addEventListener("keydown", step);
+    return { destroy: () => node.removeEventListener("keydown", step) };
+  }
 
   /** How recently a session must have been active to count as still going. */
   const LIVE = 2 * 60_000;
@@ -90,7 +125,7 @@
   />
 </div>
 
-<ul aria-label="Sessions">
+<ul aria-label="Sessions" bind:this={list} use:arrows>
   {#each sessions as session (session.id)}
     {@const live = now.getTime() - session.updatedAt < LIVE}
     {@const [main, ...others] = session.models}
@@ -107,6 +142,7 @@
             : ''}"
           href={resolve("/sessions/[id]", { id: session.id })}
           title={session.title ?? undefined}
+          data-row
         >
           {sessionLabel(session)}
         </a>

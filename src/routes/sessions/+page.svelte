@@ -105,6 +105,8 @@
 
   /** What is in the search box; it reaches the address once typing settles. */
   let search = $state("");
+  let searchBox = $state<HTMLInputElement>();
+  let rows = $state<ReturnType<typeof SessionRows>>();
 
   let settling: ReturnType<typeof setTimeout> | undefined;
 
@@ -241,7 +243,12 @@
       placeholder="Search sessions, projects, or models…"
       aria-label="Search sessions"
       bind:value={search}
+      bind:this={searchBox}
       oninput={scheduleSearch}
+      onkeydown={(event) => {
+        // The down arrow carries on from the search into the rows it found.
+        if (event.key === "ArrowDown" && rows?.focusFirst()) event.preventDefault();
+      }}
     />
   </div>
   <Segmented
@@ -333,12 +340,14 @@
 {:else}
   <div class="mt-4" aria-busy={list.phase === "updating"}>
     <SessionRows
+      bind:this={rows}
       sessions={list.sessions}
       {sort}
       now={clock.now}
       onsort={toggleSort}
       projectHref={(cwd) => withParams(page.url, { project: cwd })}
       modelHref={(model) => withParams(page.url, { model })}
+      onabove={() => searchBox?.focus()}
     />
   </div>
 
