@@ -4,6 +4,7 @@
   import { page } from "$app/state";
   import Sidebar from "#lib/components/sidebar/Sidebar.svelte";
   import { onCommand, onOpen } from "#lib/api/backend.ts";
+  import { pathOf } from "#lib/address.ts";
   import { Engine, setEngine } from "#lib/state/engine.svelte.ts";
   import { Clock, setClock } from "#lib/state/clock.svelte.ts";
   import { Commands, setCommands } from "#lib/commands.ts";
@@ -25,7 +26,7 @@
   /** Show a destination, focusing an element there when it names one, as `/sessions#search` does. */
   async function show(path: string) {
     const [route = "/", focus] = path.split("#");
-    if (route !== page.url.pathname) await goto(route);
+    if (route !== pathOf(page.url)) await goto(route);
     if (focus) document.getElementById(focus)?.focus();
   }
 

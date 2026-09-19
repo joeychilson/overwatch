@@ -15,6 +15,14 @@ export interface Ordering<K extends string> {
   descending: boolean;
 }
 
+/**
+ * The path of an address, which is empty at the root of the desktop app:
+ * `tauri://localhost` has a scheme without special rules, so it has no `/`.
+ */
+export function pathOf(url: Pick<URL, "pathname">): string {
+  return url.pathname || "/";
+}
+
 /** An address with some parameters set, and those given as null taken out. */
 export function withParams(
   url: Pick<URL, "pathname" | "search">,
@@ -26,7 +34,8 @@ export function withParams(
     else params.set(name, value);
   }
   const query = params.toString();
-  return query === "" ? url.pathname : `${url.pathname}?${query}`;
+  // Never an empty address, which would name the current page, query and all.
+  return query === "" ? pathOf(url) : `${pathOf(url)}?${query}`;
 }
 
 /**
