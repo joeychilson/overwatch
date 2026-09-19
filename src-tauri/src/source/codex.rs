@@ -11,76 +11,68 @@
 
 use std::path::{Path, PathBuf};
 
+use memchr::memmem;
 use serde::Deserialize;
 use serde_json::Value;
+use serde_json::value::RawValue;
 
+use super::{
+    Conversation, Summary, Tally, Unit, lines, pieces, read_all, session, title_of, unit, walk,
+};
 use crate::error::Result;
 use crate::price;
 use crate::session::{Agent, Session, Speaker, Tokens, ToolCall, Turn};
-use crate::source::{
-    Conversation, Summary, Tally, Unit, contains, lines, pieces, read_all, title_of, unit, walk,
-};
+use crate::timestamp::parse_rfc3339;
 
 /// An envelope line.
 ///
 /// The payload stays unparsed until the record's kind says it is wanted, which
-/// is what keeps a 336 MB rollout from being turned into a tree of `Value`s
-/// that is then thrown away.
-#[derive(Deserialize)]
+/// keeps a 336 MB rollout from becoming a tree of `Value`s that is then thrown
+/// away.
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Line<'a> {
-    #[serde(rename = "type", default)]
+    #[serde(rename = "type")]
     kind: &'a str,
-    #[serde(default)]
     timestamp: Option<&'a str>,
     /// The line's place in its thread, counted on across continuations.
-    #[serde(default)]
     ordinal: Option<i64>,
-    #[serde(default, borrow)]
-    payload: Option<&'a serde_json::value::RawValue>,
+    #[serde(borrow)]
+    payload: Option<&'a RawValue>,
 }
 
 /// The opening record of a rollout.
 #[derive(Deserialize, Default)]
+#[serde(default)]
 struct Meta {
-    #[serde(default)]
     id: Option<String>,
-    #[serde(default)]
     session_id: Option<String>,
-    #[serde(default)]
     cwd: Option<String>,
-    #[serde(default)]
     timestamp: Option<String>,
     /// `"vscode"` or another originator for work a person started; an object
     /// with a `subagent` key for a run Codex spawned for itself.
-    #[serde(default)]
     source: Value,
-    #[serde(default)]
     thread_source: Option<String>,
     /// Where in its thread a continuing rollout picks up.
-    #[serde(default)]
     history_base: Option<HistoryBase>,
 }
 
 /// The point a continuation picks up from: its thread's lines before
 /// `end_ordinal_exclusive`.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct HistoryBase {
-    #[serde(default)]
     end_ordinal_exclusive: i64,
 }
 
 /// A thread's running usage, as a `token_count` record reports it.
 #[derive(Deserialize, Default)]
+#[serde(default)]
 struct TotalUsage {
-    #[serde(default)]
     input_tokens: i64,
-    #[serde(default)]
     cached_input_tokens: i64,
-    #[serde(default)]
     cache_write_input_tokens: i64,
-    #[serde(default)]
     output_tokens: i64,
-    #[serde(default)]
     total_tokens: i64,
 }
 
@@ -88,132 +80,114 @@ impl TotalUsage {
     /// What the running total grew by since `before`, or all of it when the
     /// count started again from zero.
     fn after(&self, before: &TotalUsage) -> Tokens {
-        let zero = TotalUsage::default();
-        let before = if self.total_tokens < before.total_tokens {
-            &zero
-        } else {
-            before
+        let restarted = self.total_tokens < before.total_tokens;
+        let grew = |now: i64, then: i64| {
+            if restarted {
+                now
+            } else {
+                now.saturating_sub(then)
+            }
         };
-        let cache_read = self.cached_input_tokens - before.cached_input_tokens;
+        let cache_read = grew(self.cached_input_tokens, before.cached_input_tokens);
         Tokens {
             // Codex counts cached input inside its input; here it is apart.
-            input: self.input_tokens - before.input_tokens - cache_read,
-            output: self.output_tokens - before.output_tokens,
+            input: grew(self.input_tokens, before.input_tokens).saturating_sub(cache_read),
+            output: grew(self.output_tokens, before.output_tokens),
             cache_read,
-            cache_write: self.cache_write_input_tokens - before.cache_write_input_tokens,
+            cache_write: grew(
+                self.cache_write_input_tokens,
+                before.cache_write_input_tokens,
+            ),
             // Codex counts reasoning inside its output.
             reasoning: 0,
-            total: self.total_tokens - before.total_tokens,
+            total: grew(self.total_tokens, before.total_tokens),
         }
     }
 }
 
-/// The fields of a `response_item` a conversation actually shows.
+/// The fields of a `response_item` a conversation shows.
 ///
-/// Deliberately typed rather than a `serde_json::Value`: a rollout carries
-/// megabytes of `encrypted_content` and tool output that never reaches the
-/// screen, and naming only the wanted fields lets serde skip the rest without
-/// allocating it. On the largest rollout here that is the difference between
-/// half a second and a few tens of milliseconds.
-#[derive(Deserialize)]
+/// Typed rather than a `Value`: a rollout carries megabytes of
+/// `encrypted_content` and tool output that never reaches the screen, and
+/// naming only the wanted fields lets serde skip the rest without allocating
+/// it. On the largest rollout here that is the difference between half a
+/// second and a few tens of milliseconds.
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Item<'a> {
-    #[serde(rename = "type", default)]
+    #[serde(rename = "type")]
     kind: &'a str,
-    #[serde(default)]
     role: Option<&'a str>,
     // Text is owned: serde cannot borrow a string with an escape in it, and
     // nearly every message has a line break.
-    #[serde(default)]
     content: Option<Vec<Block>>,
-    #[serde(default)]
     summary: Option<Vec<Block>>,
-    #[serde(default)]
     message: Option<String>,
-    #[serde(default)]
     name: Option<&'a str>,
-    #[serde(default)]
     namespace: Option<&'a str>,
-    #[serde(default)]
     call_id: Option<&'a str>,
-    #[serde(default)]
     input: Option<String>,
-    #[serde(default)]
     arguments: Option<String>,
-    #[serde(default)]
     output: Option<Output>,
 }
 
 /// An `event_msg` payload, as far as summaries and conversations read it.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Event<'a> {
-    #[serde(rename = "type", default)]
+    #[serde(rename = "type")]
     kind: &'a str,
-    #[serde(default)]
     info: Option<Info>,
-    #[serde(default)]
     thread_settings: Option<Applied>,
 }
 
 /// What a `token_count` record carries: the thread's running total, and what
 /// the latest request used on its own.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Info {
-    #[serde(default)]
     total_token_usage: Option<TotalUsage>,
-    #[serde(default)]
     last_token_usage: Option<TotalUsage>,
 }
 
 /// The model thread settings or a turn's context put in force.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Applied {
-    #[serde(default)]
     model: Option<String>,
 }
 
 /// One block of a content or summary list.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Block {
-    #[serde(default)]
     text: Option<String>,
 }
 
-/// A tool's output, which is text in one shape and blocks in another.
+/// A tool's output: a string from `function_call_output`, blocks from
+/// `custom_tool_call_output`.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum Output {
-    /// A plain string, as `function_call_output` writes it.
     Text(String),
-    /// Blocks, as `custom_tool_call_output` writes them.
-    Blocks(Vec<OutputBlock>),
-}
-
-/// One block of a tool's output.
-#[derive(Deserialize)]
-struct OutputBlock {
-    #[serde(default)]
-    text: String,
+    Blocks(Vec<Block>),
 }
 
 impl Output {
-    /// The output as one piece of text.
+    /// The output as one piece of text, a block to a line.
     fn text(self) -> String {
         match self {
             Output::Text(text) => text,
-            Output::Blocks(blocks) => blocks
-                .into_iter()
-                .map(|block| block.text)
-                .collect::<Vec<_>>()
-                .join("\n"),
+            Output::Blocks(blocks) => joined(Some(blocks)),
         }
     }
 }
 
-/// Join the text of a block list.
+/// The text of a block list, a block to a line.
 fn joined(blocks: Option<Vec<Block>>) -> String {
     blocks
-        .unwrap_or_default()
         .into_iter()
+        .flatten()
         .filter_map(|block| block.text)
         .collect::<Vec<_>>()
         .join("\n")
@@ -221,25 +195,36 @@ fn joined(blocks: Option<Vec<Block>>) -> String {
 
 /// How much of a line to inspect when deciding whether to parse it.
 ///
-/// A rollout envelope writes `timestamp`, `ordinal`, and `type` before its
-/// payload, and the payload's own `type` first, which puts both within the
-/// first hundred bytes or so; this leaves generous room for that without
-/// scanning the payload behind it.
+/// An envelope writes `timestamp`, `ordinal` and `type` before its payload, and
+/// the payload its own `type` first, which puts both within the first hundred
+/// bytes or so.
 const TYPE_WINDOW: usize = 256;
 
-/// Every rollout, current and archived.
-pub fn discover(root: &Path) -> Vec<Unit> {
+/// Whether the head of a line names any of `kinds`, each quoted as JSON writes
+/// it, so that a line of no interest is passed over without being parsed.
+fn heads(line: &[u8], kinds: &[&[u8]]) -> bool {
+    let head = &line[..line.len().min(TYPE_WINDOW)];
+    kinds.iter().any(|kind| memmem::find(head, kind).is_some())
+}
+
+/// Every rollout under a Codex home, dated or archived.
+pub(super) fn every_rollout(home: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    walk(&root.join("sessions"), "jsonl", &mut paths);
-    walk(&root.join("archived_sessions"), "jsonl", &mut paths);
+    walk(&home.join("sessions"), &mut paths);
+    walk(&home.join("archived_sessions"), &mut paths);
     paths
+}
+
+/// Every rollout, current and archived.
+pub(super) fn discover(root: &Path) -> Vec<Unit> {
+    every_rollout(root)
         .into_iter()
         .filter_map(|path| unit(Agent::Codex, path))
         .collect()
 }
 
 /// Summarize a rollout, counting each turn's usage when it happened.
-pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
+pub(super) fn summarize(source: &Unit) -> Result<Vec<Summary>> {
     let body = read_all(&source.path)?;
     let mut meta = None;
     let mut started_at = None;
@@ -253,28 +238,34 @@ pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
     for line in lines(&body) {
         last = line;
         // Nearly all of a long rollout is conversation, which a summary needs
-        // only until it has a title, so the rest is passed over unparsed.
-        let head = &line[..line.len().min(TYPE_WINDOW)];
-        let wanted = contains(head, b"\"token_count\"")
-            || contains(head, b"\"thread_settings_applied\"")
-            || contains(head, b"\"turn_context\"")
-            || contains(head, b"\"session_meta\"")
-            || (title.is_none() && contains(head, b"\"response_item\""));
+        // only until it has a title.
+        let wanted = heads(
+            line,
+            &[
+                b"\"token_count\"",
+                b"\"thread_settings_applied\"",
+                b"\"turn_context\"",
+                b"\"session_meta\"",
+            ],
+        ) || (title.is_none() && heads(line, &[b"\"response_item\""]));
         if !wanted {
             continue;
         }
-        let Ok(envelope) = serde_json::from_slice::<Line>(line) else {
+        let Ok(Line {
+            kind,
+            timestamp,
+            payload: Some(payload),
+            ..
+        }) = serde_json::from_slice::<Line>(line)
+        else {
             continue;
         };
-        let Some(payload) = envelope.payload else {
-            continue;
-        };
-        if let Some(at) = envelope.timestamp.and_then(crate::timestamp::parse_rfc3339) {
+        if let Some(at) = timestamp.and_then(parse_rfc3339) {
             started_at.get_or_insert(at);
             updated_at = Some(at);
         }
 
-        match envelope.kind {
+        match kind {
             // The first is the rollout's own; a subagent's rollout carries its
             // parent's after it.
             "session_meta" if meta.is_none() => {
@@ -303,13 +294,8 @@ pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
                 // The latest request's input is the context its tier is set by.
                 let context = last_token_usage.map_or(0, |last| last.input_tokens);
                 let cost = price::rates("openai", &model, context).map(|rates| rates.cost(&used));
-                tally.add(
-                    updated_at.unwrap_or(source.mtime),
-                    "openai",
-                    &model,
-                    used,
-                    cost,
-                );
+                let at = updated_at.unwrap_or(source.mtime);
+                tally.add(at, "openai", &model, used, cost);
                 counted = usage;
             }
             "response_item" => {
@@ -324,95 +310,57 @@ pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
         }
     }
 
-    let mut meta = meta.unwrap_or_default();
-    let Some(native_id) = meta.id.take().or(meta.session_id.take()) else {
+    let Meta {
+        id,
+        session_id,
+        cwd,
+        timestamp,
+        source: origin,
+        thread_source,
+        ..
+    } = meta.unwrap_or_default();
+    let Some(native_id) = id.or(session_id) else {
         return Ok(Vec::new());
     };
+    // A run Codex started for itself names what spawned it; work a person
+    // started names only its originator, such as "vscode".
+    let subagent = origin.get("subagent");
+    let role = subagent.and_then(|subagent| thread_source.or_else(|| subagent_kind(subagent)));
 
-    // A run Codex started for itself records what spawned it; work a person
-    // started records only its originator, such as "vscode".
-    let spawned = meta.source.get("subagent").is_some();
-    let role = if spawned {
-        meta.thread_source
-            .take()
-            .or_else(|| subagent_kind(&meta.source))
-    } else {
-        None
-    };
-
-    let started_at = meta
-        .timestamp
+    let started_at = timestamp
         .as_deref()
-        .and_then(crate::timestamp::parse_rfc3339)
+        .and_then(parse_rfc3339)
         .or(started_at)
         .unwrap_or(source.mtime);
     // The last line is the latest activity, whatever kind of record it is.
     let updated_at = serde_json::from_slice::<Line>(last)
         .ok()
         .and_then(|line| line.timestamp)
-        .and_then(crate::timestamp::parse_rfc3339)
+        .and_then(parse_rfc3339)
         .or(updated_at)
         .unwrap_or(source.mtime);
 
-    let session = Session {
-        id: format!("{}:{native_id}", Agent::Codex.key()),
-        agent: Agent::Codex,
-        native_id,
+    Ok(vec![tally.summary(Session {
         title,
-        cwd: meta.cwd,
-        branch: None,
-        started_at,
-        updated_at,
-        spawned,
+        cwd,
+        spawned: subagent.is_some(),
         role,
-        models: Vec::new(),
-        tokens: Tokens::default(),
-        cost_usd: None,
-        messages: None,
-        tools: None,
-        present: true,
-    };
-    Ok(vec![tally.summary(session)])
+        ..session(Agent::Codex, native_id, started_at, updated_at)
+    })])
 }
 
-/// The kind of subagent a `source` object names, such as `guardian`.
-fn subagent_kind(source: &Value) -> Option<String> {
-    let subagent = source.get("subagent")?;
-    if let Some(other) = subagent.get("other").and_then(Value::as_str) {
-        return Some(other.to_owned());
+/// The kind of subagent a spawned run's `source.subagent` names, such as
+/// `guardian` or `thread_spawn`.
+fn subagent_kind(subagent: &Value) -> Option<String> {
+    match subagent["other"].as_str() {
+        Some(other) => Some(other.to_owned()),
+        None => subagent.as_object()?.keys().next().cloned(),
     }
-    subagent
-        .as_object()
-        .and_then(|fields| fields.keys().next().cloned())
-}
-
-/// Every rollout of a thread, oldest first: the files that carry its id in
-/// their names, dated or archived.
-pub fn rollouts(path: &Path, native_id: &str) -> Vec<PathBuf> {
-    let home = path
-        .ancestors()
-        .find(|directory| {
-            directory.ends_with("sessions") || directory.ends_with("archived_sessions")
-        })
-        .and_then(Path::parent);
-    let every = match home {
-        Some(home) if !native_id.is_empty() => every_rollout(home),
-        _ => Vec::new(),
-    };
-    of_thread(&every, path, native_id)
-}
-
-/// Every rollout under a Codex home, dated or archived.
-pub fn every_rollout(home: &Path) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    walk(&home.join("sessions"), "jsonl", &mut paths);
-    walk(&home.join("archived_sessions"), "jsonl", &mut paths);
-    paths
 }
 
 /// A thread's rollouts among `every`, oldest first: those that carry its id in
 /// their names, or the file at `path` alone when none does.
-pub fn of_thread(every: &[PathBuf], path: &Path, native_id: &str) -> Vec<PathBuf> {
+pub(super) fn of_thread(every: &[PathBuf], path: &Path, native_id: &str) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = if native_id.is_empty() {
         Vec::new()
     } else {
@@ -434,37 +382,45 @@ pub fn of_thread(every: &[PathBuf], path: &Path, native_id: &str) -> Vec<PathBuf
     paths
 }
 
-/// Read a thread's conversation across every rollout it spans, pairing both
-/// kinds of tool call.
-pub fn transcript(source: &Unit, native_id: &str) -> Result<Vec<Turn>> {
-    transcript_of(&rollouts(&source.path, native_id))
+/// Read a thread's conversation across every rollout it spans.
+pub(super) fn transcript(source: &Unit, native_id: &str) -> Result<Vec<Turn>> {
+    // The Codex home holds the folders every rollout is filed in.
+    let home = source
+        .path
+        .ancestors()
+        .find(|folder| folder.ends_with("sessions") || folder.ends_with("archived_sessions"))
+        .and_then(Path::parent);
+    let every = home.map(every_rollout).unwrap_or_default();
+    transcript_of(&of_thread(&every, &source.path, native_id))
 }
 
-/// Read a thread's conversation from its rollouts, oldest first.
-pub fn transcript_of(rollouts: &[PathBuf]) -> Result<Vec<Turn>> {
+/// Read a thread's conversation from its rollouts, oldest first, pairing both
+/// kinds of tool call.
+pub(super) fn transcript_of(rollouts: &[PathBuf]) -> Result<Vec<Turn>> {
     let bodies = rollouts
         .iter()
         .map(|path| read_all(path))
         .collect::<Result<Vec<_>>>()?;
 
     // The lines a conversation shows, in the thread's order. A continuation
-    // picks up where its `history_base` says the thread stood, so whatever came
-    // after that point was abandoned, as by a rewind. A later rollout with no
-    // base starts the conversation over, and continues only itself.
+    // picks up where its `history_base` says the thread stood, so whatever the
+    // lineage wrote from there on was abandoned, as by a rewind. A later
+    // rollout with no base starts the conversation over.
     let mut thread: Vec<Line> = Vec::new();
     let mut lineage = 0;
     for (position, body) in bodies.iter().enumerate() {
         let mut opened = position == 0;
         for line in lines(body) {
-            // Most lines of a rollout are token counts, turn contexts and world
-            // state, none of which a conversation shows. The envelope writes
-            // its `type` before its payload, so the decision is made from the
-            // head of the line without touching the megabytes that may follow.
-            let head = &line[..line.len().min(TYPE_WINDOW)];
-            if !(contains(head, b"\"response_item\"")
-                || contains(head, b"\"session_meta\"")
-                || contains(head, b"\"event_msg\""))
-            {
+            // Most lines are token counts, turn contexts and world state, none
+            // of which a conversation shows.
+            if !heads(
+                line,
+                &[
+                    b"\"response_item\"",
+                    b"\"session_meta\"",
+                    b"\"thread_settings_applied\"",
+                ],
+            ) {
                 continue;
             }
             let Ok(envelope) = serde_json::from_slice::<Line>(line) else {
@@ -475,23 +431,26 @@ pub fn transcript_of(rollouts: &[PathBuf]) -> Result<Vec<Turn>> {
                 continue;
             }
             // Only a rollout's own opening record says where it picks up.
-            if !opened {
-                let base = envelope
-                    .payload
-                    .and_then(|payload| serde_json::from_str::<Meta>(payload.get()).ok())
-                    .and_then(|meta| meta.history_base);
-                match base {
-                    Some(base) => {
-                        let end = Some(base.end_ordinal_exclusive);
-                        let cut = thread[lineage..]
-                            .iter()
-                            .position(|kept| kept.ordinal >= end);
-                        thread.truncate(cut.map_or(thread.len(), |at| lineage + at));
-                    }
-                    None => lineage = thread.len(),
-                }
+            if opened {
+                continue;
             }
             opened = true;
+            let base = envelope
+                .payload
+                .and_then(|payload| serde_json::from_str::<Meta>(payload.get()).ok())
+                .and_then(|meta| meta.history_base);
+            match base {
+                Some(base) => {
+                    let end = base.end_ordinal_exclusive;
+                    if let Some(cut) = thread[lineage..]
+                        .iter()
+                        .position(|kept| kept.ordinal.is_some_and(|ordinal| ordinal >= end))
+                    {
+                        thread.truncate(lineage + cut);
+                    }
+                }
+                None => lineage = thread.len(),
+            }
         }
     }
 
@@ -502,32 +461,33 @@ pub fn transcript_of(rollouts: &[PathBuf]) -> Result<Vec<Turn>> {
         let Some(payload) = envelope.payload else {
             continue;
         };
-        let at = envelope.timestamp.and_then(crate::timestamp::parse_rfc3339);
-
-        match envelope.kind {
-            "event_msg" => {
-                if let Ok(event) = serde_json::from_str::<Event>(payload.get())
-                    && event.kind == "thread_settings_applied"
-                {
-                    model = event.thread_settings.and_then(|applied| applied.model);
-                }
-                continue;
+        if envelope.kind == "event_msg" {
+            if let Ok(event) = serde_json::from_str::<Event>(payload.get())
+                && event.kind == "thread_settings_applied"
+            {
+                model = event.thread_settings.and_then(|applied| applied.model);
             }
-            "response_item" => {}
-            _ => continue,
+            continue;
         }
-
+        if envelope.kind != "response_item" {
+            continue;
+        }
         let Ok(item) = serde_json::from_str::<Item>(payload.get()) else {
             continue;
         };
+        let at = envelope.timestamp.and_then(parse_rfc3339);
         let model = model.as_deref();
         match item.kind {
             "message" => match item.role {
                 // What Codex sends as the person's arrives as blocks of their
                 // message, beside what they typed.
                 Some("user") => {
-                    let blocks = item.content.into_iter().flatten();
-                    for text in blocks.filter_map(|block| block.text) {
+                    for text in item
+                        .content
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|block| block.text)
+                    {
                         conversation.prompt(at, &text);
                     }
                 }
@@ -557,13 +517,11 @@ pub fn transcript_of(rollouts: &[PathBuf]) -> Result<Vec<Turn>> {
                 conversation.call(item.call_id, at, model, tool);
             }
             "custom_tool_call_output" | "function_call_output" => {
-                // Codex records no status on an output and no reliable failure
-                // signal anywhere else: every one of the 29,152 outputs in the
-                // reference corpus has `status: null`, and `exit_code` appears
-                // in twenty of them. Guessing from the output text would put a
-                // "Failed" badge on successful calls whose output merely
-                // mentions one, so this reports no failure and lets the output
-                // speak for itself.
+                // Codex records no failure signal: every one of the 29,152
+                // outputs in the reference corpus has `status: null`, and
+                // `exit_code` appears in twenty. Guessing from the text would
+                // mark successful calls whose output mentions a failure, so
+                // none is marked and the output speaks for itself.
                 if let Some(call_id) = item.call_id {
                     let output = item.output.map(Output::text).unwrap_or_default();
                     conversation.answer(call_id, output, false);
@@ -578,15 +536,10 @@ pub fn transcript_of(rollouts: &[PathBuf]) -> Result<Vec<Turn>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use crate::source::tests::{journal, summarized, transcribed};
 
-    fn fixture(contents: &str) -> (tempfile::TempDir, Unit) {
-        let directory = tempfile::tempdir().expect("temp dir");
-        let path = directory.path().join("rollout.jsonl");
-        let mut file = std::fs::File::create(&path).expect("creates");
-        file.write_all(contents.as_bytes()).expect("writes");
-        let source = unit(Agent::Codex, path).expect("unit");
-        (directory, source)
+    fn summary(contents: &str) -> Summary {
+        summarized(Agent::Codex, contents)
     }
 
     /// Shaped after a real rollout: two turns, each closed by a `token_count`.
@@ -605,8 +558,7 @@ mod tests {
 
     #[test]
     fn each_turn_counts_what_the_running_total_grew_by_when_it_happened() {
-        let (_directory, source) = fixture(ROLLOUT);
-        let summary = summarize(&source).expect("summarizes").remove(0);
+        let summary = summary(ROLLOUT);
 
         // Adding the running totals up would count the first turn twice.
         let tokens = summary.tokens();
@@ -631,9 +583,7 @@ mod tests {
 
     #[test]
     fn each_turn_is_priced_in_the_tier_its_latest_request_reached() {
-        let (_directory, source) = fixture(ROLLOUT);
-        let summary = summarize(&source).expect("summarizes").remove(0);
-        let costs: Vec<_> = summary
+        let costs: Vec<_> = summary(ROLLOUT)
             .usage
             .iter()
             .map(|usage| usage.cost_usd.expect("priced"))
@@ -649,7 +599,7 @@ mod tests {
 
     #[test]
     fn a_resumed_thread_counts_both_runs_each_under_its_own_model() {
-        let resumed = concat!(
+        let summary = summary(concat!(
             r#"{"timestamp":"2026-09-03T07:20:02.227Z","type":"session_meta","payload":{"id":"r-1"}}"#,
             "\n",
             r#"{"timestamp":"2026-09-03T07:20:03.000Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model":"gpt-5-codex"}}}"#,
@@ -663,9 +613,7 @@ mod tests {
             "\n",
             r#"{"timestamp":"2026-09-03T08:32:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":200}}}}"#,
             "\n",
-        );
-        let (_directory, source) = fixture(resumed);
-        let summary = summarize(&source).expect("summarizes").remove(0);
+        ));
 
         // Keeping only the last total would say 200.
         assert_eq!(summary.models(), [("gpt-5-codex", 500), ("gpt-5.5", 200)]);
@@ -675,8 +623,7 @@ mod tests {
 
     #[test]
     fn reads_identity_title_and_model() {
-        let (_directory, source) = fixture(ROLLOUT);
-        let summary = summarize(&source).expect("summarizes").remove(0);
+        let summary = summary(ROLLOUT);
         let session = &summary.session;
 
         // The rollout id, not the parent conversation id, identifies the file.
@@ -692,16 +639,15 @@ mod tests {
 
     #[test]
     fn a_spawned_run_is_marked_with_what_it_was_for() {
-        let spawned = concat!(
+        let session = summary(concat!(
             r#"{"timestamp":"2026-09-03T07:20:02.227Z","type":"session_meta","payload":{"id":"sub-1","cwd":"/w","source":{"subagent":{"other":"guardian"}},"thread_source":"guardian_review"}}"#,
             "\n",
             // The parent's record, which a spawned run's rollout carries after
             // its own.
             r#"{"timestamp":"2026-09-03T07:20:02.300Z","type":"session_meta","payload":{"id":"parent-1","source":"cli"}}"#,
             "\n",
-        );
-        let (_directory, source) = fixture(spawned);
-        let session = summarize(&source).expect("summarizes").remove(0).session;
+        ))
+        .session;
         assert_eq!(session.id, "codex:sub-1");
         assert!(session.spawned);
         assert_eq!(session.role.as_deref(), Some("guardian_review"));
@@ -709,44 +655,49 @@ mod tests {
 
     #[test]
     fn a_spawned_run_without_a_thread_source_names_its_subagent() {
-        let spawned = concat!(
+        let session = summary(concat!(
             r#"{"timestamp":"2026-09-03T07:20:02.227Z","type":"session_meta","payload":{"id":"sub-2","source":{"subagent":{"thread_spawn":{"parent_thread_id":"01a0934d"}}}}}"#,
             "\n",
-        );
-        let (_directory, source) = fixture(spawned);
-        let session = summarize(&source).expect("summarizes").remove(0).session;
+        ))
+        .session;
         assert!(session.spawned);
         assert_eq!(session.role.as_deref(), Some("thread_spawn"));
     }
 
     #[test]
     fn a_rollout_with_no_meta_yields_nothing() {
-        let (_directory, source) = fixture("{\"type\":\"event_msg\",\"payload\":{}}\n");
+        let (_directory, source) =
+            journal(Agent::Codex, "{\"type\":\"event_msg\",\"payload\":{}}\n");
         assert!(summarize(&source).expect("summarizes").is_empty());
     }
 
     #[test]
     fn a_transcript_pairs_both_kinds_of_tool_call() {
-        let conversation = concat!(
-            r#"{"timestamp":"2026-09-03T07:20:02.227Z","type":"session_meta","payload":{"id":"t-1"}}"#,
-            "\n",
-            // Escaped text, as nearly every real message has, which must be
-            // read rather than dropped.
-            r#"{"timestamp":"2026-09-03T07:20:04.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Do it,\nand say \"done\""}]}}"#,
-            "\n",
-            r#"{"timestamp":"2026-09-03T07:20:05.000Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"Planning."}],"encrypted_content":"opaque"}}"#,
-            "\n",
-            r#"{"timestamp":"2026-09-03T07:20:06.000Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_A","name":"exec","input":"pwd"}}"#,
-            "\n",
-            r#"{"timestamp":"2026-09-03T07:20:07.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_A","output":[{"type":"input_text","text":"/Users/me"}]}}"#,
-            "\n",
-            r#"{"timestamp":"2026-09-03T07:20:08.000Z","type":"response_item","payload":{"type":"function_call","call_id":"call_B","namespace":"collaboration","name":"spawn_agent","arguments":"{\"task\":\"x\"}"}}"#,
-            "\n",
-            r#"{"timestamp":"2026-09-03T07:20:09.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_B","output":"{\"ok\":true}"}}"#,
-            "\n",
+        let read = transcribed(
+            Agent::Codex,
+            concat!(
+                r#"{"timestamp":"2026-09-03T07:20:02.227Z","type":"session_meta","payload":{"id":"t-1"}}"#,
+                "\n",
+                r#"{"timestamp":"2026-09-03T07:20:03.000Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model":"gpt-5.5"}}}"#,
+                "\n",
+                // Escaped text, as nearly every real message has, which must be
+                // read rather than dropped.
+                r#"{"timestamp":"2026-09-03T07:20:04.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Do it,\nand say \"done\""}]}}"#,
+                "\n",
+                r#"{"timestamp":"2026-09-03T07:20:05.000Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"Planning."}],"encrypted_content":"opaque"}}"#,
+                "\n",
+                r#"{"timestamp":"2026-09-03T07:20:06.000Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_A","name":"exec","input":"pwd"}}"#,
+                "\n",
+                r#"{"timestamp":"2026-09-03T07:20:06.500Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":10}}}}"#,
+                "\n",
+                r#"{"timestamp":"2026-09-03T07:20:07.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_A","output":[{"type":"input_text","text":"/Users/me"}]}}"#,
+                "\n",
+                r#"{"timestamp":"2026-09-03T07:20:08.000Z","type":"response_item","payload":{"type":"function_call","call_id":"call_B","namespace":"collaboration","name":"spawn_agent","arguments":"{\"task\":\"x\"}"}}"#,
+                "\n",
+                r#"{"timestamp":"2026-09-03T07:20:09.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_B","output":"{\"ok\":true}"}}"#,
+                "\n",
+            ),
         );
-        let (_directory, source) = fixture(conversation);
-        let read = crate::source::transcript(&source, "t-1").expect("reads");
 
         assert_eq!(read.tools, 2);
         assert_eq!(read.messages, 1);
@@ -760,11 +711,15 @@ mod tests {
                 Speaker::Tool
             ]
         );
-        // Only the readable summary of reasoning survives.
+        assert_eq!(read.turns[0].text, "Do it,\nand say \"done\"");
+        // Only the readable summary of reasoning survives, under the model the
+        // thread's settings put in force.
         assert_eq!(read.turns[1].text, "Planning.");
+        assert_eq!(read.turns[1].model.as_deref(), Some("gpt-5.5"));
 
         let exec = read.turns[2].tool.as_ref().expect("a tool call");
         assert_eq!(exec.name, "exec");
+        assert_eq!(exec.input, "pwd");
         assert_eq!(exec.output.as_deref(), Some("/Users/me"));
 
         let spawn = read.turns[3].tool.as_ref().expect("a tool call");
@@ -788,8 +743,7 @@ mod tests {
             r#"{"timestamp":"2026-09-03T07:20:07.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the parser"}]}}"#,
             "\n",
         );
-        let (_directory, source) = fixture(conversation);
-        let read = crate::source::transcript(&source, "d-1").expect("reads");
+        let read = transcribed(Agent::Codex, conversation);
         let speakers: Vec<_> = read.turns.iter().map(|turn| turn.speaker).collect();
         assert_eq!(
             speakers,
@@ -801,8 +755,10 @@ mod tests {
             ]
         );
         assert_eq!(read.messages, 1, "context is not a message exchanged");
-        let summary = summarize(&source).expect("summarizes").remove(0);
-        assert_eq!(summary.session.title.as_deref(), Some("Fix the parser"));
+        assert_eq!(
+            summary(conversation).session.title.as_deref(),
+            Some("Fix the parser")
+        );
     }
 
     #[test]

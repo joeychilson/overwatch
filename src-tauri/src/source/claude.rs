@@ -6,11 +6,10 @@
 //!
 //! A response is written one line per content block, and each line repeats the
 //! response's `usage` as it stood when that block was written, so a response is
-//! counted once, from its last line, and priced then. Claude Code's own
-//! `cost-state` is only a running total for the whole session, which says
-//! nothing about when or on which response the money went. An `ai-title`
-//! record holds a generated name, rewritten as the conversation develops, so
-//! the last one is the current title.
+//! counted once, from its last line. Claude Code's own `cost-state` is only a
+//! running total for the whole session, which cannot say when the money went.
+//! An `ai-title` record holds a generated name, rewritten as the conversation
+//! develops, so the last one is the current title.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -19,144 +18,130 @@ use serde::Deserialize;
 use serde_json::Value;
 use serde_json::value::RawValue;
 
-use crate::error::Result;
-use crate::price;
-use crate::session::{Agent, Session, Speaker, Tokens, ToolCall, Turn};
-use crate::source::{
-    Conversation, Summary, Tally, Unit, compact, lines, pieces, prompt_parts, read_all, title_of,
-    unit, walk,
+use super::{
+    Conversation, Summary, Tally, Unit, compact, lines, pieces, prompt_parts, rates, read_all,
+    session, sum, title_of, unit, walk,
 };
+use crate::error::Result;
+use crate::session::{Agent, Session, Speaker, Tokens, ToolCall, Turn};
+use crate::timestamp::parse_rfc3339;
 
 /// A record as the conversation reader sees it.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Record<'a> {
-    #[serde(rename = "type", default)]
+    #[serde(rename = "type")]
     kind: &'a str,
-    #[serde(default)]
     timestamp: Option<&'a str>,
-    #[serde(rename = "isMeta", default)]
+    #[serde(rename = "isMeta")]
     is_meta: bool,
-    #[serde(rename = "isCompactSummary", default)]
+    #[serde(rename = "isCompactSummary")]
     is_compact_summary: bool,
-    #[serde(default)]
     message: Option<Message>,
 }
 
 /// A message body, whose `content` is either plain text or a block list.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Message {
-    #[serde(default)]
     role: Option<String>,
-    #[serde(default)]
     model: Option<String>,
-    #[serde(default)]
     content: Value,
 }
 
-/// A record as a summary reads it.
-///
-/// Every field is optional, so an unfamiliar record deserializes without
-/// failing and contributes nothing, and message bodies stay unparsed.
-#[derive(Deserialize)]
+/// A record as a summary reads it: message bodies stay unparsed, and an
+/// unfamiliar record contributes nothing rather than failing.
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Entry<'a> {
-    #[serde(rename = "type", default)]
+    #[serde(rename = "type")]
     kind: &'a str,
-    #[serde(rename = "sessionId", default)]
+    #[serde(rename = "sessionId")]
     session_id: Option<&'a str>,
-    #[serde(rename = "agentId", default)]
+    #[serde(rename = "agentId")]
     agent_id: Option<&'a str>,
-    #[serde(default)]
     cwd: Option<String>,
-    #[serde(rename = "gitBranch", default)]
+    #[serde(rename = "gitBranch")]
     branch: Option<String>,
-    #[serde(default)]
     timestamp: Option<&'a str>,
-    #[serde(rename = "requestId", default)]
+    #[serde(rename = "requestId")]
     request_id: Option<&'a str>,
-    #[serde(rename = "aiTitle", default)]
+    #[serde(rename = "aiTitle")]
     ai_title: Option<String>,
-    #[serde(rename = "isMeta", default)]
+    #[serde(rename = "isMeta")]
     is_meta: bool,
-    #[serde(rename = "isCompactSummary", default)]
+    #[serde(rename = "isCompactSummary")]
     is_compact_summary: bool,
-    #[serde(rename = "isSidechain", default)]
+    #[serde(rename = "isSidechain")]
     is_sidechain: bool,
-    #[serde(default, borrow)]
+    #[serde(borrow)]
     message: Option<Reply<'a>>,
 }
 
 /// A message as a summary reads it.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Reply<'a> {
-    #[serde(default)]
     id: Option<&'a str>,
-    #[serde(default)]
     model: Option<&'a str>,
-    #[serde(default, borrow)]
+    #[serde(borrow)]
     content: Option<&'a RawValue>,
-    #[serde(default)]
     usage: Option<Usage>,
 }
 
 /// What one response used.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Usage {
-    #[serde(default)]
     input_tokens: i64,
-    #[serde(default)]
     output_tokens: i64,
-    #[serde(default)]
     cache_read_input_tokens: i64,
-    #[serde(default)]
     cache_creation_input_tokens: i64,
-    #[serde(default)]
     cache_creation: Option<Creation>,
 }
 
 /// How a response's cache writes divide by how long they are kept.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Creation {
-    #[serde(default)]
     ephemeral_1h_input_tokens: i64,
 }
 
 impl Usage {
-    /// The response's tokens. Thinking is counted inside the output, and not
-    /// reported apart.
-    fn tokens(&self) -> Tokens {
-        Tokens {
+    /// Count the response at `at`, priced at Anthropic's rates for `model`.
+    ///
+    /// Thinking is counted inside the output, and not reported apart. The
+    /// catalog prices cache writes kept for five minutes; Anthropic bills a
+    /// write kept for an hour at twice the input rate.
+    fn count(&self, tally: &mut Tally, at: i64, model: &str) {
+        let tokens = Tokens {
             input: self.input_tokens,
             output: self.output_tokens,
             cache_read: self.cache_read_input_tokens,
             cache_write: self.cache_creation_input_tokens,
             reasoning: 0,
-            total: self.input_tokens
-                + self.output_tokens
-                + self.cache_read_input_tokens
-                + self.cache_creation_input_tokens,
-        }
-    }
-
-    /// What the response cost at Anthropic's list prices for `model`.
-    ///
-    /// The catalog prices cache writes kept for five minutes; Anthropic bills a
-    /// write kept for an hour at twice the input rate.
-    fn cost(&self, model: &str) -> Option<f64> {
-        let tokens = self.tokens();
-        let context = tokens.input + tokens.cache_read + tokens.cache_write;
-        let rates = price::rates("anthropic", model, context)?;
+            total: sum([
+                self.input_tokens,
+                self.output_tokens,
+                self.cache_read_input_tokens,
+                self.cache_creation_input_tokens,
+            ]),
+        };
         let hour = self
             .cache_creation
             .as_ref()
             .map_or(0, |creation| creation.ephemeral_1h_input_tokens);
-        Some(rates.cost(&tokens) + hour as f64 * (2.0 * rates.input - rates.cache_write) / 1e6)
+        let cost = rates("anthropic", model, &tokens).map(|rates| {
+            rates.cost(&tokens) + hour as f64 * (2.0 * rates.input - rates.cache_write) / 1e6
+        });
+        tally.add(at, "anthropic", model, tokens, cost);
     }
 }
 
 /// Every session file under the projects directory.
-pub fn discover(root: &Path) -> Vec<Unit> {
+pub(super) fn discover(root: &Path) -> Vec<Unit> {
     let mut paths = Vec::new();
-    walk(root, "jsonl", &mut paths);
+    walk(root, &mut paths);
     paths
         .into_iter()
         .filter_map(|path| unit(Agent::ClaudeCode, path))
@@ -164,7 +149,7 @@ pub fn discover(root: &Path) -> Vec<Unit> {
 }
 
 /// Summarize a session, counting each response once.
-pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
+pub(super) fn summarize(source: &Unit) -> Result<Vec<Summary>> {
     let body = read_all(&source.path)?;
     let mut session_id = None;
     let mut agent_id = None;
@@ -188,7 +173,7 @@ pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
         agent_id = agent_id.or(entry.agent_id);
         cwd = cwd.or(entry.cwd);
         branch = branch.or(entry.branch);
-        if let Some(at) = entry.timestamp.and_then(crate::timestamp::parse_rfc3339) {
+        if let Some(at) = entry.timestamp.and_then(parse_rfc3339) {
             started_at.get_or_insert(at);
             updated_at = Some(at);
         }
@@ -208,20 +193,23 @@ pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
                 }
             }
             "assistant" if !inherited => {
-                let Some(message) = entry.message else {
-                    continue;
-                };
-                let Some(usage) = message.usage else {
+                let Some(Reply {
+                    id,
+                    model,
+                    usage: Some(usage),
+                    ..
+                }) = entry.message
+                else {
                     continue;
                 };
                 let at = updated_at.unwrap_or(source.mtime);
-                let model = message.model.unwrap_or_default();
-                match message.id {
+                let model = model.unwrap_or_default();
+                match id {
                     Some(id) => {
                         let request = entry.request_id.unwrap_or_default();
                         responses.insert((id, request), (at, model, usage));
                     }
-                    None => tally.add(at, "anthropic", model, usage.tokens(), usage.cost(model)),
+                    None => usage.count(&mut tally, at, model),
                 }
             }
             _ => {}
@@ -232,33 +220,24 @@ pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
         return Ok(Vec::new());
     };
     for (at, model, usage) in responses.into_values() {
-        tally.add(at, "anthropic", model, usage.tokens(), usage.cost(model));
+        usage.count(&mut tally, at, model);
     }
-
     let native_id = agent_id.unwrap_or(session_id).to_owned();
-    let session = Session {
-        id: format!("{}:{native_id}", Agent::ClaudeCode.key()),
-        agent: Agent::ClaudeCode,
-        native_id,
+    let (started_at, updated_at) = (
+        started_at.unwrap_or(source.mtime),
+        updated_at.unwrap_or(source.mtime),
+    );
+    Ok(vec![tally.summary(Session {
         title: ai_title.or(prompt_title),
         cwd,
         branch,
-        started_at: started_at.unwrap_or(source.mtime),
-        updated_at: updated_at.unwrap_or(source.mtime),
         spawned,
-        role: None,
-        models: Vec::new(),
-        tokens: Tokens::default(),
-        cost_usd: None,
-        messages: None,
-        tools: None,
-        present: true,
-    };
-    Ok(vec![tally.summary(session)])
+        ..session(Agent::ClaudeCode, native_id, started_at, updated_at)
+    })])
 }
 
 /// Read a session's conversation.
-pub fn transcript(source: &Unit) -> Result<Vec<Turn>> {
+pub(super) fn transcript(source: &Unit) -> Result<Vec<Turn>> {
     let body = read_all(&source.path)?;
     let mut conversation = Conversation::default();
 
@@ -272,7 +251,7 @@ pub fn transcript(source: &Unit) -> Result<Vec<Turn>> {
         let Some(message) = record.message else {
             continue;
         };
-        let at = record.timestamp.and_then(crate::timestamp::parse_rfc3339);
+        let at = record.timestamp.and_then(parse_rfc3339);
         let model = message.model.as_deref();
         let blocks = message
             .content
@@ -324,48 +303,33 @@ pub fn transcript(source: &Unit) -> Result<Vec<Turn>> {
     Ok(conversation.into_turns())
 }
 
-/// Flatten a message body into the text a reader sees.
+/// The spoken text of a message body. Thinking and tool calls become turns of
+/// their own.
 fn text_of(content: &Value) -> String {
     match content {
-        Value::String(text) => text.clone(),
-        Value::Array(blocks) => {
-            let mut text = String::new();
-            for block in blocks {
-                // Thinking and tool calls become turns of their own; only
-                // spoken text belongs in the message body.
-                if block["type"] == "text"
-                    && let Some(part) = block["text"].as_str()
-                {
-                    if !text.is_empty() {
-                        text.push('\n');
-                    }
-                    text.push_str(part);
-                }
-            }
-            text
-        }
-        Value::Null => String::new(),
-        other => other.to_string(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter(|block| block["type"] == "text")
+            .filter_map(|block| block["text"].as_str())
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        other => compact(other),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-
-    fn fixture(contents: &str) -> (tempfile::TempDir, Unit) {
-        let directory = tempfile::tempdir().expect("temp dir");
-        let path = directory.path().join("session.jsonl");
-        let mut file = std::fs::File::create(&path).expect("creates");
-        file.write_all(contents.as_bytes()).expect("writes");
-        let source = unit(Agent::ClaudeCode, path).expect("unit");
-        (directory, source)
-    }
+    use crate::session::Transcript;
+    use crate::source::tests::{journal, summarized, transcribed};
 
     fn summary(contents: &str) -> Summary {
-        let (_directory, source) = fixture(contents);
-        summarize(&source).expect("summarizes").remove(0)
+        summarized(Agent::ClaudeCode, contents)
+    }
+
+    fn read(contents: &str) -> Transcript {
+        transcribed(Agent::ClaudeCode, contents)
     }
 
     /// A closed session: a response written over two lines, with part of what
@@ -405,6 +369,7 @@ mod tests {
         let tokens = summary(CLOSED).tokens();
         // 1_000 for the response written over two lines, not 1_912, and 3_000.
         assert_eq!(tokens.total, 4_000);
+        assert_eq!(tokens.input, 12);
         assert_eq!(tokens.output, 288);
         assert_eq!(tokens.cache_read, 3_400);
         assert_eq!(tokens.cache_write, 300);
@@ -423,29 +388,6 @@ mod tests {
         assert_eq!(costs.len(), 2);
         assert!((costs[0] - 0.005_385).abs() < 1e-12, "got {costs:?}");
         assert!((costs[1] - 0.006_2).abs() < 1e-12, "got {costs:?}");
-    }
-
-    #[test]
-    fn a_running_session_counts_the_responses_so_far() {
-        // No title yet: this is what a session still in progress looks like.
-        let running = concat!(
-            r#"{"type":"user","message":{"role":"user","content":"Hello there"},"timestamp":"2026-09-11T23:38:22.696Z","sessionId":"live-1","cwd":"/w"}"#,
-            "\n",
-            r#"{"type":"assistant","requestId":"req_1","message":{"id":"msg_1","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"Hi"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":100,"cache_creation_input_tokens":20}},"timestamp":"2026-09-11T23:38:30.000Z","sessionId":"live-1"}"#,
-            "\n",
-            r#"{"type":"assistant","requestId":"req_2","message":{"id":"msg_2","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"More"}],"usage":{"input_tokens":1,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":4}},"timestamp":"2026-09-11T23:38:40.000Z","sessionId":"live-1"}"#,
-            "\n",
-        );
-        let summary = summary(running);
-        let tokens = summary.tokens();
-
-        assert_eq!(tokens.input, 11);
-        assert_eq!(tokens.output, 7);
-        assert_eq!(tokens.cache_read, 103);
-        assert_eq!(tokens.cache_write, 24);
-        assert_eq!(tokens.total, 145);
-        // With no generated title the opening prompt names the session.
-        assert_eq!(summary.session.title.as_deref(), Some("Hello there"));
     }
 
     #[test]
@@ -493,7 +435,7 @@ mod tests {
 
     #[test]
     fn a_file_with_no_session_id_yields_nothing() {
-        let (_directory, source) = fixture("{\"type\":\"mode\"}\n");
+        let (_directory, source) = journal(Agent::ClaudeCode, "{\"type\":\"mode\"}\n");
         assert!(summarize(&source).expect("summarizes").is_empty());
     }
 
@@ -511,16 +453,14 @@ mod tests {
 
     #[test]
     fn a_transcript_pairs_tool_calls_with_their_results() {
-        let conversation = concat!(
+        let read = read(concat!(
             r#"{"type":"user","message":{"role":"user","content":"Read the file"},"timestamp":"2026-09-11T23:38:22.696Z","sessionId":"t-1"}"#,
             "\n",
             r#"{"type":"assistant","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"thinking","thinking":"I should read it."},{"type":"text","text":"Reading now."},{"type":"tool_use","id":"toolu_01","name":"Read","input":{"path":"/tmp/x"}}]},"timestamp":"2026-09-11T23:38:30.000Z","sessionId":"t-1"}"#,
             "\n",
             r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"file contents","is_error":false}]},"timestamp":"2026-09-11T23:38:31.000Z","sessionId":"t-1"}"#,
             "\n",
-        );
-        let (_directory, source) = fixture(conversation);
-        let read = crate::source::transcript(&source, "t-1").expect("reads");
+        ));
 
         assert_eq!(read.tools, 1);
         let speakers: Vec<_> = read.turns.iter().map(|turn| turn.speaker).collect();
@@ -538,11 +478,10 @@ mod tests {
         assert_eq!(read.turns[2].text, "I should read it.");
 
         let tool = read.turns[3].tool.as_ref().expect("a tool call");
-        // The real name replaces the id placeholder once the result pairs.
         assert_eq!(tool.name, "Read");
+        assert_eq!(tool.input, r#"{"path":"/tmp/x"}"#);
         assert_eq!(tool.output.as_deref(), Some("file contents"));
         assert!(!tool.failed);
-        assert!(tool.input.contains("/tmp/x"));
     }
 
     #[test]
@@ -561,8 +500,7 @@ mod tests {
             r#"{"type":"user","message":{"role":"user","content":"[Request interrupted by user]"},"timestamp":"2026-09-11T23:38:24.000Z","sessionId":"h-1"}"#,
             "\n",
         );
-        let (_directory, source) = fixture(conversation);
-        let read = crate::source::transcript(&source, "h-1").expect("reads");
+        let read = read(conversation);
         let turns: Vec<_> = read
             .turns
             .iter()
@@ -586,46 +524,16 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_tool_result_is_marked() {
-        let failing = concat!(
-            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_9","name":"Bash","input":{"cmd":"false"}}]},"timestamp":"2026-09-11T23:38:30.000Z","sessionId":"f-1"}"#,
-            "\n",
-            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_9","content":"exit 1","is_error":true}]},"timestamp":"2026-09-11T23:38:31.000Z","sessionId":"f-1"}"#,
-            "\n",
-        );
-        let (_directory, source) = fixture(failing);
-        let read = crate::source::transcript(&source, "t-1").expect("reads");
-        let tool = read.turns[0].tool.as_ref().expect("a tool call");
-        assert_eq!(tool.name, "Bash");
-        assert!(tool.failed);
-    }
-
-    #[test]
-    fn an_unanswered_tool_call_keeps_its_name() {
-        let unanswered = concat!(
-            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_77","name":"Write","input":{}}]},"timestamp":"2026-09-11T23:38:30.000Z","sessionId":"u-1"}"#,
-            "\n",
-        );
-        let (_directory, source) = fixture(unanswered);
-        let read = crate::source::transcript(&source, "t-1").expect("reads");
-        let tool = read.turns[0].tool.as_ref().expect("a tool call");
-        assert_eq!(tool.name, "Write");
-        assert_eq!(tool.output, None);
-    }
-
-    #[test]
     fn concurrent_tool_calls_pair_by_id_not_by_position() {
         // One assistant turn making three calls, answered out of order with
         // one never answered at all. Matching by position would mis-attribute
         // every output here.
-        let conversation = concat!(
+        let read = read(concat!(
             r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_A","name":"Bash","input":{}},{"type":"tool_use","id":"toolu_B","name":"Read","input":{}},{"type":"tool_use","id":"toolu_C","name":"Write","input":{}}]},"timestamp":"2026-09-11T23:38:30.000Z","sessionId":"c-1"}"#,
             "\n",
             r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_C","content":"wrote it"},{"type":"tool_result","tool_use_id":"toolu_A","content":"ran it","is_error":true}]},"timestamp":"2026-09-11T23:38:31.000Z","sessionId":"c-1"}"#,
             "\n",
-        );
-        let (_directory, source) = fixture(conversation);
-        let read = crate::source::transcript(&source, "t-1").expect("reads");
+        ));
 
         assert_eq!(read.tools, 3);
         let named = |name: &str| {
@@ -638,8 +546,7 @@ mod tests {
         assert!(named("Bash").failed);
         assert_eq!(named("Write").output.as_deref(), Some("wrote it"));
         assert!(!named("Write").failed);
-        // Never answered: no output, and it keeps its real name rather than
-        // showing the call identifier.
+        // Never answered, so there is no output to show.
         assert_eq!(named("Read").output, None);
     }
 

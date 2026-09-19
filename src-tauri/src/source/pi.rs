@@ -10,76 +10,69 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::error::Result;
-use crate::price;
-use crate::session::{Agent, Session, Speaker, Tokens, ToolCall, Turn};
-use crate::source::{
-    Conversation, Summary, Tally, Unit, compact, lines, pieces, read_all, title_of, unit, walk,
+use super::{
+    Conversation, Summary, Tally, Unit, compact, lines, pieces, rates, read_all, session, title_of,
+    unit, walk,
 };
+use crate::error::Result;
+use crate::session::{Agent, Session, Speaker, Tokens, ToolCall, Turn};
+use crate::timestamp::parse_rfc3339;
 
 /// One record of a session file.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Record<'a> {
-    #[serde(rename = "type", default)]
+    #[serde(rename = "type")]
     kind: &'a str,
-    #[serde(default)]
     id: Option<&'a str>,
-    #[serde(default)]
     timestamp: Option<&'a str>,
-    #[serde(default)]
     cwd: Option<String>,
-    #[serde(default)]
     provider: Option<String>,
-    #[serde(rename = "modelId", default)]
+    #[serde(rename = "modelId")]
     model_id: Option<String>,
-    #[serde(default)]
     message: Option<Message>,
 }
 
 /// A message and the usage Pi recorded for producing it.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Message {
-    #[serde(default)]
     role: Option<String>,
-    #[serde(default)]
     content: Value,
-    #[serde(default)]
     usage: Option<Usage>,
     /// Set on a `toolResult` message, naming the call it answers.
-    #[serde(rename = "toolCallId", default)]
+    #[serde(rename = "toolCallId")]
     tool_call_id: Option<String>,
-    #[serde(rename = "isError", default)]
+    #[serde(rename = "isError")]
     is_error: bool,
 }
 
 /// Per-message usage, including Pi's own cost.
 #[derive(Deserialize, Default)]
+#[serde(default)]
 struct Usage {
-    #[serde(default)]
     input: i64,
-    #[serde(default)]
     output: i64,
-    #[serde(rename = "cacheRead", default)]
+    #[serde(rename = "cacheRead")]
     cache_read: i64,
-    #[serde(rename = "cacheWrite", default)]
+    #[serde(rename = "cacheWrite")]
     cache_write: i64,
-    #[serde(rename = "totalTokens", default)]
+    #[serde(rename = "totalTokens")]
     total: i64,
-    #[serde(default)]
     cost: Option<Cost>,
 }
 
 /// The cost Pi computed for one message.
 #[derive(Deserialize, Default)]
+#[serde(default)]
 struct Cost {
-    #[serde(default)]
     total: f64,
 }
 
 /// Every session file under the sessions directory.
-pub fn discover(root: &Path) -> Vec<Unit> {
+pub(super) fn discover(root: &Path) -> Vec<Unit> {
     let mut paths = Vec::new();
-    walk(root, "jsonl", &mut paths);
+    walk(root, &mut paths);
     paths
         .into_iter()
         .filter_map(|path| unit(Agent::Pi, path))
@@ -87,7 +80,7 @@ pub fn discover(root: &Path) -> Vec<Unit> {
 }
 
 /// Summarize a session, counting the usage it recorded on each message.
-pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
+pub(super) fn summarize(source: &Unit) -> Result<Vec<Summary>> {
     let body = read_all(&source.path)?;
     let mut native_id = None;
     let mut cwd = None;
@@ -95,14 +88,14 @@ pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
     let mut updated_at = None;
     let mut title = None;
     let mut provider = String::new();
-    let mut current = String::new();
+    let mut model = String::new();
     let mut tally = Tally::default();
 
     for line in lines(&body) {
         let Ok(record) = serde_json::from_slice::<Record>(line) else {
             continue;
         };
-        if let Some(at) = record.timestamp.and_then(crate::timestamp::parse_rfc3339) {
+        if let Some(at) = record.timestamp.and_then(parse_rfc3339) {
             started_at.get_or_insert(at);
             updated_at = Some(at);
         }
@@ -111,11 +104,11 @@ pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
                 native_id = record.id.map(str::to_owned);
                 cwd = record.cwd;
             }
+            // Pi switches model mid-session, and each message's usage goes to
+            // the one in force.
             "model_change" => {
-                // Pi switches model mid-session, so which one is in force is
-                // tracked here and each message's usage goes to that one.
-                if let Some(model) = record.model_id {
-                    current = model;
+                if let Some(changed) = record.model_id {
+                    model = changed;
                     provider = record.provider.unwrap_or_default();
                 }
             }
@@ -136,14 +129,13 @@ pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
                         reasoning: 0,
                         total: usage.total,
                     };
-                    let context = tokens.input + tokens.cache_read + tokens.cache_write;
                     // Pi prices from the same catalog; its own figure stands in
                     // only for a model the catalog has no price for.
-                    let cost = price::rates(&provider, &current, context)
+                    let cost = rates(&provider, &model, &tokens)
                         .map(|rates| rates.cost(&tokens))
                         .or(usage.cost.map(|cost| cost.total));
                     let at = updated_at.unwrap_or(source.mtime);
-                    tally.add(at, &provider, &current, tokens, cost);
+                    tally.add(at, &provider, &model, tokens, cost);
                 }
             }
             _ => {}
@@ -153,31 +145,21 @@ pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
     let Some(native_id) = native_id else {
         return Ok(Vec::new());
     };
-    let session = Session {
-        id: format!("{}:{native_id}", Agent::Pi.key()),
-        agent: Agent::Pi,
-        native_id,
+    let (started_at, updated_at) = (
+        started_at.unwrap_or(source.mtime),
+        updated_at.unwrap_or(source.mtime),
+    );
+    // Pi records no relationship between sessions, so every one of them is
+    // work a person started.
+    Ok(vec![tally.summary(Session {
         title,
         cwd,
-        branch: None,
-        started_at: started_at.unwrap_or(source.mtime),
-        updated_at: updated_at.unwrap_or(source.mtime),
-        // Pi records no relationship between sessions, so every one of them is
-        // work a person started.
-        spawned: false,
-        role: None,
-        models: Vec::new(),
-        tokens: Tokens::default(),
-        cost_usd: None,
-        messages: None,
-        tools: None,
-        present: true,
-    };
-    Ok(vec![tally.summary(session)])
+        ..session(Agent::Pi, native_id, started_at, updated_at)
+    })])
 }
 
 /// Read a session's conversation.
-pub fn transcript(source: &Unit) -> Result<Vec<Turn>> {
+pub(super) fn transcript(source: &Unit) -> Result<Vec<Turn>> {
     let body = read_all(&source.path)?;
     let mut conversation = Conversation::default();
     let mut model = None;
@@ -186,7 +168,7 @@ pub fn transcript(source: &Unit) -> Result<Vec<Turn>> {
         let Ok(record) = serde_json::from_slice::<Record>(line) else {
             continue;
         };
-        let at = record.timestamp.and_then(crate::timestamp::parse_rfc3339);
+        let at = record.timestamp.and_then(parse_rfc3339);
         match record.kind {
             "model_change" => model = record.model_id,
             "message" => {
@@ -222,6 +204,7 @@ pub fn transcript(source: &Unit) -> Result<Vec<Turn>> {
                         Some("toolCall") => {
                             let tool = ToolCall {
                                 name: block["name"].as_str().unwrap_or("tool").to_owned(),
+                                // An object, as Pi writes it.
                                 input: compact(&block["arguments"]),
                                 ..ToolCall::default()
                             };
@@ -237,48 +220,31 @@ pub fn transcript(source: &Unit) -> Result<Vec<Turn>> {
     Ok(conversation.into_turns())
 }
 
-/// Flatten a Pi message body, keeping only spoken text.
-///
-/// An image block contributes a marker rather than its base64 payload, which
-/// would otherwise become megabytes of unreadable text in a transcript.
+/// The spoken text of a message body, with an image as a marker rather than
+/// the megabytes of base64 it is recorded as.
 fn text_of(content: &Value) -> String {
     match content {
-        Value::String(text) => text.clone(),
-        Value::Array(blocks) => {
-            let mut text = String::new();
-            for block in blocks {
-                let part = match block["type"].as_str() {
-                    Some("text") => block["text"].as_str().unwrap_or_default().to_owned(),
-                    Some("image") => "[image]".to_owned(),
-                    _ => continue,
-                };
-                if part.is_empty() {
-                    continue;
-                }
-                if !text.is_empty() {
-                    text.push('\n');
-                }
-                text.push_str(&part);
-            }
-            text
-        }
-        Value::Null => String::new(),
-        other => other.to_string(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|block| match block["type"].as_str() {
+                Some("text") => block["text"].as_str(),
+                Some("image") => Some("[image]"),
+                _ => None,
+            })
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        other => compact(other),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use crate::source::tests::{summarized, transcribed};
 
-    fn fixture(contents: &str) -> (tempfile::TempDir, Unit) {
-        let directory = tempfile::tempdir().expect("temp dir");
-        let path = directory.path().join("session.jsonl");
-        let mut file = std::fs::File::create(&path).expect("creates");
-        file.write_all(contents.as_bytes()).expect("writes");
-        let source = unit(Agent::Pi, path).expect("unit");
-        (directory, source)
+    fn summary(contents: &str) -> Summary {
+        summarized(Agent::Pi, contents)
     }
 
     const SESSION: &str = concat!(
@@ -296,8 +262,7 @@ mod tests {
 
     #[test]
     fn per_message_usage_is_summed_across_the_session() {
-        let (_directory, source) = fixture(SESSION);
-        let tokens = summarize(&source).expect("summarizes").remove(0).tokens();
+        let tokens = summary(SESSION).tokens();
 
         // Pi reports per message, so unlike Codex these must be added.
         assert_eq!(tokens.input, 1_699);
@@ -310,11 +275,7 @@ mod tests {
 
     #[test]
     fn usage_is_priced_and_pis_own_cost_stands_in_for_an_unpriced_model() {
-        let cost = |session: &str| {
-            let (_directory, source) = fixture(session);
-            let summary = summarize(&source).expect("summarizes").remove(0);
-            summary.cost().expect("a cost")
-        };
+        let cost = |session: &str| summary(session).cost().expect("a cost");
         // At xAI's $2, $6 and $0.50 per million, the first message costs the
         // $0.004598 Pi recorded for it, and the second $0.0000545.
         let priced = cost(SESSION);
@@ -327,12 +288,10 @@ mod tests {
     #[test]
     fn a_model_is_priced_by_its_id_and_counted_under_its_name() {
         // Through OpenRouter, Pi records the model with its vendor in front.
-        let routed = SESSION.replace(
+        let summary = summary(&SESSION.replace(
             r#""provider":"xai","modelId":"grok-4.6""#,
             r#""provider":"openrouter","modelId":"google/gemini-3.8-flash""#,
-        );
-        let (_directory, source) = fixture(&routed);
-        let summary = summarize(&source).expect("summarizes").remove(0);
+        ));
 
         // The name OpenCode gives the same model, so the two count as one.
         assert_eq!(summary.models(), [("gemini-3.8-flash", 2_500)]);
@@ -347,8 +306,7 @@ mod tests {
 
     #[test]
     fn reads_identity_title_and_model() {
-        let (_directory, source) = fixture(SESSION);
-        let summary = summarize(&source).expect("summarizes").remove(0);
+        let summary = summary(SESSION);
         let session = &summary.session;
         assert_eq!(session.id, "pi:01a075c4");
         assert_eq!(
@@ -364,22 +322,19 @@ mod tests {
 
     #[test]
     fn a_session_with_no_usage_reports_no_cost() {
-        let bare = concat!(
+        let summary = summary(concat!(
             r#"{"type":"session","id":"bare-1","timestamp":"2026-09-06T08:09:52.606Z","cwd":"/w"}"#,
             "\n",
             r#"{"type":"message","id":"m","timestamp":"2026-09-06T08:09:58.622Z","message":{"role":"user","content":[{"type":"text","text":"Hello"}]}}"#,
             "\n",
-        );
-        let (_directory, source) = fixture(bare);
-        let summary = summarize(&source).expect("summarizes").remove(0);
+        ));
         assert_eq!(summary.cost(), None, "no cost recorded is not zero cost");
         assert!(summary.usage.is_empty());
     }
 
     #[test]
     fn a_transcript_separates_thinking_speech_and_tools() {
-        let (_directory, source) = fixture(SESSION);
-        let read = crate::source::transcript(&source, "01a075c4").expect("reads");
+        let read = transcribed(Agent::Pi, SESSION);
         let speakers: Vec<_> = read.turns.iter().map(|turn| turn.speaker).collect();
         assert_eq!(
             speakers,
@@ -405,18 +360,19 @@ mod tests {
         // Pi records a result as a message whose *role* is `toolResult`, not
         // as a block inside another message, and answers concurrent calls in
         // whatever order they finish.
-        let conversation = concat!(
-            r#"{"type":"session","id":"tr-1","timestamp":"2026-09-06T08:09:52.606Z","cwd":"/w"}"#,
-            "\n",
-            r#"{"type":"message","id":"a","timestamp":"2026-09-06T08:10:01.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-A","name":"bash","arguments":{}},{"type":"toolCall","id":"call-B","name":"read","arguments":{}}]}}"#,
-            "\n",
-            r#"{"type":"message","id":"b","timestamp":"2026-09-06T08:10:02.000Z","message":{"role":"toolResult","toolCallId":"call-B","toolName":"read","content":[{"type":"text","text":"file body"}]}}"#,
-            "\n",
-            r#"{"type":"message","id":"c","timestamp":"2026-09-06T08:10:03.000Z","message":{"role":"toolResult","toolCallId":"call-A","toolName":"bash","isError":true,"content":[{"type":"text","text":"command failed"}]}}"#,
-            "\n",
+        let read = transcribed(
+            Agent::Pi,
+            concat!(
+                r#"{"type":"session","id":"tr-1","timestamp":"2026-09-06T08:09:52.606Z","cwd":"/w"}"#,
+                "\n",
+                r#"{"type":"message","id":"a","timestamp":"2026-09-06T08:10:01.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-A","name":"bash","arguments":{}},{"type":"toolCall","id":"call-B","name":"read","arguments":{}}]}}"#,
+                "\n",
+                r#"{"type":"message","id":"b","timestamp":"2026-09-06T08:10:02.000Z","message":{"role":"toolResult","toolCallId":"call-B","toolName":"read","content":[{"type":"text","text":"file body"}]}}"#,
+                "\n",
+                r#"{"type":"message","id":"c","timestamp":"2026-09-06T08:10:03.000Z","message":{"role":"toolResult","toolCallId":"call-A","toolName":"bash","isError":true,"content":[{"type":"text","text":"command failed"}]}}"#,
+                "\n",
+            ),
         );
-        let (_directory, source) = fixture(conversation);
-        let read = crate::source::transcript(&source, "01a075c4").expect("reads");
 
         // Two calls, and no extra turn for either result.
         assert_eq!(read.tools, 2);

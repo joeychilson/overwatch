@@ -1,20 +1,14 @@
 //! Reading the agents' own history files.
 //!
-//! # Usage is dated by when it happened
+//! A unit is read whole whenever it changes, and every usage record in it is
+//! counted under the quarter hour it happened in, so a period or a day counts
+//! only what was used within it: a thread resumed after a week adds today's
+//! work to today, not its whole history. Each reader first undoes its agent's
+//! quirks, such as Claude Code repeating a response's usage on every line of
+//! it, or Codex keeping a running total that restarts when a thread resumes.
 //!
-//! Every usage record a session holds is counted and dated to the quarter hour
-//! it happened in, so a period or a day counts only what was used within it: a
-//! thread resumed after a week adds today's work to today, not its whole
-//! history. That takes every record, so a unit is read whole — but only when it
-//! changed since the last scan, and the files are local.
-//!
-//! Each agent writes usage its own way, and each reader undoes that agent's
-//! quirks before counting: Claude Code repeats a response's usage on every line
-//! of the response, and Codex keeps a running total that starts again when a
-//! thread is resumed.
-//!
-//! No conversation text is copied into the database: a conversation is read
-//! from its unit when someone opens it.
+//! No conversation text reaches the index: a conversation is read from its
+//! unit when someone opens it.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::Range;
@@ -24,15 +18,16 @@ use std::sync::OnceLock;
 use serde_json::Value;
 
 use crate::error::{Error, Result};
-use crate::session::{Agent, Session, Speaker, Tokens, ToolCall, Transcript, Turn};
+use crate::price::{self, Rates};
+use crate::session::{Agent, Session, Speaker, Tokens, ToolCall, Transcript, Turn, holds};
 
-pub mod claude;
-pub mod codex;
-pub mod grok;
-pub mod opencode;
-pub mod pi;
+mod claude;
+mod codex;
+mod grok;
+mod opencode;
+mod pi;
 
-/// The longest title kept from an opening prompt.
+/// The longest title kept from an opening prompt, in characters.
 const TITLE_LIMIT: usize = 160;
 
 /// How finely usage is dated.
@@ -44,8 +39,8 @@ pub(crate) const QUARTER_HOUR: i64 = 15 * 60_000;
 /// One thing on disk that holds session history.
 ///
 /// Usually a single session's file, but OpenCode keeps every session in one
-/// database, so a unit may produce many sessions. Change detection is the same
-/// either way: the modification time and size the scan last saw.
+/// database, so a unit may produce many sessions. It has changed when its
+/// modification time or size has.
 #[derive(Debug, Clone)]
 pub struct Unit {
     /// Which agent wrote it.
@@ -64,7 +59,7 @@ pub struct Summary {
     /// empty: a session can span several units, as a Codex thread resumed into
     /// a new file does, so the store sums them from the usage of every one.
     pub session: Session,
-    /// What it used, by quarter hour and model.
+    /// What it used, by quarter hour, provider and model.
     pub usage: Vec<Usage>,
 }
 
@@ -74,8 +69,8 @@ pub struct Usage {
     pub at: i64,
     /// Who served it, as the agent names them, such as `anthropic`.
     pub provider: String,
-    /// The model's name, as `model_name` gives it, or empty when the agent
-    /// recorded none.
+    /// The model's name: the id the agent recorded, less any path in front of
+    /// it, or empty when the agent recorded none.
     pub model: String,
     /// Tokens used.
     pub tokens: Tokens,
@@ -85,34 +80,23 @@ pub struct Usage {
 
 /// The most one record's usage can plausibly have cost, in dollars. A cost
 /// beyond it, below zero or not a number is corrupt, so unknown; bounding each
-/// keeps every sum of them finite.
+/// keeps every sum of them finite, which the index needs to answer at all.
 const MOST_COST: f64 = 1e9;
 
 /// A session's usage, counted as a reader goes.
 #[derive(Default)]
-pub struct Tally {
+struct Tally {
     buckets: BTreeMap<(i64, String, String), (Tokens, Option<f64>)>,
 }
 
 impl Tally {
     /// Count usage that happened at `at` under `provider`'s model `id`.
     ///
-    /// `id` is the model as the agent recorded it, which is what `cost_usd`
-    /// must be priced by: the catalog lists each provider's models by the ids
-    /// that provider takes. The usage is counted under the model's name
-    /// instead. Naming it here, rather than in each reader, keeps every
-    /// agent's name for a model the same, and folds ids of one name into one
-    /// bucket before the store's key could see them as two.
-    pub fn add(
-        &mut self,
-        at: i64,
-        provider: &str,
-        id: &str,
-        tokens: Tokens,
-        cost_usd: Option<f64>,
-    ) {
-        // A record of nothing, such as a reply Claude Code writes itself, is
-        // not usage.
+    /// `cost_usd` is priced by `id`, the name the provider takes, but the usage
+    /// is counted under [`model_name`], so every agent's name for one model is
+    /// the same. A record of nothing, such as a reply Claude Code writes
+    /// itself, is not usage.
+    fn add(&mut self, at: i64, provider: &str, id: &str, tokens: Tokens, cost_usd: Option<f64>) {
         if tokens.is_empty() {
             return;
         }
@@ -128,7 +112,7 @@ impl Tally {
     }
 
     /// The session, with the usage counted for it.
-    pub fn summary(self, session: Session) -> Summary {
+    fn summary(self, session: Session) -> Summary {
         let usage = self
             .buckets
             .into_iter()
@@ -159,37 +143,44 @@ fn model_name(id: &str) -> &str {
     }
 }
 
-#[cfg(test)]
-impl Summary {
-    /// Everything counted, as the store totals it.
-    pub fn tokens(&self) -> Tokens {
-        let mut total = Tokens::default();
-        for usage in &self.usage {
-            total.add(usage.tokens);
-        }
-        total
-    }
+/// The sum of counts an agent recorded, which saturates rather than overflows
+/// on a corrupt record.
+fn sum<const N: usize>(counts: [i64; N]) -> i64 {
+    counts.into_iter().fold(0, i64::saturating_add)
+}
 
-    /// The cost counted, unknown when no usage carries one.
-    pub fn cost(&self) -> Option<f64> {
-        self.usage
-            .iter()
-            .filter_map(|usage| usage.cost_usd)
-            .reduce(|sum, cost| sum + cost)
-    }
+/// The rates `provider` lists for `model`, in the context tier reached by a
+/// request that sent `tokens`: its input, fresh or cached.
+fn rates(provider: &str, model: &str, tokens: &Tokens) -> Option<Rates> {
+    let context = sum([tokens.input, tokens.cache_read, tokens.cache_write]);
+    price::rates(provider, model, context)
+}
 
-    /// Tokens under each named model, largest first.
-    pub fn models(&self) -> Vec<(&str, i64)> {
-        let mut models: Vec<(&str, i64)> = Vec::new();
-        for usage in self.usage.iter().filter(|usage| !usage.model.is_empty()) {
-            match models.iter_mut().find(|(model, _)| *model == usage.model) {
-                Some((_, total)) => *total += usage.tokens.total,
-                None => models.push((&usage.model, usage.tokens.total)),
-            }
-        }
-        models.sort_by_key(|(_, total)| -total);
-        models
+/// A session found under `native_id`, known so far only by when it ran.
+fn session(agent: Agent, native_id: String, started_at: i64, updated_at: i64) -> Session {
+    Session {
+        id: session_id(agent, &native_id),
+        agent,
+        native_id,
+        title: None,
+        cwd: None,
+        branch: None,
+        started_at,
+        updated_at,
+        spawned: false,
+        role: None,
+        models: Vec::new(),
+        tokens: Tokens::default(),
+        cost_usd: None,
+        messages: None,
+        tools: None,
+        present: true,
     }
+}
+
+/// The id a session is known by, unique across agents.
+fn session_id(agent: Agent, native_id: &str) -> String {
+    format!("{}:{native_id}", agent.key())
 }
 
 /// Home directories of every agent present on this machine.
@@ -239,119 +230,6 @@ pub fn summarize(unit: &Unit) -> Result<Vec<Summary>> {
     }
 }
 
-/// Where conversations are kept, and which could mention a search, looked up
-/// once for a search of every conversation rather than once for each.
-///
-/// Finding a Codex thread's rollouts means walking every rollout on the
-/// machine, and every OpenCode session is kept in one database; asking each
-/// once for the whole search is most of what makes reading them all
-/// affordable.
-pub struct Library {
-    /// What is searched for, lowercase.
-    needle: String,
-    /// Every Codex rollout on this machine.
-    rollouts: Vec<PathBuf>,
-    /// OpenCode's database.
-    database: PathBuf,
-    /// The OpenCode sessions whose records hold the needle, or `None` when that
-    /// cannot be told from them, so every one could. Asked for when the first
-    /// OpenCode session comes up, so a search of the rest does not wait on it.
-    opencode: OnceLock<Option<HashSet<String>>>,
-}
-
-impl Library {
-    /// Look up where the conversations under `home` are kept, for a search of
-    /// them for `needle`, which is lowercase.
-    pub fn new(home: &Path, needle: &str) -> Library {
-        let codex = home.join(".codex");
-        Library {
-            needle: needle.to_owned(),
-            rollouts: if codex.is_dir() {
-                codex::every_rollout(&codex)
-            } else {
-                Vec::new()
-            },
-            database: home.join(".local/share/opencode/opencode.db"),
-            opencode: OnceLock::new(),
-        }
-    }
-
-    /// Whether a session's conversation could mention the needle, judged
-    /// without reading it: false only when it certainly cannot.
-    pub fn may_mention(&self, unit: &Unit, native_id: &str) -> bool {
-        let files = match unit.agent {
-            Agent::ClaudeCode | Agent::Pi => vec![unit.path.clone()],
-            Agent::Codex => codex::of_thread(&self.rollouts, &unit.path, native_id),
-            Agent::GrokBuild => vec![grok::conversation(&unit.path)],
-            Agent::OpenCode => {
-                return self
-                    .opencode
-                    .get_or_init(|| {
-                        plain(&self.needle)
-                            .then(|| opencode::holding(&self.database, &self.needle).ok())
-                            .flatten()
-                    })
-                    .as_ref()
-                    .is_none_or(|sessions| sessions.contains(native_id));
-            }
-        };
-        may_contain(&files, &self.needle)
-    }
-
-    /// Read one session's conversation in full, as [`transcript`] does.
-    pub fn transcript(&self, unit: &Unit, native_id: &str) -> Result<Transcript> {
-        match unit.agent {
-            Agent::Codex => Ok(Transcript::new(
-                conversation_id(unit, native_id),
-                codex::transcript_of(&codex::of_thread(&self.rollouts, &unit.path, native_id))?,
-            )),
-            _ => transcript(unit, native_id),
-        }
-    }
-}
-
-/// Whether a needle reads in a JSON file as it is written: ASCII that no
-/// writer escapes, so finding it missing from a file's bytes proves it absent.
-/// Beyond ASCII, some writers escape every character; a quote, a backslash or
-/// a control character is always escaped; and some writers escape a slash,
-/// `<`, `>`, `&` or `'`.
-fn plain(needle: &str) -> bool {
-    needle
-        .bytes()
-        .all(|byte| (byte == b' ' || byte.is_ascii_graphic()) && !b"\"\\/<>&'".contains(&byte))
-}
-
-/// Whether a conversation read from `files` could contain `needle`, which is
-/// lowercase, judged from the files' bytes without parsing them, so that one
-/// which cannot is passed over.
-///
-/// It answers no only when that is certain: a needle that is not [`plain`]
-/// could be written otherwise and so could be anywhere, and so could anything
-/// in a file that cannot be read, which reading the conversation will report.
-pub fn may_contain(files: &[PathBuf], needle: &str) -> bool {
-    !plain(needle)
-        || files
-            .iter()
-            .any(|file| std::fs::read(file).map_or(true, |bytes| holds(&bytes, needle.as_bytes())))
-}
-
-/// Whether `haystack` holds `needle`, ignoring the case of ASCII letters.
-///
-/// It jumps from one place the needle's first letter stands, in either case,
-/// to the next, a vector's width at a time, and compares the rest only there:
-/// a search reads every conversation on the machine this way.
-fn holds(haystack: &[u8], needle: &[u8]) -> bool {
-    let Some((&first, rest)) = needle.split_first() else {
-        return true;
-    };
-    let (lower, upper) = (first.to_ascii_lowercase(), first.to_ascii_uppercase());
-    memchr::memchr2_iter(lower, upper, haystack).any(|at| {
-        haystack
-            .get(at + 1..at + 1 + rest.len())
-            .is_some_and(|tail| tail.eq_ignore_ascii_case(rest))
-    })
-}
-
 /// Read one session's conversation in full.
 pub fn transcript(unit: &Unit, native_id: &str) -> Result<Transcript> {
     let turns = match unit.agent {
@@ -361,12 +239,86 @@ pub fn transcript(unit: &Unit, native_id: &str) -> Result<Transcript> {
         Agent::Pi => pi::transcript(unit),
         Agent::GrokBuild => grok::transcript(unit),
     }?;
-    Ok(Transcript::new(conversation_id(unit, native_id), turns))
+    Ok(Transcript::new(session_id(unit.agent, native_id), turns))
 }
 
-/// The id a conversation is known by, as its session is.
-fn conversation_id(unit: &Unit, native_id: &str) -> String {
-    format!("{}:{native_id}", unit.agent.key())
+/// Where conversations are kept, and which could mention a search, looked up
+/// once for a search of every conversation rather than once for each.
+///
+/// Finding a Codex thread's rollouts means walking every rollout on the
+/// machine, and every OpenCode session is kept in one database, so asking each
+/// once is most of what makes reading every conversation affordable.
+pub struct Library {
+    /// What is searched for, lowercase.
+    needle: String,
+    /// Every Codex rollout on this machine.
+    rollouts: Vec<PathBuf>,
+    /// OpenCode's database.
+    database: PathBuf,
+    /// The OpenCode sessions whose records hold the needle, or `None` when the
+    /// database could not say. Asked when the first OpenCode session comes up,
+    /// so a search of the others does not wait on it.
+    opencode: OnceLock<Option<HashSet<String>>>,
+}
+
+impl Library {
+    /// Look up where the conversations under `home` are kept, for a search of
+    /// them for `needle`, which is lowercase.
+    pub fn new(home: &Path, needle: &str) -> Library {
+        Library {
+            needle: needle.to_owned(),
+            rollouts: codex::every_rollout(&home.join(".codex")),
+            database: home.join(".local/share/opencode/opencode.db"),
+            opencode: OnceLock::new(),
+        }
+    }
+
+    /// Whether a session's conversation could mention the needle, judged
+    /// without reading it: false only when it certainly cannot.
+    pub fn may_mention(&self, unit: &Unit, native_id: &str) -> bool {
+        if !plain(&self.needle) {
+            return true;
+        }
+        let files = match unit.agent {
+            Agent::ClaudeCode | Agent::Pi => vec![unit.path.clone()],
+            Agent::Codex => codex::of_thread(&self.rollouts, &unit.path, native_id),
+            Agent::GrokBuild => vec![grok::conversation(&unit.path)],
+            Agent::OpenCode => {
+                return self
+                    .opencode
+                    .get_or_init(|| opencode::holding(&self.database, &self.needle).ok())
+                    .as_ref()
+                    .is_none_or(|sessions| sessions.contains(native_id));
+            }
+        };
+        // A file that cannot be read could hold anything, and reading the
+        // conversation will report it.
+        files.iter().any(|file| {
+            std::fs::read(file).map_or(true, |bytes| holds(&bytes, self.needle.as_bytes()))
+        })
+    }
+
+    /// Read one session's conversation in full, as [`transcript`] does.
+    pub fn transcript(&self, unit: &Unit, native_id: &str) -> Result<Transcript> {
+        match unit.agent {
+            Agent::Codex => Ok(Transcript::new(
+                session_id(unit.agent, native_id),
+                codex::transcript_of(&codex::of_thread(&self.rollouts, &unit.path, native_id))?,
+            )),
+            _ => transcript(unit, native_id),
+        }
+    }
+}
+
+/// Whether a needle reads in a JSON file exactly as it is written, so that
+/// missing from a file's bytes proves it absent: ASCII that no writer escapes.
+/// Beyond ASCII some writers escape every character; a quote, a backslash or a
+/// control character is always escaped; and some writers escape a slash, `<`,
+/// `>`, `&` or `'`.
+fn plain(needle: &str) -> bool {
+    needle
+        .bytes()
+        .all(|byte| (byte == b' ' || byte.is_ascii_graphic()) && !b"\"\\/<>&'".contains(&byte))
 }
 
 /// A conversation as a reader assembles it, turn by turn.
@@ -375,14 +327,15 @@ fn conversation_id(unit: &Unit, native_id: &str) -> String {
 /// are answered in whatever order they finish, so a result is folded into the
 /// call its id names rather than into whichever call came last.
 #[derive(Default)]
-pub struct Conversation {
+struct Conversation {
     turns: Vec<Turn>,
+    /// Calls not yet answered, by id, at their place in `turns`.
     awaiting: HashMap<String, usize>,
 }
 
 impl Conversation {
     /// Add something said, unless there is nothing in it to read.
-    pub fn say(
+    fn say(
         &mut self,
         speaker: Speaker,
         at: Option<i64>,
@@ -397,14 +350,14 @@ impl Conversation {
 
     /// Add a message sent as the person's, divided as [`prompt_parts`] divides
     /// it.
-    pub fn prompt(&mut self, at: Option<i64>, text: &str) {
+    fn prompt(&mut self, at: Option<i64>, text: &str) {
         for (speaker, part) in prompt_parts(text) {
             self.say(speaker, at, None, part);
         }
     }
 
     /// Add a tool call, which a later result can answer when it has an id.
-    pub fn call(&mut self, id: Option<&str>, at: Option<i64>, model: Option<&str>, tool: ToolCall) {
+    fn call(&mut self, id: Option<&str>, at: Option<i64>, model: Option<&str>, tool: ToolCall) {
         if let Some(id) = id {
             self.awaiting.insert(id.to_owned(), self.turns.len());
         }
@@ -412,7 +365,8 @@ impl Conversation {
     }
 
     /// Fold a result into the call it answers; one answering no call is dropped.
-    pub fn answer(&mut self, id: &str, output: String, failed: bool) {
+    fn answer(&mut self, id: &str, output: String, failed: bool) {
+        // Every awaited position is a pushed turn, and turns are never removed.
         if let Some(tool) = self
             .awaiting
             .remove(id)
@@ -424,7 +378,7 @@ impl Conversation {
     }
 
     /// The turns, in order.
-    pub fn into_turns(self) -> Vec<Turn> {
+    fn into_turns(self) -> Vec<Turn> {
         self.turns
     }
 
@@ -437,6 +391,7 @@ impl Conversation {
         tool: Option<ToolCall>,
     ) {
         self.turns.push(Turn {
+            // A vector's length never exceeds `isize::MAX`, so it fits.
             index: self.turns.len() as i64,
             speaker,
             at,
@@ -449,7 +404,7 @@ impl Conversation {
 
 /// The pieces of text in a value that is a string or a list of blocks carrying
 /// text.
-pub fn pieces(value: &Value) -> Vec<&str> {
+fn pieces(value: &Value) -> Vec<&str> {
     match value {
         Value::String(text) => vec![text],
         Value::Array(blocks) => blocks
@@ -460,17 +415,18 @@ pub fn pieces(value: &Value) -> Vec<&str> {
     }
 }
 
-/// The text of a value that is a string or a list of blocks carrying text.
-pub fn text(value: &Value) -> String {
+/// The text of a value that is a string or a list of blocks carrying text, a
+/// piece to a line.
+fn text(value: &Value) -> String {
     match value {
-        Value::String(_) | Value::Array(_) => pieces(value).join("\n"),
-        Value::Null => String::new(),
-        other => other.to_string(),
+        Value::Array(_) => pieces(value).join("\n"),
+        other => compact(other),
     }
 }
 
-/// Tool arguments as text: a string as it is, anything else as compact JSON.
-pub fn compact(value: &Value) -> String {
+/// A value as text: a string as it is, null as nothing, and anything else, such
+/// as a tool's arguments, as compact JSON.
+fn compact(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
         Value::Null => String::new(),
@@ -478,53 +434,29 @@ pub fn compact(value: &Value) -> String {
     }
 }
 
-/// Read a whole file.
-pub fn read_all(path: &Path) -> Result<Vec<u8>> {
-    std::fs::read(path).map_err(|source| Error::Read {
-        path: path.display().to_string(),
-        source,
-    })
-}
-
-/// The non-empty lines of a buffer.
-pub fn lines(buffer: &[u8]) -> impl Iterator<Item = &[u8]> {
-    buffer
-        .split(|byte| *byte == b'\n')
-        .filter(|line| line.iter().any(|byte| !byte.is_ascii_whitespace()))
-}
-
-/// Whether a buffer contains a byte sequence, without decoding it.
-pub fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle)
-}
-
-/// Turn an opening prompt into a one-line title.
-///
-/// Prompts arrive with leading blank lines, pasted context, and command markup.
-/// The title is the first line with prose on it, capped so one pasted paragraph
-/// cannot become the name of a session.
-fn title_from(text: &str) -> Option<String> {
-    let line = text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with('<') && !line.starts_with("#!"))?;
-    let mut title: String = line.chars().take(TITLE_LIMIT).collect();
-    if line.chars().count() > TITLE_LIMIT {
-        title.push('…');
-    }
-    Some(title)
-}
-
 /// A session's title from the pieces of a message sent as the person's: the
 /// first line of their own words, unless those words are a slash command.
-pub fn title_of<'a>(pieces: impl IntoIterator<Item = &'a str>) -> Option<String> {
+fn title_of<'a>(pieces: impl IntoIterator<Item = &'a str>) -> Option<String> {
     pieces
         .into_iter()
         .flat_map(prompt_parts)
         .filter(|(speaker, text)| *speaker == Speaker::User && !command(text))
         .find_map(|(_, text)| title_from(&text))
+}
+
+/// Turn an opening prompt into a one-line title: its first line with prose on
+/// it, capped so one pasted paragraph cannot become the name of a session.
+fn title_from(text: &str) -> Option<String> {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('<') && !line.starts_with("#!"))?;
+    let mut characters = line.chars();
+    let mut title: String = characters.by_ref().take(TITLE_LIMIT).collect();
+    if characters.next().is_some() {
+        title.push('…');
+    }
+    Some(title)
 }
 
 /// Whether text is a slash command, such as `/model opus`, rather than prose
@@ -545,7 +477,7 @@ fn command(text: &str) -> bool {
 /// the person's own words: a slash command, and Grok's `<user_query>` after the
 /// context it adds. The caveat Claude Code writes before a command's output
 /// says nothing, and is left out.
-pub fn prompt_parts(text: &str) -> Vec<(Speaker, String)> {
+fn prompt_parts(text: &str) -> Vec<(Speaker, String)> {
     let text = text.trim();
     if text.starts_with("<local-command-caveat>") {
         return Vec::new();
@@ -592,31 +524,57 @@ fn element<'a>(text: &'a str, tag: &str) -> Option<(Range<usize>, &'a str)> {
     Some((start..end + close.len(), text[inner..end].trim()))
 }
 
-/// A file's modification time and size, as change detection uses them.
-pub fn stat(path: &Path) -> Option<(i64, i64)> {
+/// Read a whole file.
+fn read_all(path: &Path) -> Result<Vec<u8>> {
+    std::fs::read(path).map_err(|source| Error::Read {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+/// The lines of a buffer that hold anything.
+///
+/// Line ends are found a vector's width at a time, which over the gigabytes a
+/// scan reads is many times faster than splitting byte by byte.
+fn lines(buffer: &[u8]) -> impl Iterator<Item = &[u8]> {
+    let mut start = 0;
+    memchr::memchr_iter(b'\n', buffer)
+        .chain([buffer.len()])
+        .map(move |end| {
+            // Every end lies past the one before it, so the range is in bounds.
+            let line = &buffer[start..end];
+            start = end + 1;
+            line
+        })
+        .filter(|line| line.iter().any(|byte| !byte.is_ascii_whitespace()))
+}
+
+/// A file's modification time, in Unix milliseconds, and size, as change
+/// detection compares them; `None` when it cannot be read.
+fn stat(path: &Path) -> Option<(i64, i64)> {
     let data = std::fs::metadata(path).ok()?;
     let modified = data.modified().ok()?;
     let millis = modified
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_millis();
-    Some((millis as i64, data.len() as i64))
+    Some((i64::try_from(millis).ok()?, i64::try_from(data.len()).ok()?))
 }
 
-/// Every file under `root` matching an extension, at any depth.
+/// Every `.jsonl` file under `root`, at any depth.
 ///
-/// Directory entries that cannot be read are skipped: an unreadable project
-/// folder should cost that folder, not the scan.
-pub fn walk(root: &Path, extension: &str, found: &mut Vec<PathBuf>) {
+/// A directory that cannot be read is skipped: an unreadable project folder
+/// should cost that folder, not the scan.
+fn walk(root: &Path, found: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         match entry.file_type() {
-            Ok(kind) if kind.is_dir() => walk(&path, extension, found),
+            Ok(kind) if kind.is_dir() => walk(&path, found),
             Ok(kind)
-                if kind.is_file() && path.extension().is_some_and(|found| found == extension) =>
+                if kind.is_file() && path.extension().is_some_and(|found| found == "jsonl") =>
             {
                 found.push(path);
             }
@@ -625,8 +583,8 @@ pub fn walk(root: &Path, extension: &str, found: &mut Vec<PathBuf>) {
     }
 }
 
-/// Build a [`Unit`] for a path, or nothing if it has since disappeared.
-pub fn unit(agent: Agent, path: PathBuf) -> Option<Unit> {
+/// The unit a file of `agent`'s is, or nothing if it has since disappeared.
+fn unit(agent: Agent, path: PathBuf) -> Option<Unit> {
     let (mtime, size) = stat(&path)?;
     Some(Unit {
         agent,
@@ -639,8 +597,66 @@ pub fn unit(agent: Agent, path: PathBuf) -> Option<Unit> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::File;
-    use std::io::Write;
+
+    impl Summary {
+        /// Everything counted, as the store totals it.
+        pub(super) fn tokens(&self) -> Tokens {
+            let mut total = Tokens::default();
+            for usage in &self.usage {
+                total.add(usage.tokens);
+            }
+            total
+        }
+
+        /// The cost counted, unknown when no usage carries one.
+        pub(super) fn cost(&self) -> Option<f64> {
+            self.usage
+                .iter()
+                .filter_map(|usage| usage.cost_usd)
+                .reduce(|sum, cost| sum + cost)
+        }
+
+        /// Tokens under each named model, largest first.
+        pub(super) fn models(&self) -> Vec<(&str, i64)> {
+            let mut models: Vec<(&str, i64)> = Vec::new();
+            for usage in self.usage.iter().filter(|usage| !usage.model.is_empty()) {
+                match models.iter_mut().find(|(model, _)| *model == usage.model) {
+                    Some((_, total)) => *total += usage.tokens.total,
+                    None => models.push((&usage.model, usage.tokens.total)),
+                }
+            }
+            models.sort_by_key(|(_, total)| -total);
+            models
+        }
+    }
+
+    /// A unit of `agent`'s holding `contents`, in a directory that lasts as
+    /// long as the guard returned with it.
+    pub(super) fn journal(agent: Agent, contents: &str) -> (tempfile::TempDir, Unit) {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("session.jsonl");
+        std::fs::write(&path, contents).expect("writes");
+        (directory, unit(agent, path).expect("unit"))
+    }
+
+    /// The one session a file of `agent`'s holding `contents` summarizes to.
+    pub(super) fn summarized(agent: Agent, contents: &str) -> Summary {
+        let (_directory, unit) = journal(agent, contents);
+        summarize(&unit).expect("summarizes").remove(0)
+    }
+
+    /// The conversation a file of `agent`'s holding `contents` reads as.
+    pub(super) fn transcribed(agent: Agent, contents: &str) -> Transcript {
+        let (_directory, unit) = journal(agent, contents);
+        transcript(&unit, "s").expect("reads")
+    }
+
+    fn tokens(total: i64) -> Tokens {
+        Tokens {
+            total,
+            ..Tokens::default()
+        }
+    }
 
     #[test]
     fn a_cost_no_record_could_have_is_unknown() {
@@ -654,76 +670,40 @@ mod tests {
             for &cost in costs {
                 tally.add(0, "opencode", "m", tokens, Some(cost));
             }
-            let (tokens, cost) = tally.buckets.into_values().next().expect("one bucket");
-            (tokens.total, cost)
+            let usage = tally
+                .summary(session(Agent::OpenCode, "a".into(), 0, 0))
+                .usage;
+            (usage[0].tokens.total, usage[0].cost_usd)
         };
         assert_eq!(counted(&[0.25, 0.5]), (20, Some(0.75)));
-        // Two corrupt figures would add up to infinity; each is unknown
-        // instead, and the tokens still count.
+        // Two corrupt figures would add up to infinity, which the index could
+        // not answer with; each is unknown instead, and the tokens still count.
         assert_eq!(counted(&[f64::MAX, f64::MAX, -1.0]), (30, None));
         assert_eq!(counted(&[f64::MAX, 0.5]), (20, Some(0.5)));
     }
 
     #[test]
-    fn a_file_is_passed_over_only_when_it_cannot_hold_the_needle() {
-        let directory = tempfile::tempdir().expect("temp dir");
-        let said = directory.path().join("said.jsonl");
-        std::fs::write(&said, r#"{"content":"Add Idempotency-Key headers"}"#).expect("writes");
-        let other = directory.path().join("other.jsonl");
-        std::fs::write(&other, r#"{"content":"Nothing here"}"#).expect("writes");
-        let files = [said.clone(), other.clone()];
+    fn a_conversation_is_passed_over_only_when_its_file_cannot_hold_the_needle() {
+        let (home, said) = journal(
+            Agent::ClaudeCode,
+            r#"{"content":"Add Idempotency-Key headers"}"#,
+        );
+        let may =
+            |unit: &Unit, needle: &str| Library::new(home.path(), needle).may_mention(unit, "s");
 
-        assert!(may_contain(&files, "idempotency-key"), "case is ignored");
-        assert!(may_contain(&files, "add idem"));
-        assert!(!may_contain(&files, "refunds"));
-        assert!(!may_contain(std::slice::from_ref(&other), "idempotency"));
+        assert!(may(&said, "idempotency-key"), "case is ignored");
+        assert!(may(&said, "add idem"));
+        assert!(!may(&said, "refunds"));
         // A needle a writer might escape could be anywhere.
         for escaped in ["a \"quote\"", "a/b", "<tag>", "café", "it's"] {
-            assert!(
-                may_contain(std::slice::from_ref(&other), escaped),
-                "{escaped}"
-            );
+            assert!(may(&said, escaped), "{escaped}");
         }
         // So could anything in a file that cannot be read.
-        assert!(may_contain(
-            &[directory.path().join("gone.jsonl")],
-            "idempotency"
-        ));
-    }
-
-    fn write(directory: &Path, name: &str, contents: &[u8]) -> PathBuf {
-        let path = directory.join(name);
-        let mut file = File::create(&path).expect("creates");
-        file.write_all(contents).expect("writes");
-        path
-    }
-
-    fn tokens(total: i64) -> Tokens {
-        Tokens {
-            total,
-            ..Tokens::default()
-        }
-    }
-
-    fn session() -> Session {
-        Session {
-            id: "pi:s".into(),
-            agent: Agent::Pi,
-            native_id: "s".into(),
-            title: None,
-            cwd: None,
-            branch: None,
-            started_at: 0,
-            updated_at: 0,
-            spawned: false,
-            role: None,
-            models: Vec::new(),
-            tokens: Tokens::default(),
-            cost_usd: None,
-            messages: None,
-            tools: None,
-            present: true,
-        }
+        let gone = Unit {
+            path: home.path().join("gone.jsonl"),
+            ..said.clone()
+        };
+        assert!(may(&gone, "refunds"));
     }
 
     #[test]
@@ -735,7 +715,7 @@ mod tests {
         tally.add(16 * 60_000, "p", "b", tokens(30), None);
         // A record of nothing leaves no trace.
         tally.add(20 * 60_000, "p", "<synthetic>", Tokens::default(), None);
-        let summary = tally.summary(session());
+        let summary = tally.summary(session(Agent::Pi, "s".into(), 0, 0));
 
         let dated: Vec<_> = summary
             .usage
@@ -768,7 +748,7 @@ mod tests {
             tokens(5),
             Some(0.25),
         );
-        let summary = tally.summary(session());
+        let summary = tally.summary(session(Agent::Pi, "s".into(), 0, 0));
 
         let counted: Vec<_> = summary
             .usage
@@ -809,6 +789,16 @@ mod tests {
         );
         assert_eq!(title_from("   \n  \n"), None);
         assert_eq!(title_from(""), None);
+    }
+
+    #[test]
+    fn long_titles_are_capped_in_characters_with_an_ellipsis() {
+        // Cutting at a byte offset would split a multi-byte character.
+        let title = title_from(&"é".repeat(500)).expect("has a title");
+        assert_eq!(title.chars().count(), TITLE_LIMIT + 1);
+        assert!(title.ends_with('…'));
+        let exact = "é".repeat(TITLE_LIMIT);
+        assert_eq!(title_from(&exact), Some(exact));
     }
 
     #[test]
@@ -863,39 +853,29 @@ mod tests {
     }
 
     #[test]
-    fn long_titles_are_capped_with_an_ellipsis() {
-        let long = "w".repeat(500);
-        let title = title_from(&long).expect("has a title");
-        assert_eq!(title.chars().count(), TITLE_LIMIT + 1);
-        assert!(title.ends_with('…'));
+    fn records_are_the_lines_that_hold_anything() {
+        let found: Vec<&[u8]> = lines(b"a\n\n\nbc\n   \nd").collect();
+        assert_eq!(found, [b"a".as_slice(), b"bc", b"d"]);
+        assert_eq!(lines(b"{}\n").count(), 1);
+        assert_eq!(lines(b"").count(), 0);
     }
 
     #[test]
-    fn titles_count_characters_not_bytes() {
-        // Truncating by byte offset would split a multi-byte character and
-        // panic; the cap is expressed in characters for that reason.
-        let long = "é".repeat(500);
-        let title = title_from(&long).expect("has a title");
-        assert_eq!(title.chars().count(), TITLE_LIMIT + 1);
-    }
-
-    #[test]
-    fn blank_lines_are_not_records() {
-        assert_eq!(lines(b"a\n\n\nb\n   \nc").count(), 3);
-    }
-
-    #[test]
-    fn walking_finds_nested_files_of_one_extension() {
+    fn walking_finds_nested_journals() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path();
         std::fs::create_dir_all(root.join("a/b")).expect("creates");
-        write(root, "one.jsonl", b"{}");
-        write(&root.join("a"), "two.jsonl", b"{}");
-        write(&root.join("a/b"), "three.jsonl", b"{}");
-        write(&root.join("a"), "ignored.json", b"{}");
+        for name in [
+            "one.jsonl",
+            "a/two.jsonl",
+            "a/b/three.jsonl",
+            "a/ignored.json",
+        ] {
+            std::fs::write(root.join(name), "{}").expect("writes");
+        }
 
         let mut found = Vec::new();
-        walk(root, "jsonl", &mut found);
+        walk(root, &mut found);
         assert_eq!(found.len(), 3);
     }
 }

@@ -5,8 +5,8 @@
 //! assistant message in `session_message` records its own time, model, tokens
 //! and cost, so usage is counted per message.
 //!
-//! The database is opened read-only. OpenCode may be running and writing to it,
-//! and this application never writes to an agent's own store.
+//! The database is opened read-only: OpenCode may be running and writing to
+//! it, and nothing here writes to an agent's own store.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -15,17 +15,17 @@ use rusqlite::{Connection, OpenFlags};
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::{Conversation, Summary, Tally, Unit, compact, rates, session, stat, sum, text};
 use crate::error::Result;
-use crate::price;
 use crate::session::{Agent, Session, Speaker, Tokens, ToolCall, Turn};
-use crate::source::{Conversation, Summary, Tally, Unit, compact, stat, text};
+use crate::timestamp;
 
 /// The database file, when it exists.
 ///
 /// New messages land in SQLite's write-ahead log and reach the database file
 /// only when the log is folded back in, so the log's changes count as the
 /// database's.
-pub fn discover(root: &Path) -> Vec<Unit> {
+pub(super) fn discover(root: &Path) -> Vec<Unit> {
     let path = root.join("opencode.db");
     let Some((mtime, size)) = stat(&path) else {
         return Vec::new();
@@ -35,7 +35,7 @@ pub fn discover(root: &Path) -> Vec<Unit> {
         agent: Agent::OpenCode,
         path,
         mtime: mtime.max(log_mtime),
-        size: size + log_size,
+        size: size.saturating_add(log_size),
     }]
 }
 
@@ -48,42 +48,35 @@ fn open(path: &Path) -> Result<Connection> {
 }
 
 /// What an assistant message records about producing it.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Reply {
-    #[serde(default)]
     time: Value,
-    #[serde(default)]
     model: Value,
-    #[serde(default)]
     cost: Option<f64>,
-    #[serde(default)]
     tokens: Option<Counts>,
 }
 
 /// The tokens one message used.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 struct Counts {
-    #[serde(default)]
     input: i64,
-    #[serde(default)]
     output: i64,
-    #[serde(default)]
     reasoning: i64,
-    #[serde(default)]
     cache: Cache,
 }
 
 /// Cached input a message read and wrote.
 #[derive(Deserialize, Default)]
+#[serde(default)]
 struct Cache {
-    #[serde(default)]
     read: i64,
-    #[serde(default)]
     write: i64,
 }
 
 /// Summarize every session in the database, counting usage per message.
-pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
+pub(super) fn summarize(source: &Unit) -> Result<Vec<Summary>> {
     let database = open(&source.path)?;
     let mut sessions: HashMap<String, (Session, Tally)> = HashMap::new();
 
@@ -92,26 +85,17 @@ pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
          FROM session_v2",
     )?;
     let rows = statement.query_map([], |row| {
-        let native_id: String = row.get(0)?;
-        let parent: Option<String> = row.get(6)?;
+        let started_at = timestamp::from_unix_number(row.get(4)?).unwrap_or(source.mtime);
+        let updated_at = timestamp::from_unix_number(row.get(5)?).unwrap_or(source.mtime);
         Ok(Session {
-            id: format!("{}:{native_id}", Agent::OpenCode.key()),
-            agent: Agent::OpenCode,
-            native_id,
-            title: row.get::<_, Option<String>>(1)?.filter(|t| !t.is_empty()),
+            title: row
+                .get::<_, Option<String>>(1)?
+                .filter(|title| !title.is_empty()),
             cwd: row.get(2)?,
-            branch: None,
-            started_at: crate::timestamp::from_unix_number(row.get(4)?).unwrap_or(source.mtime),
-            updated_at: crate::timestamp::from_unix_number(row.get(5)?).unwrap_or(source.mtime),
-            // A session with a parent was started by another session.
-            spawned: parent.is_some(),
             role: row.get(3)?,
-            models: Vec::new(),
-            tokens: Tokens::default(),
-            cost_usd: None,
-            messages: None,
-            tools: None,
-            present: true,
+            // A session with a parent was started by another session.
+            spawned: row.get::<_, Option<String>>(6)?.is_some(),
+            ..session(Agent::OpenCode, row.get(0)?, started_at, updated_at)
         })
     })?;
     for session in rows.filter_map(std::result::Result::ok) {
@@ -146,21 +130,22 @@ pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
             cache_read: counts.cache.read,
             cache_write: counts.cache.write,
             reasoning: counts.reasoning,
-            // OpenCode counts reasoning separately from output, so unlike
-            // Claude Code it belongs in the total.
-            total: counts.input
-                + counts.output
-                + counts.reasoning
-                + counts.cache.read
-                + counts.cache.write,
+            // OpenCode counts reasoning apart from output, so unlike Claude
+            // Code it belongs in the total.
+            total: sum([
+                counts.input,
+                counts.output,
+                counts.reasoning,
+                counts.cache.read,
+                counts.cache.write,
+            ]),
         };
-        let at = crate::timestamp::from_json(&time["created"]).unwrap_or(session.updated_at);
+        let at = timestamp::from_json(&time["created"]).unwrap_or(session.updated_at);
         let id = model["id"].as_str().unwrap_or_default();
         let provider = model["providerID"].as_str().unwrap_or_default();
-        let context = counts.input + counts.cache.read + counts.cache.write;
         // OpenCode records a cost only where it was billed one, so its own
         // figure stands in only for a model the catalog has no price for.
-        let cost = price::rates(provider, id, context)
+        let cost = rates(provider, id, &tokens)
             .map(|rates| rates.cost(&tokens))
             .or(cost);
         tally.add(at, provider, id, tokens, cost);
@@ -176,7 +161,7 @@ pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
 /// ASCII letters: every session whose conversation could mention it, and
 /// others whose records hold it elsewhere, found by one query rather than by
 /// reading each session's messages.
-pub fn holding(database: &Path, needle: &str) -> Result<HashSet<String>> {
+pub(super) fn holding(database: &Path, needle: &str) -> Result<HashSet<String>> {
     let pattern = format!(
         "%{}%",
         needle
@@ -193,7 +178,7 @@ pub fn holding(database: &Path, needle: &str) -> Result<HashSet<String>> {
 }
 
 /// Read one session's messages, in sequence order.
-pub fn transcript(source: &Unit, native_id: &str) -> Result<Vec<Turn>> {
+pub(super) fn transcript(source: &Unit, native_id: &str) -> Result<Vec<Turn>> {
     let database = open(&source.path)?;
     let mut statement = database
         .prepare("SELECT type, data FROM session_message WHERE session_id = ?1 ORDER BY seq")?;
@@ -206,9 +191,15 @@ pub fn transcript(source: &Unit, native_id: &str) -> Result<Vec<Turn>> {
         let Ok(message) = serde_json::from_str::<Value>(&data) else {
             continue;
         };
-        let at = crate::timestamp::from_json(&message["time"]["created"]);
+        let at = timestamp::from_json(&message["time"]["created"]);
         let model = message["model"]["id"].as_str();
-        let speaker = speaker_for(&kind);
+        let speaker = match kind.as_str() {
+            "user" => Speaker::User,
+            "assistant" => Speaker::Assistant,
+            // `system`, `compaction`, `shell` and `synthetic` are harness
+            // context rather than something a person or the model said.
+            _ => Speaker::System,
+        };
 
         // A user message carries its prose in `text`; an assistant message
         // carries an ordered `content` list instead.
@@ -237,7 +228,7 @@ pub fn transcript(source: &Unit, native_id: &str) -> Result<Vec<Turn>> {
                         output: Some(output).filter(|output| !output.is_empty()),
                         failed: state["status"] == "error",
                     };
-                    let called = crate::timestamp::from_json(&part["time"]["created"]).or(at);
+                    let called = timestamp::from_json(&part["time"]["created"]).or(at);
                     conversation.call(None, called, model, tool);
                 }
                 _ => {}
@@ -245,17 +236,6 @@ pub fn transcript(source: &Unit, native_id: &str) -> Result<Vec<Turn>> {
         }
     }
     Ok(conversation.into_turns())
-}
-
-/// Who a stored message row is attributed to.
-fn speaker_for(kind: &str) -> Speaker {
-    match kind {
-        "user" => Speaker::User,
-        "assistant" => Speaker::Assistant,
-        // `system`, `compaction`, `shell`, and `synthetic` are all harness
-        // context rather than something a person or the model said.
-        _ => Speaker::System,
-    }
 }
 
 #[cfg(test)]
@@ -273,7 +253,7 @@ mod tests {
         assert_eq!(after.size, before.size + 13);
     }
 
-    /// Build a store with the installed schema's columns for the rows we read.
+    /// A store with the installed schema's columns for the rows read here.
     fn fixture() -> (tempfile::TempDir, Unit) {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("opencode.db");
@@ -340,6 +320,26 @@ mod tests {
         (directory, source)
     }
 
+    /// Add an assistant message to the fixture's top session.
+    fn reply(source: &Unit, data: &str) {
+        Connection::open(&source.path)
+            .expect("opens")
+            .execute(
+                "INSERT INTO session_message (id, session_id, type, seq, data) VALUES ('m3','ses_top','assistant',3,?1)",
+                [data],
+            )
+            .expect("writes");
+    }
+
+    /// One session of `source`, as summarizing reads it.
+    fn summarized(source: &Unit, native_id: &str) -> Summary {
+        summarize(source)
+            .expect("summarizes")
+            .into_iter()
+            .find(|summary| summary.session.native_id == native_id)
+            .expect("the session")
+    }
+
     #[test]
     fn the_sessions_holding_a_needle_are_found_in_one_query() {
         let (_directory, source) = fixture();
@@ -359,45 +359,29 @@ mod tests {
         assert!(found("reply_with").is_empty());
     }
 
-    /// One session of the fixture, as summarizing reads it.
-    fn summarized(native_id: &str) -> Summary {
-        let (_directory, source) = fixture();
-        summarize(&source)
-            .expect("summarizes")
-            .into_iter()
-            .find(|summary| summary.session.native_id == native_id)
-            .expect("the session")
-    }
-
     #[test]
     fn reads_every_session_with_usage_from_its_messages() {
         let (_directory, source) = fixture();
         assert_eq!(summarize(&source).expect("summarizes").len(), 2);
 
-        let top = summarized("ses_top");
+        let top = summarized(&source, "ses_top");
         assert_eq!(top.session.id, "open_code:ses_top");
         assert_eq!(top.session.title.as_deref(), Some("Explore Rust backend"));
         assert_eq!(top.session.cwd.as_deref(), Some("/w/proj"));
         assert_eq!(top.session.role.as_deref(), Some("explore"));
         assert!(!top.session.spawned);
-        // Usage belongs to the model its message names.
+        // Usage belongs to the model its message names. OpenCode counts
+        // reasoning apart from output, so the total is 4_263 + 2 + 12.
         assert_eq!(top.models(), [("ling-3.0", 4_277)]);
+        assert_eq!(top.tokens().reasoning, 12);
         // The catalog has no price for it, so OpenCode's own figure stands.
         assert_eq!(top.cost(), Some(0.0214));
     }
 
     #[test]
-    fn reasoning_counts_toward_the_total() {
-        let tokens = summarized("ses_top").tokens();
-        // 4_263 + 2 + 12, computed by hand. OpenCode reports reasoning
-        // separately from output, so it is added here.
-        assert_eq!(tokens.total, 4_277);
-        assert_eq!(tokens.reasoning, 12);
-    }
-
-    #[test]
     fn a_session_with_a_parent_is_a_spawned_run() {
-        let child = summarized("ses_child");
+        let (_directory, source) = fixture();
+        let child = summarized(&source, "ses_child");
         assert!(child.session.spawned);
         assert!(child.usage.is_empty(), "it sent no messages");
     }
@@ -426,26 +410,21 @@ mod tests {
 
         let tool = read.turns[2].tool.as_ref().expect("a tool call");
         assert_eq!(tool.name, "read");
+        assert_eq!(tool.input, r#"{"path":"/tmp/x"}"#);
         assert_eq!(tool.output.as_deref(), Some("file body"));
         assert!(!tool.failed);
-        assert!(tool.input.contains("/tmp/x"));
     }
 
     #[test]
     fn a_failed_call_shows_why_it_failed() {
         let (_directory, source) = fixture();
-        let database = Connection::open(&source.path).expect("opens");
-        let rejected = r#"{"time":{"created":1788332935722},
+        reply(
+            &source,
+            r#"{"time":{"created":1788332935722},
             "content":[{"type":"tool","name":"write","time":{"created":1788332935722},
               "state":{"status":"error","input":{"path":"/forbidden"},
-                       "error":{"type":"permission.rejected","message":"blocked by policy"}}}]}"#;
-        database
-            .execute(
-                "INSERT INTO session_message (id, session_id, type, seq, data) VALUES ('m3','ses_top','assistant',3,?1)",
-                [rejected],
-            )
-            .expect("writes");
-        drop(database);
+                       "error":{"type":"permission.rejected","message":"blocked by policy"}}}]}"#,
+        );
 
         let read = crate::source::transcript(&source, "ses_top").expect("reads");
         let failed = read
@@ -461,25 +440,16 @@ mod tests {
     #[test]
     fn a_model_is_priced_by_its_id_and_counted_under_its_name() {
         let (_directory, source) = fixture();
-        let database = Connection::open(&source.path).expect("opens");
         // Through OpenRouter the model carries its vendor. OpenCode's own $0.50
         // would stand in only for a model the catalog has no price for.
-        let routed = r#"{"time":{"created":1788330700000},
+        reply(
+            &source,
+            r#"{"time":{"created":1788330700000},
             "model":{"id":"meta/muse-spark-1.3-contributor","providerID":"openrouter"},"cost":0.5,
-            "tokens":{"input":1000,"output":500,"reasoning":0,"cache":{"read":2000,"write":0}}}"#;
-        database
-            .execute(
-                "INSERT INTO session_message (id, session_id, type, seq, data) VALUES ('m3','ses_top','assistant',3,?1)",
-                [routed],
-            )
-            .expect("writes");
-        drop(database);
+            "tokens":{"input":1000,"output":500,"reasoning":0,"cache":{"read":2000,"write":0}}}"#,
+        );
 
-        let top = summarize(&source)
-            .expect("summarizes")
-            .into_iter()
-            .find(|summary| summary.session.native_id == "ses_top")
-            .expect("the session");
+        let top = summarized(&source, "ses_top");
         let used = top
             .usage
             .iter()
