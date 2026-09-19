@@ -27,7 +27,7 @@ and a session's totals are the sum of its records across every file it spans.
 A model is counted under its name, the id its agent recorded less any path in
 front of it, so OpenRouter's `google/gemini-3.8-flash` and Google's own
 `gemini-3.8-flash` are one model; the id is still what a record is priced by.
-The first index of 900 files and 2.7 GB takes one to three seconds; after that
+The first index of 1,187 files and 1,261 sessions takes under two seconds; after that
 a scan reads only the handful of files agents are writing to.
 
 Reading a _conversation_ parses a whole file too, for one session at a time,
@@ -37,7 +37,7 @@ and it is fast because the file is local: about 2 ms for a median session.
 
 A single SQLite file, `index.sqlite`, holding one row per session, each
 session's usage by quarter hour, provider and model, and the file signatures that make
-rescanning incremental. About **2.5 MB** for this corpus.
+rescanning incremental. About **3.6 MB** for this corpus.
 
 No transcript text is copied into it. That is the decision the rest of the
 performance follows from: the previous engine copied every body into SQLite,
@@ -179,26 +179,27 @@ directly and the store round-trips them through columns of the same name.
 
 ## Measured
 
-On this machine, against 900 files and 2.7 GB of agent history:
+On this machine, against 1,187 files holding 1,261 sessions:
 
-| Operation                          | Time        |
-| ---------------------------------- | ----------- |
-| Cold index of the whole corpus     | ~2–3 s      |
-| Rescan with nothing changed        | ~10 ms      |
-| Session list page, filtered/sorted | ~2–4 ms     |
-| Search across all sessions         | ~4–6 ms     |
-| Model ranking                      | ~4–6 ms     |
-| Project ranking                    | ~4 ms       |
-| Overview totals                    | ~6–9 ms     |
-| Open a conversation (median)       | ~2 ms       |
-| Open a conversation (p99)          | ~150–175 ms |
-| Search what was said, first found  | ~150 ms     |
-| Search what was said, a rare word  | ~2 s        |
-| Search what was said, a common one | ~0.7–1 s    |
-| Index size                         | ~2.5 MB     |
+| Operation                          | Time    |
+| ---------------------------------- | ------- |
+| Cold index of the whole corpus     | ~1.7 s  |
+| Rescan with one file changed       | ~17 ms  |
+| Session list page, filtered/sorted | ~0.5 ms |
+| Search across all sessions         | ~2.4 ms |
+| Model ranking                      | ~8 ms   |
+| Project ranking                    | ~3 ms   |
+| Overview totals                    | ~9 ms   |
+| Open a conversation (median)       | ~2 ms   |
+| Open a conversation (p99)          | ~33 ms  |
+| Open the largest, a 336 MB rollout | ~200 ms |
+| Search what was said, first found  | ~100 ms |
+| Search what was said, a rare word  | ~2 s    |
+| Search what was said, a common one | ~0.6 s  |
+| Index size                         | ~3.6 MB |
 
-Timings vary with machine load; these are two runs at a load average of about
-ten, and a quieter machine is faster. Reproduce with
+Timings vary with machine load; these are one run at a load average of about
+five, and a quieter machine is faster. Reproduce with
 `cargo run --release --example scan` from `src-tauri/`. It reads your real agent
 directories, writes its index to a temporary directory, and never writes to an
 agent's files. It also reports what share of each agent's tool calls came back

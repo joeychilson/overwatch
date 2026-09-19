@@ -25,7 +25,7 @@ Repository conventions, checks, and the commit format are in
 ```mermaid
 flowchart LR
     A[Agent files and databases] -->|changed files| B[Readers, one per agent]
-    B --> C[(index.sqlite, ~2.5 MB)]
+    B --> C[(index.sqlite, ~3.6 MB)]
     C --> D[Eighteen Tauri commands]
     D --> E[UI]
     A -->|whole file, on open| F[One conversation]

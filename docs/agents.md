@@ -96,8 +96,9 @@ the database file, so a change to either one counts as a change.
 model and provider were in force, so tokens are attributed per model exactly
 and priced under that provider, with Pi's own cost standing in only for a model
 the catalog does not list. Reasoning is counted inside `output`. Image
-blocks become an `[image]` marker instead of megabytes of base64. Note that a
-tool _result_ in Pi is a message with its own `toolResult` role carrying a
+blocks become an `[image]` marker instead of megabytes of base64. A tool call's
+`arguments` are written as an object, not as JSON text. Note that a tool
+_result_ in Pi is a message with its own `toolResult` role carrying a
 `toolCallId`, not a block inside another message — reading it as a block finds
 nothing at all.
 
@@ -111,7 +112,9 @@ requests could not be priced in the right context tier. Cached input is counted
 inside `inputTokens` and reasoning inside `outputTokens`. The `totalTokens` on
 other updates is the size of the context, not usage; counting it undercounted
 Grok on this machine more than twentyfold. Sessions without the file record
-usage nowhere, and report none.
+usage nowhere, and report none. A turn's usage reaches `updates.jsonl` minutes
+after the chat, and the generated title reaches `summary.json` up to an hour
+later, so a session has changed when any of its three files has.
 
 ## Adding an agent
 
@@ -121,7 +124,8 @@ usage nowhere, and report none.
    `transcript`, and wire it into the three `match` statements in
    `source/mod.rs`.
 4. Add its display name, mark, chart colour and resume command to
-   `src/lib/agents.ts`, and the colour itself to `src/app.css`.
+   `src/lib/agents.ts`, and the colour itself to `src/app.css` and to the
+   share card's palettes in `src/lib/card.ts`.
 5. If it can hold a subscription's sign-in, add a `Source` for it to that
    subscription's reader in `src-tauri/src/account/`.
 
