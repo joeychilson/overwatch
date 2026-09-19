@@ -5,7 +5,7 @@
  * those first and set them apart, and its ways out must reach the engine.
  */
 import { expect, test } from "@playwright/test";
-import { account, installIpc, settle, status } from "./ipc.ts";
+import { account, emitTo, installIpc, settle, status } from "./ipc.ts";
 
 test.beforeEach(async ({ page }) => {
   await installIpc(page);
@@ -51,4 +51,16 @@ test("the panel opens the window and quits the app", async ({ page }) => {
   await page.getByRole("button", { name: "Quit Overwatch" }).click();
   const commands = await page.evaluate(() => window.__ipc.calls.map((call) => call.cmd));
   expect(commands).toEqual(expect.arrayContaining(["open_window", "quit"]));
+});
+
+test("a destination the app's menu sends its window leaves the panel where it is", async ({
+  page,
+}) => {
+  await page.goto("/tray");
+  await settle(page, "get_status", status({ accounts: [account()] }));
+
+  // The panel runs the app's root layout, which listens for destinations.
+  expect(await emitTo(page, "main", "open", "/sessions")).toBe(0);
+  await expect(page).toHaveURL(/\/tray$/);
+  await expect(page.getByRole("button", { name: "Open Overwatch" })).toBeVisible();
 });

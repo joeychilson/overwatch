@@ -19,8 +19,11 @@ export interface ScriptedIpc {
   pendingCount(cmd: string): number;
   /** The calls of a command still waiting to be settled, oldest first. */
   pendingCalls(cmd: string): { id: number; args: Record<string, unknown> }[];
-  /** Deliver an event to every listener the page registered for it. */
-  emit(event: string, payload: unknown): number;
+  /**
+   * Deliver an event as the engine would: to every listener for it, or with a
+   * `target` window, only to listeners for any window or for that one.
+   */
+  emit(event: string, payload: unknown, target?: string): number;
 }
 
 declare global {
@@ -37,8 +40,10 @@ export async function installIpc(page: Page) {
       { cmd: string; resolve: (v: unknown) => void; reject: (e: unknown) => void }
     >();
     const callbacks = new Map<number, (payload: unknown) => void>();
-    /** The callback registered for each listened-to event. */
-    const listeners: { event: string; handler: number }[] = [];
+    /** The callback registered for each listened-to event, and the window it listens on. */
+    const listeners: { event: string; handler: number; label: string | null }[] = [];
+    /** The window this page stands for: the menu bar panel at `/tray`, else the app's. */
+    const label = location.pathname.startsWith("/tray") ? "tray" : "main";
     const calls: { id: number; cmd: string; args: Record<string, unknown> }[] = [];
     let nextId = 1;
 
@@ -73,11 +78,15 @@ export async function installIpc(page: Page) {
       pendingCalls(cmd) {
         return calls.filter((call) => call.cmd === cmd && pending.has(call.id));
       },
-      emit(event, payload) {
+      emit(event, payload, target) {
         let delivered = 0;
         for (const listener of listeners) {
           const callback = callbacks.get(listener.handler);
           if (listener.event !== event || !callback) continue;
+          // Tauri hands a listener for any window every event, sent to a window or not.
+          if (target !== undefined && listener.label !== null && listener.label !== target) {
+            continue;
+          }
           callback({ event, id: 0, payload });
           delivered += 1;
         }
@@ -86,13 +95,19 @@ export async function installIpc(page: Page) {
     };
 
     (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+      metadata: { currentWindow: { label }, currentWebview: { windowLabel: label, label } },
       invoke(cmd: string, args: Record<string, unknown>) {
         const id = nextId++;
         calls.push({ id, cmd, args: args ?? {} });
         // The event plugin's own commands answer immediately; only engine
         // commands are held open for the test to settle.
         if (cmd === "plugin:event|listen") {
-          listeners.push({ event: args.event as string, handler: args.handler as number });
+          const target = args.target as { kind: string; label?: string };
+          listeners.push({
+            event: args.event as string,
+            handler: args.handler as number,
+            label: target.kind === "Any" ? null : (target.label ?? null),
+          });
           return Promise.resolve(id);
         }
         if (cmd === "plugin:event|unlisten") return Promise.resolve(null);
@@ -139,6 +154,29 @@ export async function emit(page: Page, event: string, payload: unknown) {
       page.evaluate(([e, data]) => window.__ipc.emit(e as string, data), [event, payload] as const),
     )
     .toBeGreaterThan(0);
+}
+
+/**
+ * Send an event to one window, as `emit_to` does, once the page listens for it,
+ * answering how many of the page's listeners heard it.
+ */
+export async function emitTo(page: Page, target: string, event: string, payload: unknown) {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (e) =>
+          window.__ipc.calls.some(
+            (call) => call.cmd === "plugin:event|listen" && call.args.event === e,
+          ),
+        event,
+      ),
+    )
+    .toBe(true);
+  return page.evaluate(([e, data, t]) => window.__ipc.emit(e as string, data, t as string), [
+    event,
+    payload,
+    target,
+  ] as const);
 }
 
 /** A serialized engine failure. */

@@ -11,6 +11,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 /** A coding agent whose history the engine reads. */
 export type Agent = "claude_code" | "codex" | "open_code" | "pi" | "grok_build";
@@ -407,17 +408,29 @@ export function quit(): Promise<void> {
 }
 
 /**
+ * Listen for an event the engine sends to this window alone.
+ *
+ * A listener registered through `listen` hears an event whichever window it was
+ * sent to, and the menu bar panel runs the same root layout as the app's
+ * window, so an event meant for one window is listened for on that window.
+ * Outside Tauri there is no window, and the teardown is a no-op.
+ */
+async function listenHere<T>(event: string, handler: (payload: T) => void): Promise<UnlistenFn> {
+  try {
+    return await getCurrentWebviewWindow().listen<T>(event, (heard) => handler(heard.payload));
+  } catch {
+    return () => {};
+  }
+}
+
+/**
  * Subscribe to the app's menu asking the window to show a destination, such as
  * `/subscriptions`.
  *
  * Resolves to an unlisten function, as {@link onIndexChanged} does.
  */
-export async function onOpen(handler: (path: string) => void): Promise<UnlistenFn> {
-  try {
-    return await listen<string>("open", (event) => handler(event.payload));
-  } catch {
-    return () => {};
-  }
+export function onOpen(handler: (path: string) => void): Promise<UnlistenFn> {
+  return listenHere("open", handler);
 }
 
 /**
