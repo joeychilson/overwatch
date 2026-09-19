@@ -14,7 +14,7 @@ use crate::error::Result;
 use crate::price;
 use crate::session::{Agent, Session, Speaker, Tokens, ToolCall, Turn};
 use crate::source::{
-    Conversation, Summary, Tally, Unit, lines, pieces, read_all, title_of, unit, walk,
+    Conversation, Summary, Tally, Unit, compact, lines, pieces, read_all, title_of, unit, walk,
 };
 
 /// One record of a session file.
@@ -222,7 +222,7 @@ pub fn transcript(source: &Unit) -> Result<Vec<Turn>> {
                         Some("toolCall") => {
                             let tool = ToolCall {
                                 name: block["name"].as_str().unwrap_or("tool").to_owned(),
-                                input: block["arguments"].as_str().unwrap_or_default().to_owned(),
+                                input: compact(&block["arguments"]),
                                 ..ToolCall::default()
                             };
                             conversation.call(block["id"].as_str(), at, model, tool);
@@ -288,7 +288,7 @@ mod tests {
         "\n",
         r#"{"type":"message","id":"b1a","timestamp":"2026-09-06T08:09:58.622Z","message":{"role":"user","content":[{"type":"text","text":"What do you think of this?"}]}}"#,
         "\n",
-        r#"{"type":"message","id":"280","timestamp":"2026-09-06T08:10:01.067Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Considering."},{"type":"text","text":"Here is my view."},{"type":"toolCall","id":"call-1","name":"bash","arguments":"{\"command\":\"ls\"}"}],"usage":{"input":1689,"output":150,"cacheRead":640,"cacheWrite":0,"reasoning":69,"totalTokens":2479,"cost":{"input":0.003378,"output":0.0009,"total":0.004598}}}}"#,
+        r#"{"type":"message","id":"280","timestamp":"2026-09-06T08:10:01.067Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Considering."},{"type":"text","text":"Here is my view."},{"type":"toolCall","id":"call-1","name":"bash","arguments":{"command":"ls"}}],"usage":{"input":1689,"output":150,"cacheRead":640,"cacheWrite":0,"reasoning":69,"totalTokens":2479,"cost":{"input":0.003378,"output":0.0009,"total":0.004598}}}}"#,
         "\n",
         r#"{"type":"message","id":"281","timestamp":"2026-09-06T08:10:05.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"usage":{"input":10,"output":5,"cacheRead":1,"cacheWrite":2,"reasoning":3,"totalTokens":21,"cost":{"total":0.0001}}}}"#,
         "\n",
@@ -395,7 +395,9 @@ mod tests {
         assert_eq!(read.tools, 1);
         let tool = read.turns[3].tool.as_ref().expect("a tool call");
         assert_eq!(tool.name, "bash");
-        assert!(tool.input.contains("ls"));
+        // Pi writes arguments as an object; reading them only as text lost
+        // every call's input.
+        assert_eq!(tool.input, r#"{"command":"ls"}"#);
     }
 
     #[test]
@@ -406,7 +408,7 @@ mod tests {
         let conversation = concat!(
             r#"{"type":"session","id":"tr-1","timestamp":"2026-09-06T08:09:52.606Z","cwd":"/w"}"#,
             "\n",
-            r#"{"type":"message","id":"a","timestamp":"2026-09-06T08:10:01.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-A","name":"bash","arguments":"{}"},{"type":"toolCall","id":"call-B","name":"read","arguments":"{}"}]}}"#,
+            r#"{"type":"message","id":"a","timestamp":"2026-09-06T08:10:01.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-A","name":"bash","arguments":{}},{"type":"toolCall","id":"call-B","name":"read","arguments":{}}]}}"#,
             "\n",
             r#"{"type":"message","id":"b","timestamp":"2026-09-06T08:10:02.000Z","message":{"role":"toolResult","toolCallId":"call-B","toolName":"read","content":[{"type":"text","text":"file body"}]}}"#,
             "\n",
