@@ -2,14 +2,14 @@
  * The engine's command surface.
  *
  * Every type here is written by hand and mirrors a Rust type in
- * `src-tauri/src/session.rs` one to one. There are sixteen commands and about
+ * `src-tauri/src/session.rs` one to one. There are eighteen commands and about
  * two dozen shapes, which is small enough to keep honest by reading.
  *
  * Counts and money are plain numbers. The largest total any agent records is a
  * few billion tokens, which JavaScript represents exactly, so nothing here
  * parses a decimal string.
  */
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
@@ -112,6 +112,27 @@ export interface Mark {
   /** The opening of what was said, or the tool's name; empty for thinking. */
   label: string;
   failed: boolean;
+}
+
+/** A session whose conversation mentions what was searched for. */
+export interface Mention {
+  session: Session;
+  /** How many things said in it contain what was searched for. */
+  turns: number;
+  /** The first turn that does, to open the conversation at. */
+  first: number;
+  /** A line of that turn around the first mention. */
+  excerpt: string;
+}
+
+/** How far a search of every conversation got. */
+export interface Searched {
+  /** Conversations looked through. */
+  searched: number;
+  /** Conversations there were to look through. */
+  total: number;
+  /** Whether it stopped at the most mentions a search answers with. */
+  capped: boolean;
 }
 
 /** A column the session list can be ordered by. */
@@ -371,6 +392,35 @@ export function getTimeline(id: string): Promise<Mark[]> {
  */
 export function findInTranscript(id: string, query: string): Promise<number[]> {
   return call<number[]>("find_in_transcript", { id, query });
+}
+
+/**
+ * Look through what was said in the conversation of every session a filter
+ * matches, newest first, for a query, handing `onfound` each batch of sessions
+ * that mention it as they turn up. Resolves with how far the search got once
+ * it ends; a later search, or {@link stopSearching}, ends one still running.
+ */
+export async function searchConversations(
+  query: string,
+  filter: Filter,
+  onfound: (batch: Mention[]) => void,
+): Promise<Searched> {
+  let found: Channel<Mention[]>;
+  try {
+    found = new Channel<Mention[]>(onfound);
+  } catch (error) {
+    // Outside Tauri there is nothing to open a channel to.
+    throw {
+      kind: "unavailable",
+      message: error instanceof Error ? error.message : String(error),
+    } satisfies EngineError;
+  }
+  return call<Searched>("search_conversations", { query, filter, found });
+}
+
+/** End a search of every conversation that is still running. */
+export function stopSearching(): Promise<void> {
+  return call<void>("stop_searching");
 }
 
 /** Release the held conversation when the reader leaves it. */

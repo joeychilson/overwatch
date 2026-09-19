@@ -760,6 +760,32 @@ export function answer(command: string, args: Record<string, unknown>): unknown 
       return id === FEATURED.id ? marks(TURNS) : [];
     case "get_transcript":
       return transcript(id, number(args.offset) ?? 0, number(args.limit) ?? 150);
+    case "search_conversations": {
+      // Only the featured session has a conversation to look through.
+      const sought = typeof args.query === "string" ? args.query.trim().toLowerCase() : "";
+      const candidates = list({
+        ...((args.filter ?? {}) as Filter),
+        search: null,
+        offset: 0,
+        limit: SESSIONS.length,
+      }).sessions;
+      const said = TURNS.filter(
+        (turn) =>
+          (turn.speaker === "user" || turn.speaker === "assistant") &&
+          sought !== "" &&
+          turn.text.toLowerCase().includes(sought),
+      );
+      const first = said[0];
+      if (first && candidates.some((each) => each.id === FEATURED.id)) {
+        const words = first.text.split(/\s+/).join(" ");
+        const at = Math.max(0, words.toLowerCase().indexOf(sought) - 48);
+        const excerpt = `${at > 0 ? "…" : ""}${words.slice(at, at + 160)}${words.length > at + 160 ? "…" : ""}`;
+        (args.found as { onmessage: (batch: unknown) => void }).onmessage([
+          { session: FEATURED, turns: said.length, first: first.index, excerpt },
+        ]);
+      }
+      return { searched: candidates.length, total: candidates.length, capped: false };
+    }
     case "find_in_transcript": {
       const sought = typeof args.query === "string" ? args.query.trim().toLowerCase() : "";
       if (sought === "" || id !== FEATURED.id) return [];

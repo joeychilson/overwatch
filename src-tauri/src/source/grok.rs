@@ -12,7 +12,7 @@
 //! record usage nowhere, and report none.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -198,9 +198,14 @@ fn usage(directory: &Path, fallback: i64) -> Tally {
     tally
 }
 
+/// The file a session's conversation is kept in, within its directory.
+pub fn conversation(directory: &Path) -> PathBuf {
+    directory.join("chat_history.jsonl")
+}
+
 /// Read a session's chat history, which records no per-message time or model.
 pub fn transcript(source: &Unit) -> Result<Vec<Turn>> {
-    let body = read_all(&source.path.join("chat_history.jsonl"))?;
+    let body = read_all(&conversation(&source.path))?;
     let mut conversation = Conversation::default();
 
     for line in lines(&body) {

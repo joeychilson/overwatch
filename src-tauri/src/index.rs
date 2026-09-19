@@ -7,14 +7,19 @@
 //!
 //! Parsing runs on every core. Writing runs on one thread, because SQLite has
 //! a single writer and the work is entirely in the parsing anyway.
+//!
+//! Searching what was said in every conversation reads the agents' files the
+//! same way, on every core, since no conversation's text is kept here.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::error::Result;
-use crate::session::{Account, Agent, Limit, Provider, Status, Transcript};
+use crate::session::{
+    Account, Agent, Filter, Limit, Mention, Provider, Searched, Status, Transcript,
+};
 use crate::source::{self, Unit};
 use crate::store::Store;
 
@@ -24,6 +29,14 @@ use crate::store::Store;
 /// that the everyday rescan, which reads a handful of files, finishes before it
 /// would report and so never shows progress.
 const PROGRESS: Duration = Duration::from_millis(250);
+
+/// How often a search hands over what it has found so far.
+const FOUND: Duration = Duration::from_millis(100);
+
+/// The most sessions a search answers with. It looks through the newest first,
+/// so these are the most recent; a search that finds more is narrowed down
+/// rather than read through.
+const MOST: usize = 200;
 
 /// The index and the machinery that keeps it current.
 ///
@@ -41,6 +54,9 @@ pub struct Index {
     open: Mutex<Option<Held>>,
     /// The sessions the last scan read anything new of.
     changed: Mutex<Vec<String>>,
+    /// Counts searches begun and stopped, so a running search sees it has been
+    /// overtaken and stops.
+    searches: AtomicU64,
 }
 
 /// A conversation held after its first read, and where it was read from.
@@ -73,6 +89,7 @@ impl Index {
             status: Mutex::new(status),
             open: Mutex::new(None),
             changed: Mutex::new(Vec::new()),
+            searches: AtomicU64::new(0),
         })
     }
 
@@ -354,6 +371,123 @@ impl Index {
         }
         *open = None;
         Ok(())
+    }
+
+    /// Look through what was said in the conversation of every session a
+    /// filter matches, newest first, for `query`, ignoring case, handing
+    /// `found` each batch of sessions that mention it as they turn up.
+    ///
+    /// Conversations are read from the agents' files, on every core, and one
+    /// whose files cannot contain the query is passed over unread. The search
+    /// ends when it has looked through them all, when it has found [`MOST`],
+    /// when a later search or [`Index::stop_searching`] overtakes it, or when
+    /// `found` answers that nobody is listening any more. A conversation that
+    /// cannot be read is passed over, as it would be by a scan.
+    pub fn search(
+        &self,
+        query: &str,
+        filter: &Filter,
+        found: impl Fn(Vec<Mention>) -> bool,
+    ) -> Result<Searched> {
+        let search = self.searches.fetch_add(1, Ordering::SeqCst) + 1;
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Ok(Searched::default());
+        }
+        let origins = self.read(|store| store.origins(filter))?;
+        let total = origins.len() as i64;
+        let library = source::Library::new(&self.home, &needle);
+        let workers = std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(4)
+            .min(origins.len().max(1));
+
+        let next = AtomicUsize::new(0);
+        let searched = AtomicUsize::new(0);
+        let done = AtomicBool::new(false);
+        let (send, receive) = mpsc::channel();
+        let mut capped = false;
+
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                let send = send.clone();
+                let (next, searched, done, origins, needle, library) =
+                    (&next, &searched, &done, &origins, &needle, &library);
+                scope.spawn(move || {
+                    while !done.load(Ordering::Relaxed)
+                        && self.searches.load(Ordering::Relaxed) == search
+                    {
+                        let Some(origin) = origins.get(next.fetch_add(1, Ordering::Relaxed)) else {
+                            return;
+                        };
+                        let mentioned = library
+                            .may_mention(&origin.unit, &origin.native_id)
+                            .then(|| library.transcript(&origin.unit, &origin.native_id).ok())
+                            .flatten()
+                            .and_then(|transcript| transcript.mentions(needle));
+                        searched.fetch_add(1, Ordering::Relaxed);
+                        if let Some(mentioned) = mentioned {
+                            let mention = Mention {
+                                session: origin.session.clone(),
+                                turns: mentioned.turns,
+                                first: mentioned.first,
+                                excerpt: mentioned.excerpt,
+                            };
+                            // The receiver lives until every worker has
+                            // finished, so a failure means the search is over.
+                            if send.send(mention).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
+            drop(send);
+
+            // Found sessions are handed over together every so often, rather
+            // than one message each, and never past the most a search answers.
+            let mut batch = Vec::new();
+            let mut handed = 0;
+            let mut last = Instant::now();
+            loop {
+                let ended = match receive.recv_timeout(FOUND) {
+                    Ok(mention) => {
+                        batch.push(mention);
+                        false
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => false,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => true,
+                };
+                if handed + batch.len() >= MOST {
+                    batch.truncate(MOST - handed);
+                    capped = true;
+                    done.store(true, Ordering::Relaxed);
+                }
+                if !batch.is_empty() && (ended || capped || last.elapsed() >= FOUND) {
+                    handed += batch.len();
+                    if !found(std::mem::take(&mut batch)) {
+                        done.store(true, Ordering::Relaxed);
+                    }
+                    last = Instant::now();
+                }
+                if ended || capped {
+                    break;
+                }
+            }
+            // Anything a worker sends after this is dropped with the receiver.
+            done.store(true, Ordering::Relaxed);
+        });
+
+        Ok(Searched {
+            searched: searched.load(Ordering::Relaxed) as i64,
+            total,
+            capped,
+        })
+    }
+
+    /// Stop any search that is running.
+    pub fn stop_searching(&self) {
+        self.searches.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Forget the held conversation, so its memory is returned.
@@ -799,6 +933,95 @@ mod tests {
         write_session(&projects.join("resumed.jsonl"), "abc", "Carried on", 700);
         index.scan(|_| {}).expect("rescans");
         assert_eq!(index.changed(), ["claude_code:abc"]);
+    }
+
+    /// Search, and gather every mention handed over, in any order.
+    fn search(index: &Index, query: &str, filter: &Filter) -> (Vec<Mention>, Searched) {
+        let found = std::cell::RefCell::new(Vec::new());
+        let searched = index
+            .search(query, filter, |batch| {
+                found.borrow_mut().extend(batch);
+                true
+            })
+            .expect("searches");
+        let mut found = found.into_inner();
+        found.sort_by(|a, b| a.session.id.cmp(&b.session.id));
+        (found, searched)
+    }
+
+    #[test]
+    fn a_search_finds_the_conversations_that_say_it() {
+        let home = home();
+        let projects = home.path().join(".claude/projects/-w-proj");
+        write_session(
+            &projects.join("keys.jsonl"),
+            "keys",
+            "Add IDEMPOTENCY keys",
+            100,
+        );
+        write_session(
+            &projects.join("quiet.jsonl"),
+            "quiet",
+            "Nothing to see here",
+            100,
+        );
+        let index = index(&home);
+        index.scan(|_| {}).expect("scans");
+
+        let (found, searched) = search(&index, "  idempotency ", &Filter::default());
+        let ids: Vec<_> = found
+            .iter()
+            .map(|mention| mention.session.id.as_str())
+            .collect();
+        assert_eq!(ids, ["claude_code:keys"]);
+        assert_eq!(found[0].turns, 1);
+        assert_eq!(found[0].first, 0);
+        assert_eq!(found[0].excerpt, "Add IDEMPOTENCY keys");
+        assert_eq!(
+            found[0].session.title.as_deref(),
+            Some("Add IDEMPOTENCY keys")
+        );
+        assert_eq!(
+            searched,
+            Searched {
+                searched: 3,
+                total: 3,
+                capped: false,
+            }
+        );
+
+        // A filter narrows what is looked through, as it narrows the list.
+        let codex = Filter {
+            agents: vec![Agent::Codex],
+            ..Filter::default()
+        };
+        assert_eq!(search(&index, "idempotency", &codex).1.total, 0);
+        // Nothing is looked for in nothing.
+        assert_eq!(
+            search(&index, "   ", &Filter::default()).1,
+            Searched::default()
+        );
+    }
+
+    #[test]
+    fn a_search_stops_at_the_most_it_answers_with() {
+        let home = home();
+        let projects = home.path().join(".claude/projects/-w-proj");
+        for session in 0..MOST + 5 {
+            let id = format!("s{session}");
+            write_session(&projects.join(format!("{id}.jsonl")), &id, "The needle", 10);
+        }
+        let index = index(&home);
+        index.scan(|_| {}).expect("scans");
+
+        let (found, searched) = search(&index, "needle", &Filter::default());
+        assert_eq!(found.len(), MOST);
+        assert!(searched.capped);
+        assert_eq!(
+            searched.total,
+            MOST as i64 + 6,
+            "every session was a candidate"
+        );
     }
 
     #[test]

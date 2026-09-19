@@ -16,9 +16,10 @@
 //! No conversation text is copied into the database: a conversation is read
 //! from its unit when someone opens it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use serde_json::Value;
 
@@ -233,6 +234,119 @@ pub fn summarize(unit: &Unit) -> Result<Vec<Summary>> {
     }
 }
 
+/// Where conversations are kept, and which could mention a search, looked up
+/// once for a search of every conversation rather than once for each.
+///
+/// Finding a Codex thread's rollouts means walking every rollout on the
+/// machine, and every OpenCode session is kept in one database; asking each
+/// once for the whole search is most of what makes reading them all
+/// affordable.
+pub struct Library {
+    /// What is searched for, lowercase.
+    needle: String,
+    /// Every Codex rollout on this machine.
+    rollouts: Vec<PathBuf>,
+    /// OpenCode's database.
+    database: PathBuf,
+    /// The OpenCode sessions whose records hold the needle, or `None` when that
+    /// cannot be told from them, so every one could. Asked for when the first
+    /// OpenCode session comes up, so a search of the rest does not wait on it.
+    opencode: OnceLock<Option<HashSet<String>>>,
+}
+
+impl Library {
+    /// Look up where the conversations under `home` are kept, for a search of
+    /// them for `needle`, which is lowercase.
+    pub fn new(home: &Path, needle: &str) -> Library {
+        let codex = home.join(".codex");
+        Library {
+            needle: needle.to_owned(),
+            rollouts: if codex.is_dir() {
+                codex::every_rollout(&codex)
+            } else {
+                Vec::new()
+            },
+            database: home.join(".local/share/opencode/opencode.db"),
+            opencode: OnceLock::new(),
+        }
+    }
+
+    /// Whether a session's conversation could mention the needle, judged
+    /// without reading it: false only when it certainly cannot.
+    pub fn may_mention(&self, unit: &Unit, native_id: &str) -> bool {
+        let files = match unit.agent {
+            Agent::ClaudeCode | Agent::Pi => vec![unit.path.clone()],
+            Agent::Codex => codex::of_thread(&self.rollouts, &unit.path, native_id),
+            Agent::GrokBuild => vec![grok::conversation(&unit.path)],
+            Agent::OpenCode => {
+                return self
+                    .opencode
+                    .get_or_init(|| {
+                        plain(&self.needle)
+                            .then(|| opencode::holding(&self.database, &self.needle).ok())
+                            .flatten()
+                    })
+                    .as_ref()
+                    .is_none_or(|sessions| sessions.contains(native_id));
+            }
+        };
+        may_contain(&files, &self.needle)
+    }
+
+    /// Read one session's conversation in full, as [`transcript`] does.
+    pub fn transcript(&self, unit: &Unit, native_id: &str) -> Result<Transcript> {
+        match unit.agent {
+            Agent::Codex => Ok(Transcript::new(
+                conversation_id(unit, native_id),
+                codex::transcript_of(&codex::of_thread(&self.rollouts, &unit.path, native_id))?,
+            )),
+            _ => transcript(unit, native_id),
+        }
+    }
+}
+
+/// Whether a needle reads in a JSON file as it is written: ASCII that no
+/// writer escapes, so finding it missing from a file's bytes proves it absent.
+/// Beyond ASCII, some writers escape every character; a quote, a backslash or
+/// a control character is always escaped; and some writers escape a slash,
+/// `<`, `>`, `&` or `'`.
+fn plain(needle: &str) -> bool {
+    needle
+        .bytes()
+        .all(|byte| (byte == b' ' || byte.is_ascii_graphic()) && !b"\"\\/<>&'".contains(&byte))
+}
+
+/// Whether a conversation read from `files` could contain `needle`, which is
+/// lowercase, judged from the files' bytes without parsing them, so that one
+/// which cannot is passed over.
+///
+/// It answers no only when that is certain: a needle that is not [`plain`]
+/// could be written otherwise and so could be anywhere, and so could anything
+/// in a file that cannot be read, which reading the conversation will report.
+pub fn may_contain(files: &[PathBuf], needle: &str) -> bool {
+    !plain(needle)
+        || files
+            .iter()
+            .any(|file| std::fs::read(file).map_or(true, |bytes| holds(&bytes, needle.as_bytes())))
+}
+
+/// Whether `haystack` holds `needle`, ignoring the case of ASCII letters.
+///
+/// It jumps from one place the needle's first letter stands, in either case,
+/// to the next, a vector's width at a time, and compares the rest only there:
+/// a search reads every conversation on the machine this way.
+fn holds(haystack: &[u8], needle: &[u8]) -> bool {
+    let Some((&first, rest)) = needle.split_first() else {
+        return true;
+    };
+    let (lower, upper) = (first.to_ascii_lowercase(), first.to_ascii_uppercase());
+    memchr::memchr2_iter(lower, upper, haystack).any(|at| {
+        haystack
+            .get(at + 1..at + 1 + rest.len())
+            .is_some_and(|tail| tail.eq_ignore_ascii_case(rest))
+    })
+}
+
 /// Read one session's conversation in full.
 pub fn transcript(unit: &Unit, native_id: &str) -> Result<Transcript> {
     let turns = match unit.agent {
@@ -242,8 +356,12 @@ pub fn transcript(unit: &Unit, native_id: &str) -> Result<Transcript> {
         Agent::Pi => pi::transcript(unit),
         Agent::GrokBuild => grok::transcript(unit),
     }?;
-    let id = format!("{}:{native_id}", unit.agent.key());
-    Ok(Transcript::new(id, turns))
+    Ok(Transcript::new(conversation_id(unit, native_id), turns))
+}
+
+/// The id a conversation is known by, as its session is.
+fn conversation_id(unit: &Unit, native_id: &str) -> String {
+    format!("{}:{native_id}", unit.agent.key())
 }
 
 /// A conversation as a reader assembles it, turn by turn.
@@ -518,6 +636,33 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::Write;
+
+    #[test]
+    fn a_file_is_passed_over_only_when_it_cannot_hold_the_needle() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let said = directory.path().join("said.jsonl");
+        std::fs::write(&said, r#"{"content":"Add Idempotency-Key headers"}"#).expect("writes");
+        let other = directory.path().join("other.jsonl");
+        std::fs::write(&other, r#"{"content":"Nothing here"}"#).expect("writes");
+        let files = [said.clone(), other.clone()];
+
+        assert!(may_contain(&files, "idempotency-key"), "case is ignored");
+        assert!(may_contain(&files, "add idem"));
+        assert!(!may_contain(&files, "refunds"));
+        assert!(!may_contain(std::slice::from_ref(&other), "idempotency"));
+        // A needle a writer might escape could be anywhere.
+        for escaped in ["a \"quote\"", "a/b", "<tag>", "café", "it's"] {
+            assert!(
+                may_contain(std::slice::from_ref(&other), escaped),
+                "{escaped}"
+            );
+        }
+        // So could anything in a file that cannot be read.
+        assert!(may_contain(
+            &[directory.path().join("gone.jsonl")],
+            "idempotency"
+        ));
+    }
 
     fn write(directory: &Path, name: &str, contents: &[u8]) -> PathBuf {
         let path = directory.join(name);

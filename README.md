@@ -15,7 +15,7 @@ It reads what **Claude Code, Codex, OpenCode, Pi, and Grok Build** already keep 
 
 - **Overview**: tokens and cost by agent, plus the top models, projects, and sessions. Today is drawn by the hour.
 - **Share**: any period as a card — your top models and agents side by side — saved to your Desktop as a PNG.
-- **Sessions**: search every session and read it as a conversation with a timeline of turns and tool calls. One still going fills in as its agent works. Find within one with ⌘F, and copy a message, a block of code, a tool's output, or the whole conversation as Markdown.
+- **Sessions**: search every session by its title or by what was said in it, and read it as a conversation with a timeline of turns and tool calls. One still going fills in as its agent works. Find within one with ⌘F, and copy a message, a block of code, a tool's output, or the whole conversation as Markdown.
 - **Models**: usage, cost, and trend for each model.
 - **Subscriptions**: what's left of your Claude, Codex, Grok, and OpenCode Go limits, with a notification before one runs out.
 - **Menu bar**: your tightest limit at a glance, and what today has used. Close the window and it keeps watching.
@@ -37,7 +37,7 @@ An agent appears once its directory exists. [docs/agents.md](docs/agents.md) cov
 ## Privacy
 
 - **Read-only.** Agent files and sign-ins are never modified or renewed.
-- **No transcript copies.** The index holds summaries and usage counts; conversations are read from the agent's files when you open them.
+- **No transcript copies.** The index holds summaries and usage counts; conversations are read from the agent's files when you open them or search what was said in them.
 - **One kind of network request.** Each subscription's usage endpoint, using the sign-ins your agents already have (including Claude Code's Keychain item).
 - **No telemetry.**
 

@@ -388,27 +388,46 @@ fn subagent_kind(source: &Value) -> Option<String> {
 
 /// Every rollout of a thread, oldest first: the files that carry its id in
 /// their names, dated or archived.
-fn rollouts(path: &Path, native_id: &str) -> Vec<PathBuf> {
+pub fn rollouts(path: &Path, native_id: &str) -> Vec<PathBuf> {
     let home = path
         .ancestors()
         .find(|directory| {
             directory.ends_with("sessions") || directory.ends_with("archived_sessions")
         })
         .and_then(Path::parent);
+    let every = match home {
+        Some(home) if !native_id.is_empty() => every_rollout(home),
+        _ => Vec::new(),
+    };
+    of_thread(&every, path, native_id)
+}
+
+/// Every rollout under a Codex home, dated or archived.
+pub fn every_rollout(home: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(home) = home
-        && !native_id.is_empty()
-    {
-        walk(&home.join("sessions"), "jsonl", &mut paths);
-        walk(&home.join("archived_sessions"), "jsonl", &mut paths);
-        paths.retain(|candidate| {
-            candidate
-                .file_name()
-                .is_some_and(|name| name.to_string_lossy().contains(native_id))
-        });
-        // Names begin with when the rollout was started.
-        paths.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
-    }
+    walk(&home.join("sessions"), "jsonl", &mut paths);
+    walk(&home.join("archived_sessions"), "jsonl", &mut paths);
+    paths
+}
+
+/// A thread's rollouts among `every`, oldest first: those that carry its id in
+/// their names, or the file at `path` alone when none does.
+pub fn of_thread(every: &[PathBuf], path: &Path, native_id: &str) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = if native_id.is_empty() {
+        Vec::new()
+    } else {
+        every
+            .iter()
+            .filter(|candidate| {
+                candidate
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().contains(native_id))
+            })
+            .cloned()
+            .collect()
+    };
+    // Names begin with when the rollout was started.
+    paths.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
     if paths.is_empty() {
         paths.push(path.to_path_buf());
     }
@@ -418,7 +437,12 @@ fn rollouts(path: &Path, native_id: &str) -> Vec<PathBuf> {
 /// Read a thread's conversation across every rollout it spans, pairing both
 /// kinds of tool call.
 pub fn transcript(source: &Unit, native_id: &str) -> Result<Vec<Turn>> {
-    let bodies = rollouts(&source.path, native_id)
+    transcript_of(&rollouts(&source.path, native_id))
+}
+
+/// Read a thread's conversation from its rollouts, oldest first.
+pub fn transcript_of(rollouts: &[PathBuf]) -> Result<Vec<Turn>> {
+    let bodies = rollouts
         .iter()
         .map(|path| read_all(path))
         .collect::<Result<Vec<_>>>()?;

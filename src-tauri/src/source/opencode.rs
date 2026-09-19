@@ -8,7 +8,7 @@
 //! The database is opened read-only. OpenCode may be running and writing to it,
 //! and this application never writes to an agent's own store.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags};
@@ -172,6 +172,26 @@ pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
         .collect())
 }
 
+/// The sessions any of whose records contain `needle`, ignoring the case of
+/// ASCII letters: every session whose conversation could mention it, and
+/// others whose records hold it elsewhere, found by one query rather than by
+/// reading each session's messages.
+pub fn holding(database: &Path, needle: &str) -> Result<HashSet<String>> {
+    let pattern = format!(
+        "%{}%",
+        needle
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    );
+    let database = open(database)?;
+    let mut statement = database.prepare(
+        "SELECT DISTINCT session_id FROM session_message WHERE data LIKE ?1 ESCAPE '\\'",
+    )?;
+    let sessions = statement.query_map([pattern], |row| row.get::<_, String>(0))?;
+    Ok(sessions.collect::<rusqlite::Result<_>>()?)
+}
+
 /// Read one session's messages, in sequence order.
 pub fn transcript(source: &Unit, native_id: &str) -> Result<Vec<Turn>> {
     let database = open(&source.path)?;
@@ -318,6 +338,25 @@ mod tests {
 
         let source = unit(Agent::OpenCode, path).expect("unit");
         (directory, source)
+    }
+
+    #[test]
+    fn the_sessions_holding_a_needle_are_found_in_one_query() {
+        let (_directory, source) = fixture();
+        let found = |needle: &str| {
+            let mut sessions: Vec<_> = holding(&source.path, needle)
+                .expect("queries")
+                .into_iter()
+                .collect();
+            sessions.sort();
+            sessions
+        };
+        assert_eq!(found("reply with"), ["ses_top"], "ASCII case is ignored");
+        assert_eq!(found("file body"), ["ses_top"]);
+        assert!(found("absent").is_empty());
+        // A wildcard in the needle is only itself.
+        assert!(found("reply%ok").is_empty());
+        assert!(found("reply_with").is_empty());
     }
 
     /// One session of the fixture, as summarizing reads it.

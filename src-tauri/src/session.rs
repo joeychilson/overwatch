@@ -295,6 +295,25 @@ impl Transcript {
             .collect()
     }
 
+    /// How what was said in the conversation mentions `needle`, which is
+    /// lowercase: how many things the person or the model said contain it,
+    /// the first of them, and a line of it around the first mention. `None`
+    /// when nothing said does. Thinking, tool calls and what the harness added
+    /// are left out, since they would find every session that read a file.
+    pub fn mentions(&self, needle: &str) -> Option<Mentioned> {
+        let mut said = self
+            .turns
+            .iter()
+            .filter(|turn| matches!(turn.speaker, Speaker::User | Speaker::Assistant))
+            .filter(|turn| turn.text.to_lowercase().contains(needle));
+        let first = said.next()?;
+        Some(Mentioned {
+            turns: 1 + said.count() as i64,
+            first: first.index,
+            excerpt: excerpt(&first.text, needle),
+        })
+    }
+
     /// Where each turn falls, for the session's timeline.
     pub fn marks(&self) -> Vec<Mark> {
         self.turns
@@ -312,6 +331,83 @@ impl Transcript {
             })
             .collect()
     }
+}
+
+/// How what was said in one conversation mentions a search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mentioned {
+    /// How many things said contain it.
+    pub turns: i64,
+    /// The index of the first that does.
+    pub first: i64,
+    /// A line of that turn around the mention.
+    pub excerpt: String,
+}
+
+/// How many characters of context an excerpt keeps before a mention.
+const BEFORE: usize = 48;
+/// How many characters an excerpt holds at most.
+const EXCERPT: usize = 160;
+
+/// A line of `text` around the first place it contains `needle`, which is
+/// lowercase, with its runs of space made single and an ellipsis where it was
+/// cut.
+///
+/// Characters are lowered one for one, so the place found in the lowered text
+/// is the same place in the text as written.
+fn excerpt(text: &str, needle: &str) -> String {
+    let words: Vec<char> = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .collect();
+    let lowered: Vec<char> = words
+        .iter()
+        .map(|&letter| letter.to_lowercase().next().unwrap_or(letter))
+        .collect();
+    let sought: Vec<char> = needle.chars().collect();
+    let at = lowered
+        .windows(sought.len().max(1))
+        .position(|window| window == sought.as_slice())
+        .unwrap_or(0);
+    let start = at.saturating_sub(BEFORE);
+    let end = (start + EXCERPT).min(words.len());
+    let mut line: String = words[start..end].iter().collect();
+    if start > 0 {
+        line.insert(0, '…');
+    }
+    if end < words.len() {
+        line.push('…');
+    }
+    line
+}
+
+/// A session whose conversation mentions what was searched for.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Mention {
+    /// The session, as the list shows it.
+    pub session: Session,
+    /// How many things said in it contain what was searched for.
+    pub turns: i64,
+    /// The first turn that does, to open the conversation at.
+    pub first: i64,
+    /// A line of that turn around the first mention.
+    pub excerpt: String,
+}
+
+/// How far a search of every conversation got.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Searched {
+    /// Conversations looked through.
+    pub searched: i64,
+    /// Conversations there were to look through.
+    pub total: i64,
+    /// Whether it stopped at the most mentions a search answers with, before
+    /// looking through them all.
+    pub capped: bool,
 }
 
 /// The longest label a mark carries, in characters.
@@ -814,6 +910,69 @@ mod tests {
         // And an absurd request is clamped rather than overflowing.
         assert_eq!(whole.window(i64::MAX, i64::MAX).turns.len(), 0);
         assert_eq!(whole.window(0, i64::MAX).turns.len(), 10);
+    }
+
+    #[test]
+    fn a_mention_counts_only_what_was_said_and_quotes_the_first() {
+        let said = |index: i64, speaker: Speaker, text: &str| Turn {
+            index,
+            speaker,
+            at: None,
+            model: None,
+            text: text.into(),
+            tool: None,
+        };
+        let whole = Transcript::new(
+            "codex:a".into(),
+            vec![
+                said(0, Speaker::System, "Idempotency notes from AGENTS.md"),
+                said(1, Speaker::Reasoning, "Idempotency first."),
+                said(
+                    2,
+                    Speaker::User,
+                    "Add IDEMPOTENCY keys\n\nto   the payment endpoints",
+                ),
+                Turn {
+                    tool: Some(ToolCall {
+                        name: "Read".into(),
+                        input: "idempotency.ts".into(),
+                        output: None,
+                        failed: false,
+                    }),
+                    ..said(3, Speaker::Tool, "")
+                },
+                said(4, Speaker::Assistant, "The idempotency table is in."),
+            ],
+        );
+
+        let mentioned = whole.mentions("idempotency").expect("mentioned");
+        assert_eq!(mentioned.turns, 2, "the person and the model, nothing else");
+        assert_eq!(mentioned.first, 2);
+        // Runs of space are single, and the words are as they were written.
+        assert_eq!(
+            mentioned.excerpt,
+            "Add IDEMPOTENCY keys to the payment endpoints"
+        );
+        assert_eq!(
+            whole.mentions("agents.md"),
+            None,
+            "the harness is not what was said"
+        );
+    }
+
+    #[test]
+    fn an_excerpt_is_cut_around_the_mention() {
+        let before = "a ".repeat(100);
+        let after = " z".repeat(200);
+        let text = format!("{before}NEEDLE{after}");
+        let line = excerpt(&text, "needle");
+        assert!(line.starts_with('…') && line.ends_with('…'));
+        assert_eq!(line.chars().count(), EXCERPT + 2);
+        let at = line.find("NEEDLE").expect("kept");
+        // As much before it as the excerpt keeps, counted in characters.
+        assert_eq!(line[..at].chars().count(), BEFORE + 1);
+        // A mention near the start keeps the start whole.
+        assert_eq!(excerpt("needle in a line", "needle"), "needle in a line");
     }
 
     #[test]

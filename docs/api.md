@@ -1,6 +1,6 @@
 # API
 
-The engine is reached through sixteen Tauri commands. Rust owns discovery,
+The engine is reached through eighteen Tauri commands. Rust owns discovery,
 parsing, every query, and the requests for subscription limits; the frontend
 selects and presents. No runtime server route exists.
 
@@ -28,24 +28,26 @@ one and are written by hand.
 
 ## Commands
 
-| Command               | Arguments                 | Returns          |
-| --------------------- | ------------------------- | ---------------- |
-| `list_sessions`       | `filter: Filter`          | `SessionPage`    |
-| `get_session`         | `id`                      | `Session`        |
-| `get_transcript`      | `id`, `offset?`, `limit?` | `Transcript`     |
-| `get_timeline`        | `id`                      | `Mark[]`         |
-| `find_in_transcript`  | `id`, `query`             | `number[]`       |
-| `close_transcript`    | —                         | —                |
-| `reveal_session`      | `id`                      | —                |
-| `open_session_folder` | `id`                      | —                |
-| `list_models`         | `since?`, `until?`        | `ModelUsage[]`   |
-| `list_projects`       | `since?`, `until?`        | `ProjectUsage[]` |
-| `get_overview`        | `since?`, `until?`        | `Overview`       |
-| `list_hours`          | `since?`, `until?`        | `HourTotals[]`   |
-| `get_status`          | —                         | `Status`         |
-| `save_card`           | `name`, `png`             | `string`         |
-| `open_window`         | `path?`                   | —                |
-| `quit`                | —                         | —                |
+| Command                | Arguments                  | Returns          |
+| ---------------------- | -------------------------- | ---------------- |
+| `list_sessions`        | `filter: Filter`           | `SessionPage`    |
+| `get_session`          | `id`                       | `Session`        |
+| `get_transcript`       | `id`, `offset?`, `limit?`  | `Transcript`     |
+| `get_timeline`         | `id`                       | `Mark[]`         |
+| `find_in_transcript`   | `id`, `query`              | `number[]`       |
+| `search_conversations` | `query`, `filter`, `found` | `Searched`       |
+| `stop_searching`       | —                          | —                |
+| `close_transcript`     | —                          | —                |
+| `reveal_session`       | `id`                       | —                |
+| `open_session_folder`  | `id`                       | —                |
+| `list_models`          | `since?`, `until?`         | `ModelUsage[]`   |
+| `list_projects`        | `since?`, `until?`         | `ProjectUsage[]` |
+| `get_overview`         | `since?`, `until?`         | `Overview`       |
+| `list_hours`           | `since?`, `until?`         | `HourTotals[]`   |
+| `get_status`           | —                          | `Status`         |
+| `save_card`            | `name`, `png`              | `string`         |
+| `open_window`          | `path?`                    | —                |
+| `quit`                 | —                          | —                |
 
 `reveal_session` shows the file a session's history is in, and
 `open_session_folder` opens the folder it worked in, both in Finder.
@@ -141,6 +143,21 @@ of nothing but space finds nothing.
 its `index`, `at`, `speaker`, whether it `failed`, and a `label` holding the
 opening of what was said or the tool's name. It reads the conversation the
 transcript holds, so opening a session parses it once for both.
+
+### Searching what was said
+
+`search_conversations` looks through what was said — by the person and by the
+model, not thinking, tool calls or what the harness added — in the conversation
+of every session `filter` matches, for `query`, ignoring case. The filter's own
+`search`, ordering and window do not apply: it looks through every match, most
+recently active first. No conversation's text is kept in the index, so it
+reads the agents' files, passing over unread any whose bytes cannot contain the
+query. `found` is a channel, on which it sends each batch of `Mention`s as they
+turn up: the `session`, how many `turns` said mention the query, the `first` of
+them, and an `excerpt` of it around the mention. It answers with `Searched`,
+the conversations `searched` of the `total` there were, and whether it was
+`capped` at the most it answers with, two hundred. A later search, or
+`stop_searching`, ends one still running.
 
 ### Periods, days and timezones
 

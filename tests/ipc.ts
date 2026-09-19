@@ -24,6 +24,11 @@ export interface ScriptedIpc {
    * `target` window, only to listeners for any window or for that one.
    */
   emit(event: string, payload: unknown, target?: string): number;
+  /**
+   * Send a message on the channel the latest call of a command was handed as
+   * `arg`, as the engine sends while it works, answering whether there was one.
+   */
+  sendOnChannel(cmd: string, arg: string, message: unknown): boolean;
 }
 
 declare global {
@@ -45,6 +50,8 @@ export async function installIpc(page: Page) {
     /** The window this page stands for: the menu bar panel at `/tray`, else the app's. */
     const label = location.pathname.startsWith("/tray") ? "tray" : "main";
     const calls: { id: number; cmd: string; args: Record<string, unknown> }[] = [];
+    /** How many messages each channel has been sent, by its callback's id. */
+    const sent = new Map<number, number>();
     let nextId = 1;
 
     window.__ipc = {
@@ -77,6 +84,17 @@ export async function installIpc(page: Page) {
       },
       pendingCalls(cmd) {
         return calls.filter((call) => call.cmd === cmd && pending.has(call.id));
+      },
+      sendOnChannel(cmd, arg, message) {
+        const call = calls.findLast((each) => each.cmd === cmd);
+        const channel = call?.args[arg] as { id?: number } | undefined;
+        const callback = channel?.id === undefined ? undefined : callbacks.get(channel.id);
+        if (channel?.id === undefined || !callback) return false;
+        // A channel puts messages in the order of their index, as Tauri numbers them.
+        const index = sent.get(channel.id) ?? 0;
+        sent.set(channel.id, index + 1);
+        callback({ index, message });
+        return true;
       },
       emit(event, payload, target) {
         let delivered = 0;
@@ -177,6 +195,19 @@ export async function emitTo(page: Page, target: string, event: string, payload:
     payload,
     target,
   ] as const);
+}
+
+/** Send a message on the channel a pending command was handed, once it has been called. */
+export async function sendOnChannel(page: Page, cmd: string, arg: string, message: unknown) {
+  await expect
+    .poll(() =>
+      page.evaluate(([c, a, data]) => window.__ipc.sendOnChannel(c as string, a as string, data), [
+        cmd,
+        arg,
+        message,
+      ] as const),
+    )
+    .toBe(true);
 }
 
 /** A serialized engine failure. */

@@ -21,6 +21,7 @@ tauri-build = { version = "=2.6.3", features = [] }
 tauri = { version = "=2.11.5", features = ["tray-icon", "macos-private-api"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["raw_value"] }
+memchr = "2.8.3"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 thiserror = "2.0.20"
 base64 = "0.23.1"

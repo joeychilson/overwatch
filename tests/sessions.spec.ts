@@ -7,7 +7,16 @@
  * need different recoveries.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { emit, engineError, installIpc, session, sessionPage, settle, status } from "./ipc.ts";
+import {
+  emit,
+  engineError,
+  installIpc,
+  sendOnChannel,
+  session,
+  sessionPage,
+  settle,
+  status,
+} from "./ipc.ts";
 
 test.beforeEach(async ({ page }) => {
   await installIpc(page);
@@ -452,4 +461,87 @@ test("the arrow keys move from the search box through the rows and back", async 
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/sessions\/codex:ses_a$/);
+});
+
+/** A session whose conversation mentions a search, as the engine sends it. */
+function mention(id: string, title: string, excerpt: string, updatedAt: number, total: number) {
+  return { session: session(id, title, { updatedAt, total }), turns: 2, first: 4, excerpt };
+}
+
+test("full text keeps the list, narrowed to what was said, each row quoting it", async ({
+  page,
+}) => {
+  await page.goto("/sessions?text=1");
+  await settle(page, "get_status", status());
+  // Before anything is searched for, it is the list as ever.
+  await settle(page, "list_sessions", sessionPage([session("codex:ses_a", "Fix the parser")]));
+  await expect(page.getByRole("link", { name: "Fix the parser" })).toBeVisible();
+
+  await page.getByLabel("Search sessions").fill("idempotency");
+  await expect
+    .poll(() => page.evaluate(() => window.__ipc.pendingCount("search_conversations")))
+    .toBe(1);
+  const asked = (await page.evaluate(
+    () => window.__ipc.calls.filter((call) => call.cmd === "search_conversations").at(-1)?.args,
+  )) as { query: string; filter: Record<string, unknown> };
+  expect(asked.query).toBe("idempotency");
+  // What the list is narrowed to narrows the search; its own search is this one.
+  expect(asked.filter).toMatchObject({ search: null, includeSpawned: false });
+
+  // Sessions arrive as they turn up, and are ordered as the list orders its rows.
+  await sendOnChannel(page, "search_conversations", "found", [
+    mention("codex:ses_old", "Ledger work", "keys for …idempotency…", 1_789_000_000_000, 9_000),
+  ]);
+  await expect(page.getByText(/1 found so far/)).toBeVisible();
+  await sendOnChannel(page, "search_conversations", "found", [
+    mention("codex:ses_new", "Payments", "Add Idempotency keys", 1_789_000_900_000, 1_000),
+  ]);
+  const rows = page.getByRole("list", { name: "Sessions" }).getByRole("listitem");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toContainText("Payments");
+  await expect(rows.first()).toContainText("Add Idempotency keys");
+  await expect(rows.first().locator("mark")).toHaveText("Idempotency");
+  await expect(rows.first()).toContainText("2 messages");
+
+  await settle(page, "search_conversations", { searched: 12, total: 12, capped: false });
+  await expect(page.getByText("2 conversations mention “idempotency” · 12 read")).toBeVisible();
+
+  // Ordering what was found reads nothing again.
+  await page.getByRole("button", { name: "Sort by Tokens" }).click();
+  await expect(rows.first()).toContainText("Ledger work");
+  expect(await page.evaluate(() => window.__ipc.pendingCount("search_conversations"))).toBe(0);
+
+  await rows.first().getByRole("link", { name: "Ledger work" }).click();
+  await expect(page).toHaveURL(/\/sessions\/codex:ses_old\?find=idempotency$/);
+});
+
+test("going back to titles stops a search still running", async ({ page }) => {
+  await page.goto("/sessions?text=1&q=parser");
+  await settle(page, "get_status", status());
+  await expect
+    .poll(() => page.evaluate(() => window.__ipc.pendingCount("search_conversations")))
+    .toBe(1);
+
+  await page.getByRole("button", { name: "Titles" }).click();
+  await expect.poll(() => page.evaluate(() => window.__ipc.pendingCount("stop_searching"))).toBe(1);
+  await settle(page, "list_sessions", sessionPage([session("codex:ses_a", "Fix the parser")]));
+  await expect(page.getByRole("link", { name: "Fix the parser" })).toBeVisible();
+});
+
+test("a search that failed offers to run again", async ({ page }) => {
+  await page.goto("/sessions?text=1&q=parser");
+  await settle(page, "get_status", status());
+  await expect
+    .poll(() => page.evaluate(() => window.__ipc.pendingCount("search_conversations")))
+    .toBe(1);
+  await page.evaluate(
+    (failure) => window.__ipc.settle("search_conversations", "reject", failure),
+    engineError("store_failed", "the index database failed"),
+  );
+
+  await expect(page.getByRole("alert")).toHaveText("Could not search the conversations.");
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.__ipc.pendingCount("search_conversations")))
+    .toBe(1);
 });

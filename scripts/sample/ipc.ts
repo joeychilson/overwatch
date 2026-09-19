@@ -47,6 +47,15 @@ export async function invoke<T>(command: string, args: Record<string, unknown> =
   }
 }
 
+/** A channel a command sends to as it works, as Tauri's does. */
+export class Channel<T> {
+  onmessage: (message: T) => void;
+
+  constructor(onmessage?: (message: T) => void) {
+    this.onmessage = onmessage ?? (() => undefined);
+  }
+}
+
 /** What a caller runs to stop listening. */
 export type UnlistenFn = () => void;
 

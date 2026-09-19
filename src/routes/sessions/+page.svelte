@@ -1,11 +1,14 @@
 <script module lang="ts">
   import { SessionList } from "#lib/state/sessions.svelte.ts";
+  import { ConversationSearch } from "#lib/state/conversation-search.svelte.ts";
 
   /**
    * The rows, kept between visits: coming back from a session shows them at
    * once and where they were, instead of reading and scrolling all over again.
    */
   const list = new SessionList();
+  /** What a search of every conversation found, kept between visits the same way. */
+  const conversations = new ConversationSearch();
   /** The filter the rows were last read for, so a visit that changes nothing reads nothing. */
   let applied: string | undefined;
 </script>
@@ -19,6 +22,12 @@
    * the same list, and the app's menu can open it searching. It re-reads
    * whenever the address or the index changes, which is affordable because a
    * filtered, sorted, counted page comes back in well under a millisecond.
+   *
+   * Searching in full text looks through what was said in every conversation
+   * the list is narrowed to rather than at their titles, and the list shows
+   * what it found, each row quoting it. That reads the agents' own files, a
+   * second or two for all of them, so it runs when the search changes rather
+   * than whenever the index does, and what it found is ordered here.
    */
   import { onDestroy } from "svelte";
   import { afterNavigate, goto } from "$app/navigation";
@@ -30,7 +39,7 @@
   import Search from "@lucide/svelte/icons/search";
   import SquareTerminal from "@lucide/svelte/icons/square-terminal";
   import X from "@lucide/svelte/icons/x";
-  import type { Filter, SortKey } from "#lib/api/backend.ts";
+  import type { Filter, Session, SortKey } from "#lib/api/backend.ts";
   import PageHeader, { pageIcon } from "#lib/components/ui/PageHeader.svelte";
   import Segmented from "#lib/components/ui/Segmented.svelte";
   import AgentMark from "#lib/components/marks/AgentMark.svelte";
@@ -66,8 +75,12 @@
   /** Recency and size read newest and largest first; a title reads A to Z. */
   const DESCENDING_FIRST: ReadonlySet<SortKey> = new Set(["updated", "started", "tokens", "cost"]);
 
-  /** How long typing settles before it is sent. */
+  /**
+   * How long typing settles before it is sent: longer in full text, where each
+   * search reads every conversation.
+   */
   const SETTLE_MS = 150;
+  const SETTLE_TEXT_MS = 400;
 
   /** Every chip narrowing the list shares one look. */
   const CHIP =
@@ -113,6 +126,12 @@
    * through them, so the list opens on top-level work and says so.
    */
   const spawned = $derived(params.get("runs") === "all");
+  /** Whether a search looks through what was said rather than at titles. */
+  const text = $derived(params.get("text") === "1");
+  /** The search, as the address holds it. */
+  const query = $derived(params.get("q")?.trim() ?? "");
+  /** Whether the list is what a search of what was said found. */
+  const fullText = $derived(text && query !== "");
   const sort = $derived(parseSort(params.get("sort"), SORT_KEYS, NEWEST_FIRST));
 
   /** What is in the search box; it reaches the address once typing settles. */
@@ -137,6 +156,13 @@
       sort,
       includeSpawned: spawned,
     };
+    if (fullText) {
+      // Every match is looked through, newest first; the ordering is applied
+      // here to what was found.
+      void conversations.run(query, { ...filter, search: null, sort: undefined });
+      return;
+    }
+    conversations.stop();
     const key = JSON.stringify(filter);
     if (key === applied) return;
     applied = key;
@@ -151,7 +177,10 @@
   /** Let typing settle, so a fast typist issues one read rather than five. */
   function scheduleSearch() {
     clearTimeout(settling);
-    settling = setTimeout(() => change({ q: search.trim() || null }), SETTLE_MS);
+    settling = setTimeout(
+      () => change({ q: search.trim() || null }),
+      text ? SETTLE_TEXT_MS : SETTLE_MS,
+    );
   }
 
   function toggleSort(key: SortKey) {
@@ -202,6 +231,31 @@
   });
 
   const loaded = $derived(list.sessions.length);
+
+  /** What a search of what was said found, in the list's ordering. */
+  const found = $derived.by(() => {
+    const direction = sort.descending ? -1 : 1;
+    const measure = (session: Session) =>
+      sort.key === "started"
+        ? session.startedAt
+        : sort.key === "tokens"
+          ? session.tokens.total
+          : sort.key === "cost"
+            ? // A session with no price sorts as cheaper than every priced one.
+              (session.costUsd ?? -1)
+            : session.updatedAt;
+    const sessions = conversations.mentions.map((mention) => mention.session);
+    return sessions.sort(
+      (a, b) =>
+        direction *
+        (sort.key === "title"
+          ? (a.title ?? "").localeCompare(b.title ?? "")
+          : measure(a) - measure(b)),
+    );
+  });
+  const quotes = $derived(
+    new Map(conversations.mentions.map((mention) => [mention.session.id, mention])),
+  );
   const noun = $derived(spawned ? "sessions" : "conversations");
 
   /**
@@ -212,6 +266,18 @@
    * has not scrolled has no other way to learn them.
    */
   const describing = $derived.by(() => {
+    if (fullText) {
+      const found = conversations.mentions.length;
+      const searched = conversations.searched;
+      if (conversations.phase === "searching" || searched === null) {
+        return `Reading conversations… ${formatCount(found)} found so far`;
+      }
+      if (conversations.phase === "error") return "Could not search the conversations";
+      const counted = `${formatCount(found)} ${found === 1 ? "conversation mentions" : "conversations mention"} “${query}”`;
+      return searched.capped
+        ? `${counted}, the most recent shown`
+        : `${counted} · ${formatCount(searched.searched)} read`;
+    }
     if (list.phase === "initial") return "Reading your conversations…";
     const named = [
       agent === null ? noun : `${agentName(agent)} ${noun}`,
@@ -254,7 +320,9 @@
       class="h-9 w-full rounded-control border border-border bg-menu pr-3 pl-8 placeholder:text-muted"
       id="search"
       type="search"
-      placeholder="Search sessions, projects, or models…"
+      placeholder={text
+        ? "Search what was said in every conversation…"
+        : "Search sessions, projects, or models…"}
       aria-label="Search sessions"
       bind:value={search}
       bind:this={searchBox}
@@ -265,6 +333,14 @@
       }}
     />
   </div>
+  <Segmented
+    options={[
+      { value: false, label: "Titles" },
+      { value: true, label: "Full text" },
+    ]}
+    value={text}
+    onchange={(full) => change({ text: full ? "1" : null })}
+  />
   <Segmented
     options={[
       { value: false, label: "Conversations" },
@@ -334,7 +410,40 @@
   {/if}
 </div>
 
-{#if list.phase === "error" && loaded === 0}
+{#if fullText}
+  {#if conversations.phase === "error"}
+    <div class="mt-6 grid justify-items-start gap-3">
+      <p role="alert">Could not search the conversations.</p>
+      <code class="text-meta text-muted">{conversations.error}</code>
+      <button class="h-9 rounded-control bg-active px-3" onclick={load}>Retry</button>
+    </div>
+  {:else if found.length === 0 && conversations.phase === "searching"}
+    <div class="mt-5 grid gap-2" aria-hidden="true">
+      {#each Array.from({ length: 7 }, (_, index) => index) as row (row)}
+        <div class="h-12 animate-pulse rounded-control bg-hover"></div>
+      {/each}
+    </div>
+  {:else if found.length === 0}
+    <div class="mt-6 grid justify-items-start gap-2">
+      <p>No conversation mentions that.</p>
+      <p class="text-muted">Try other words, or a list narrowed to less.</p>
+    </div>
+  {:else}
+    <div class="mt-4" aria-busy={conversations.phase === "searching"}>
+      <SessionRows
+        bind:this={rows}
+        sessions={found}
+        {sort}
+        now={clock.now}
+        onsort={toggleSort}
+        projectHref={(cwd) => withParams(page.url, { project: cwd })}
+        modelHref={(model) => withParams(page.url, { model })}
+        onabove={() => searchBox?.focus()}
+        found={{ query, quotes }}
+      />
+    </div>
+  {/if}
+{:else if list.phase === "error" && loaded === 0}
   <div class="mt-6 grid justify-items-start gap-3">
     <p role="alert">Could not load sessions.</p>
     <code class="text-meta text-muted">{list.error}</code>

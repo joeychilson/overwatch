@@ -5,7 +5,7 @@ computer: the conversations, tool calls, reasoning, token usage, costs, and
 subscription limits of **Claude Code, Codex, OpenCode, Pi, and Grok**.
 
 Its Rust engine reads the agents' own files read-only, keeps a small index of
-what it found, and answers sixteen Tauri commands. Its only network traffic is
+what it found, and answers eighteen Tauri commands. Its only network traffic is
 reading subscription limits from your own providers, with the sign-ins your
 agents already keep.
 
@@ -26,7 +26,7 @@ Repository conventions, checks, and the commit format are in
 flowchart LR
     A[Agent files and databases] -->|changed files| B[Readers, one per agent]
     B --> C[(index.sqlite, ~2.5 MB)]
-    C --> D[Sixteen Tauri commands]
+    C --> D[Eighteen Tauri commands]
     D --> E[UI]
     A -->|whole file, on open| F[One conversation]
     F --> E

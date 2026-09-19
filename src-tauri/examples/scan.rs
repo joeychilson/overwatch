@@ -205,6 +205,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  {agent:<12} {answered:>6} / {calls:<6} ({share:>3.0}%)");
     }
 
+    // Searching what was said reads the agents' own files. A rare word is
+    // passed over unparsed in most of them; a common one is parsed in each
+    // until the search has found the most it answers with.
+    let everything = overwatch_lib::session::Filter {
+        include_spawned: true,
+        ..Default::default()
+    };
+    for query in ["idempotency", "the"] {
+        let started = Instant::now();
+        let first = std::cell::Cell::new(None);
+        let found = std::cell::Cell::new(0);
+        let searched = index.search(query, &everything, |batch| {
+            first.set(first.get().or(Some(started.elapsed())));
+            found.set(found.get() + batch.len());
+            true
+        })?;
+        println!(
+            "SEARCH {query:<12} {:>8.0?}  first found {:>8.0?}  {} found, {} of {} read{}",
+            started.elapsed(),
+            first.get().unwrap_or_default(),
+            found.get(),
+            searched.searched,
+            searched.total,
+            if searched.capped {
+                ", stopped at the most"
+            } else {
+                ""
+            },
+        );
+    }
+
     let size = std::fs::metadata(data.join("index.sqlite")).map_or(0, |data| data.len());
     println!("INDEX SIZE:      {:>8.1} MB", size as f64 / 1e6);
     std::fs::remove_dir_all(&data).ok();

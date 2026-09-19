@@ -10,14 +10,15 @@
 
 use std::sync::Arc;
 
+use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::error::{Error, Result};
 use crate::index::Index;
 use crate::session::{
-    Filter, HourTotals, Mark, ModelUsage, Overview, ProjectUsage, Session, SessionPage, Status,
-    Transcript,
+    Filter, HourTotals, Mark, Mention, ModelUsage, Overview, ProjectUsage, Searched, Session,
+    SessionPage, Status, Transcript,
 };
 
 /// The event emitted when the engine's status changes: after each scan, and
@@ -78,6 +79,28 @@ pub fn find_in_transcript(
     query: String,
 ) -> Result<Vec<i64>> {
     index.find(&id, &query)
+}
+
+/// Look through what was said in the conversation of every session a filter
+/// matches, newest first, for a query, sending the sessions that mention it on
+/// `found` as they turn up, and answer how far the search got once it ends.
+///
+/// No conversation's text is kept in the index, so this reads the agents' own
+/// files. A later search, or [`stop_searching`], ends one still running.
+#[tauri::command(async)]
+pub fn search_conversations(
+    index: State<'_, Arc<Index>>,
+    query: String,
+    filter: Filter,
+    found: Channel<Vec<Mention>>,
+) -> Result<Searched> {
+    index.search(&query, &filter, |batch| found.send(batch).is_ok())
+}
+
+/// End a search of every conversation that is still running.
+#[tauri::command(async)]
+pub fn stop_searching(index: State<'_, Arc<Index>>) {
+    index.stop_searching();
 }
 
 /// Release the held conversation when the reader leaves it.
@@ -210,6 +233,8 @@ pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         get_transcript,
         get_timeline,
         find_in_transcript,
+        search_conversations,
+        stop_searching,
         close_transcript,
         reveal_session,
         open_session_folder,

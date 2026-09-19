@@ -11,6 +11,9 @@
    * Each row opens its session, and its project or model narrows the list to
    * the sessions that share it. The arrow keys move between rows from anything
    * in one, so the list reads from the keyboard as a native one does.
+   *
+   * Rows a search of what was said found quote it under their titles, with
+   * the search marked, and open their conversations searching for it.
    */
   import { resolve } from "$app/paths";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
@@ -40,9 +43,15 @@
     modelHref: (model: string) => string;
     /** Called when the up arrow is pressed on the first row. */
     onabove?: () => void;
+    /**
+     * What a search of what was said found: the search, and each session's
+     * first mention of it and how many things said mention it, by the
+     * session's id.
+     */
+    found?: { query: string; quotes: ReadonlyMap<string, { excerpt: string; turns: number }> };
   }
 
-  let { sessions, sort, now, onsort, projectHref, modelHref, onabove }: Props = $props();
+  let { sessions, sort, now, onsort, projectHref, modelHref, onabove, found }: Props = $props();
 
   let list = $state<HTMLUListElement>();
 
@@ -75,6 +84,13 @@
     node.addEventListener("keydown", step);
     return { destroy: () => node.removeEventListener("keydown", step) };
   }
+
+  /** A quote cut at each mention of the search, the mentions at odd positions. */
+  const pieces = $derived.by(() => {
+    const sought = found?.query.trim().replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&") ?? "";
+    const pattern = sought === "" ? null : new RegExp(`(${sought})`, "iu");
+    return (quote: string) => (pattern === null ? [quote] : quote.split(pattern));
+  });
 
   /**
    * Column widths, shared by the header and every row so they stay aligned
@@ -126,37 +142,57 @@
   {#each sessions as session (session.id)}
     {@const live = isLive(session, now.getTime())}
     {@const [main, ...others] = session.models}
+    {@const quote = found?.quotes.get(session.id)}
     <!-- The title's link covers the whole row; the project's, and anything
          with a tooltip, sits above it. -->
     <li class="relative flex items-center gap-3 rounded-control px-2.5 py-2 hover:bg-hover">
       <AgentMark agent={session.agent} size={16} class="{MARK} shrink-0 text-muted" />
 
-      <span class="flex min-w-0 flex-1 items-center gap-1.5">
-        <a
-          class="truncate outline-none after:absolute after:inset-0 after:rounded-control focus-visible:after:outline-2 focus-visible:after:outline-(--focus) {session.title ===
-            null && !session.spawned
-            ? 'text-muted'
-            : ''}"
-          href={resolve("/sessions/[id]", { id: session.id })}
-          title={session.title ?? undefined}
-          data-row
-        >
-          {sessionLabel(session)}
-        </a>
-        {#if session.spawned}
-          <span
-            class="relative shrink-0 rounded-item bg-active px-1.5 py-0.5 text-label text-muted"
-            title="Started by an agent, not by you"
+      <span class="grid min-w-0 flex-1 gap-0.5">
+        <span class="flex min-w-0 items-center gap-1.5">
+          <a
+            class="truncate outline-none after:absolute after:inset-0 after:rounded-control focus-visible:after:outline-2 focus-visible:after:outline-(--focus) {session.title ===
+              null && !session.spawned
+              ? 'text-muted'
+              : ''}"
+            href={found === undefined
+              ? resolve("/sessions/[id]", { id: session.id })
+              : `${resolve("/sessions/[id]", { id: session.id })}?find=${encodeURIComponent(found.query.trim())}`}
+            title={session.title ?? undefined}
+            data-row
           >
-            agent
+            {sessionLabel(session)}
+          </a>
+          {#if session.spawned}
+            <span
+              class="relative shrink-0 rounded-item bg-active px-1.5 py-0.5 text-label text-muted"
+              title="Started by an agent, not by you"
+            >
+              agent
+            </span>
+          {/if}
+          {#if !session.present}
+            <TriangleAlert
+              class="relative shrink-0 text-warning"
+              size={12}
+              aria-label="No longer in its source; the history read so far is kept"
+            />
+          {/if}
+        </span>
+        {#if quote}
+          <span class="flex min-w-0 gap-2 text-meta text-muted">
+            <span class="truncate">
+              {#each pieces(quote.excerpt) as piece, index (index)}
+                {#if index % 2 === 1}<mark class="rounded-[2px] bg-warning/25 text-text"
+                    >{piece}</mark
+                  >{:else}{piece}{/if}
+              {/each}
+            </span>
+            <span class="shrink-0 tabular-nums">
+              {formatCount(quote.turns)}
+              {quote.turns === 1 ? "message" : "messages"}
+            </span>
           </span>
-        {/if}
-        {#if !session.present}
-          <TriangleAlert
-            class="relative shrink-0 text-warning"
-            size={12}
-            aria-label="No longer in its source; the history read so far is kept"
-          />
         {/if}
       </span>
 

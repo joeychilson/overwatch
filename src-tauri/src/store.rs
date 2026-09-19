@@ -21,7 +21,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::error::Result;
 use crate::session::{
     Account, Agent, AgentDay, AgentTotals, DayTotals, Filter, HourTotals, ModelDay, ModelSlice,
-    ModelUsage, Overview, ProjectUsage, Provider, Session, SessionPage, Tokens,
+    ModelUsage, Overview, ProjectUsage, Provider, Session, SessionPage, Sort, SortKey, Tokens,
 };
 use crate::source::{Summary, Unit};
 
@@ -49,6 +49,16 @@ const LOCAL_DAY: &str = "unixepoch(date(at / 1000, 'unixepoch', 'localtime'), 'u
 /// India's.
 const LOCAL_HOUR: &str = "at - (at + (unixepoch(datetime(at / 1000, 'unixepoch', 'localtime')) \
                           - at / 1000) * 1000) % 3600000";
+
+/// Where one session's history was read from.
+pub struct Origin {
+    /// The session, as the list shows it.
+    pub session: Session,
+    /// The unit it was last read from.
+    pub unit: Unit,
+    /// The agent's own id for it.
+    pub native_id: String,
+}
 
 /// Usage within one span of local time, such as a day, split by agent.
 struct Span {
@@ -431,6 +441,44 @@ impl Store {
                 };
                 (unit, native_id)
             }))
+    }
+
+    /// Every session a filter matches, most recently active first, with where
+    /// its history was read from. The filter's search, order and window do not
+    /// apply: this is every match, for looking through each one's history.
+    pub fn origins(&self, filter: &Filter) -> Result<Vec<Origin>> {
+        let mut filter = Filter {
+            search: None,
+            sort: Sort {
+                key: SortKey::Updated,
+                descending: true,
+            },
+            offset: 0,
+            limit: MAX_PAGE,
+            ..filter.clone()
+        };
+        let mut sessions = Vec::new();
+        loop {
+            let page = self.list(&filter)?;
+            let read = page.sessions.len() as i64;
+            sessions.extend(page.sessions);
+            filter.offset += read;
+            if read < MAX_PAGE || filter.offset >= page.total {
+                break;
+            }
+        }
+
+        let mut origins = Vec::with_capacity(sessions.len());
+        for session in sessions {
+            if let Some((unit, native_id)) = self.locate(&session.id)? {
+                origins.push(Origin {
+                    session,
+                    unit,
+                    native_id,
+                });
+            }
+        }
+        Ok(origins)
     }
 
     /// Models ranked by the usage recorded within a period.

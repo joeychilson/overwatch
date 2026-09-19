@@ -73,6 +73,18 @@ the sidebar; it never stops the rest of a scan. A file that disappears keeps its
 sessions in the index, flagged as no longer present, because history an agent
 has since deleted is still history.
 
+## Searching what was said
+
+A search of every conversation cannot ask the index, which holds no text, so it
+reads the agents' files, on every core, most recently active first, and hands
+the window each session that mentions the search as it turns up. What was said
+is a small part of those files and tool output most of the rest, so a file is
+first looked through as bytes, and parsed only when it could hold the search:
+most are passed over unread. Every OpenCode session is kept in one database,
+which is asked once which sessions' records hold it, and a Codex thread's
+rollouts are found by walking them once for the whole search. A search stops at
+the two hundred most recent sessions it finds, and when another begins.
+
 ## Accuracy: recorded, except cost
 
 Every number shown is one the agent itself recorded, except cost.
@@ -180,6 +192,9 @@ On this machine, against 900 files and 2.7 GB of agent history:
 | Overview totals                    | ~6–9 ms     |
 | Open a conversation (median)       | ~2 ms       |
 | Open a conversation (p99)          | ~150–175 ms |
+| Search what was said, first found  | ~150 ms     |
+| Search what was said, a rare word  | ~2 s        |
+| Search what was said, a common one | ~0.7–1 s    |
 | Index size                         | ~2.5 MB     |
 
 Timings vary with machine load; these are two runs at a load average of about
