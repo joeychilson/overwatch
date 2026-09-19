@@ -112,11 +112,15 @@ pub fn update<R: Runtime>(app: &AppHandle<R>, accounts: &[Account], now: i64) {
     if *last == shown {
         return;
     }
-    let _ = tray.set_icon(Some(ring(shown.left)));
-    let _ = tray.set_icon_as_template(true);
-    let _ = tray.set_title(shown.left.map(|left| format!("{left:.0}%")));
-    let _ = tray.set_tooltip(Some(&shown.tooltip));
-    *last = shown;
+    let drawn = tray
+        .set_icon_with_as_template(Some(ring(shown.left)), true)
+        .and_then(|()| tray.set_title(shown.left.map(|left| format!("{left:.0}%"))))
+        .and_then(|()| tray.set_tooltip(Some(&shown.tooltip)));
+    match drawn {
+        Ok(()) => *last = shown,
+        // What was shown is left as it was, so the next redraw tries again.
+        Err(error) => eprintln!("overwatch: could not redraw the menu bar item: {error}"),
+    }
 }
 
 /// Hide the panel once it loses focus.
