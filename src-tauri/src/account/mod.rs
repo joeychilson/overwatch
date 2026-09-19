@@ -287,6 +287,9 @@ fn get(
     }
     let mut curl = Command::new("/usr/bin/curl")
         .args([
+            // Must come first. It keeps a `~/.curlrc` from adding options, such
+            // as a trace file, that would record the credential.
+            "--disable",
             "--silent",
             "--proto",
             "=https",
