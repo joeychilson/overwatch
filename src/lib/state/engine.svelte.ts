@@ -7,10 +7,12 @@
  *
  * `revision` exists so screens can re-read when the index changes without
  * having to understand what changed. It is a counter, not a database revision:
- * anything derived from it simply re-runs.
+ * anything derived from it simply re-runs. A view of one session that keeps
+ * what it read, such as a conversation read a page at a time, watches that
+ * session instead, and hears only of changes to it.
  */
 import { getContext, setContext } from "svelte";
-import { getStatus, onIndexChanged, type Status } from "#lib/api/backend.ts";
+import { getStatus, onIndexChanged, onSessionsChanged, type Status } from "#lib/api/backend.ts";
 
 const key = Symbol("overwatch.engine");
 
@@ -36,6 +38,23 @@ export class Engine {
    */
   revision = $state(0);
 
+  /** What is watching each session for changes, by the session's id. */
+  #watching = new Map<string, Set<() => void>>();
+
+  /**
+   * Call `handler` whenever a scan reads anything new of a session, until the
+   * returned function is called.
+   */
+  watch(session: string, handler: () => void): () => void {
+    const handlers = this.#watching.get(session) ?? new Set();
+    handlers.add(handler);
+    this.#watching.set(session, handlers);
+    return () => {
+      handlers.delete(handler);
+      if (handlers.size === 0) this.#watching.delete(session);
+    };
+  }
+
   /**
    * Read the engine's current state.
    *
@@ -58,23 +77,32 @@ export class Engine {
    * subscription never establishes and the teardown is a no-op.
    */
   start(): () => void {
-    let unlisten: (() => void) | undefined;
+    const unlisten: (() => void)[] = [];
     let stopped = false;
-    void onIndexChanged((status) => {
-      const grew = status.sessions !== this.status.sessions;
-      this.status = status;
-      // A scan that parsed nothing changed nothing, so screens holding results
-      // are not asked to re-read for it.
-      if (grew || status.filesRead > 0) this.revision += 1;
-    }).then((stop) => {
-      if (stopped) stop();
-      else unlisten = stop;
-    });
+    const keep = (subscribed: Promise<() => void>) =>
+      void subscribed.then((stop) => {
+        if (stopped) stop();
+        else unlisten.push(stop);
+      });
+    keep(
+      onIndexChanged((status) => {
+        const grew = status.sessions !== this.status.sessions;
+        this.status = status;
+        // A scan that parsed nothing changed nothing, so screens holding
+        // results are not asked to re-read for it.
+        if (grew || status.filesRead > 0) this.revision += 1;
+      }),
+    );
+    keep(
+      onSessionsChanged((ids) => {
+        for (const id of ids) for (const handler of this.#watching.get(id) ?? []) handler();
+      }),
+    );
     void this.#read();
     return () => {
       stopped = true;
-      // Teardown must not depend on the subscription unwinding cleanly.
-      void Promise.resolve(unlisten?.()).catch(() => undefined);
+      // Teardown must not depend on the subscriptions unwinding cleanly.
+      for (const stop of unlisten) void Promise.resolve(stop()).catch(() => undefined);
     };
   }
 }

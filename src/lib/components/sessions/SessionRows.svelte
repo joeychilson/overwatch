@@ -15,7 +15,7 @@
   import { resolve } from "$app/paths";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
   import type { Session, Sort, SortKey } from "#lib/api/backend.ts";
-  import { sessionLabel } from "#lib/agents.ts";
+  import { isLive, sessionLabel } from "#lib/agents.ts";
   import AgentMark from "#lib/components/marks/AgentMark.svelte";
   import SortButton from "#lib/components/ui/SortButton.svelte";
   import {
@@ -76,9 +76,6 @@
     return { destroy: () => node.removeEventListener("keydown", step) };
   }
 
-  /** How recently a session must have been active to count as still going. */
-  const LIVE = 2 * 60_000;
-
   /**
    * Column widths, shared by the header and every row so they stay aligned
    * without a table's layout algorithm.
@@ -127,7 +124,7 @@
 
 <ul aria-label="Sessions" bind:this={list} use:arrows>
   {#each sessions as session (session.id)}
-    {@const live = now.getTime() - session.updatedAt < LIVE}
+    {@const live = isLive(session, now.getTime())}
     {@const [main, ...others] = session.models}
     <!-- The title's link covers the whole row; the project's, and anything
          with a tooltip, sits above it. -->

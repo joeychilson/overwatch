@@ -466,6 +466,20 @@ export function onOpen(handler: (path: string) => void): Promise<UnlistenFn> {
 }
 
 /**
+ * Subscribe to the engine naming the sessions a scan read anything new of,
+ * such as one whose agent is still at work.
+ *
+ * Resolves to an unlisten function, as {@link onIndexChanged} does.
+ */
+export async function onSessionsChanged(handler: (ids: string[]) => void): Promise<UnlistenFn> {
+  try {
+    return await listen<string[]>("sessions_changed", (event) => handler(event.payload));
+  } catch {
+    return () => {};
+  }
+}
+
+/**
  * Subscribe to the engine's "the index changed" notice.
  *
  * Resolves to an unlisten function the caller must invoke on teardown. Outside

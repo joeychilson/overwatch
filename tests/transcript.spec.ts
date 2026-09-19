@@ -8,6 +8,7 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 import {
+  emit,
   engineError,
   installIpc,
   marks,
@@ -302,4 +303,141 @@ test("the whole conversation copies as Markdown, past what is on screen", async 
   expect(copied).toMatch(/^# Fix the parser\n\nCodex · /);
   expect(copied).toContain("\n\nFix the parser\n\n*exec*\n\n## Codex");
   expect(copied).toMatch(/Fixed\.\n$/);
+});
+
+/** Open a session last active at `activeAt` and answer its first reads. */
+async function openLive(page: Page, turns: Turns, activeAt: number, total = turns.length) {
+  await page.goto("/sessions/codex:ses_a");
+  await settle(page, "get_status", status());
+  await settle(
+    page,
+    "get_session",
+    session("codex:ses_a", "Fix the parser", { updatedAt: activeAt }),
+  );
+  await settle(page, "get_timeline", marks(turns));
+  await settle(page, "get_transcript", transcript(turns, { total }));
+}
+
+/**
+ * A scan reads something new of the sessions named, as the engine announces
+ * it: the index changes, the session is read again as last active at
+ * `activeAt`, and the changed sessions are named.
+ */
+async function scanFinds(page: Page, activeAt: number, changed = ["codex:ses_a"]) {
+  await emit(page, "index_changed", status({ filesRead: 1 }));
+  await settle(
+    page,
+    "get_session",
+    session("codex:ses_a", "Fix the parser", { updatedAt: activeAt }),
+  );
+  await emit(page, "sessions_changed", changed);
+}
+
+/** The arguments of the latest call of a command. */
+function lastArgs(page: Page, cmd: string) {
+  return page.evaluate(
+    (c) => window.__ipc.calls.filter((call) => call.cmd === c).at(-1)?.args,
+    cmd,
+  );
+}
+
+test("a live session fills in as its agent works, a tool's result landing in its call", async ({
+  page,
+}) => {
+  const now = Date.now();
+  const running = [
+    turn(0, "user", "Fix the parser"),
+    turn(1, "tool", "", { name: "exec", input: "cargo test", output: null }),
+  ];
+  await openLive(page, running, now);
+  await expect(page.getByText("Live", { exact: true })).toBeVisible();
+
+  const done = [
+    turn(0, "user", "Fix the parser"),
+    turn(1, "tool", "", { name: "exec", input: "cargo test", output: "12 passed" }),
+    turn(2, "assistant", "Fixed, and the tests pass."),
+  ];
+  await scanFinds(page, now + 5_000);
+  await settle(page, "get_timeline", marks(done));
+  await settle(page, "get_transcript", transcript(done));
+  // The newest turns are read again from before the end, not only past it.
+  expect(await lastArgs(page, "get_transcript")).toMatchObject({ offset: 0 });
+
+  await expect(page.getByText("Fixed, and the tests pass.")).toBeVisible();
+  await expect(page.locator("dt:text-is('Messages') + dd")).toHaveText("2");
+  await page.getByRole("button", { name: /exec.*cargo test/ }).click();
+  await expect(page.getByText("12 passed")).toBeVisible();
+});
+
+test("a session the index changed around but not in is not read again", async ({ page }) => {
+  const now = Date.now();
+  await openLive(page, [turn(0, "user", "Fix the parser")], now);
+  const reads = () =>
+    page.evaluate(
+      () =>
+        window.__ipc.calls.filter(
+          (call) => call.cmd === "get_timeline" || call.cmd === "get_transcript",
+        ).length,
+    );
+  const before = await reads();
+
+  await scanFinds(page, now, ["codex:ses_b"]);
+  await page.waitForTimeout(250);
+  expect(await reads()).toBe(before);
+});
+
+test("reading further up, what arrives waits below behind a notice", async ({ page }) => {
+  const now = Date.now();
+  const said = Array.from({ length: 60 }, (_, index) =>
+    turn(index, index % 2 === 0 ? "user" : "assistant", `Turn number ${index}`),
+  );
+  await openLive(page, said, now);
+  const main = page.getByRole("main");
+  await main.evaluate((element) => element.scrollTo(0, 0));
+
+  const more = [...said, turn(60, "assistant", "Something new")];
+  await scanFinds(page, now + 5_000);
+  await settle(page, "get_timeline", marks(more));
+  await settle(page, "get_transcript", transcript(more));
+
+  const notice = page.getByRole("button", { name: "Newer turns" });
+  await expect(notice).toBeVisible();
+  expect(await main.evaluate((element) => element.scrollTop)).toBe(0);
+  await notice.click();
+  await expect(page.getByText("Something new")).toBeInViewport();
+  await expect(notice).toBeHidden();
+});
+
+test("before the end has been read, only how far the session goes is learned", async ({ page }) => {
+  const now = Date.now();
+  const first = Array.from({ length: 150 }, (_, index) =>
+    turn(index, "user", `Turn number ${index}`),
+  );
+  await openLive(page, first, now, 300);
+  await expect(page.getByText("Showing 150 of 300 turns.")).toBeVisible();
+
+  await scanFinds(page, now + 5_000);
+  await settle(page, "get_timeline", marks(first));
+  await settle(page, "get_transcript", transcript([turn(150, "user", "Next")], { total: 301 }));
+  expect(await lastArgs(page, "get_transcript")).toMatchObject({ offset: 150, limit: 1 });
+  await expect(page.getByText("Showing 150 of 301 turns.")).toBeVisible();
+  await expect(page.getByText("Next", { exact: true })).toHaveCount(0);
+});
+
+test("a reader at the bottom stays there as what the agent adds arrives", async ({ page }) => {
+  const now = Date.now();
+  const said = Array.from({ length: 60 }, (_, index) =>
+    turn(index, index % 2 === 0 ? "user" : "assistant", `Turn number ${index}`),
+  );
+  await openLive(page, said, now);
+  const main = page.getByRole("main");
+  await main.evaluate((element) => element.scrollTo(0, element.scrollHeight));
+
+  const more = [...said, turn(60, "assistant", "Something new")];
+  await scanFinds(page, now + 5_000);
+  await settle(page, "get_timeline", marks(more));
+  await settle(page, "get_transcript", transcript(more));
+
+  await expect(page.getByText("Something new")).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Newer turns" })).toHaveCount(0);
 });

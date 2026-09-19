@@ -24,6 +24,10 @@ use crate::session::{
 /// after each read of a subscription's limits.
 pub const CHANGED: &str = "index_changed";
 
+/// The event naming the sessions a scan read anything new of, carrying their
+/// ids, so a window showing one reads it again and no other.
+pub const SESSIONS_CHANGED: &str = "sessions_changed";
+
 /// The event asking the window to show a destination, carrying its path.
 pub const OPEN: &str = "open";
 

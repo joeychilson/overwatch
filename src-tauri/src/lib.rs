@@ -120,6 +120,10 @@ pub fn run() -> tauri::Result<()> {
                     }) {
                         Ok(status) => {
                             let _ = handle.emit(bridge::CHANGED, &status);
+                            let changed = scanner.changed();
+                            if !changed.is_empty() {
+                                let _ = handle.emit(bridge::SESSIONS_CHANGED, changed);
+                            }
                         }
                         Err(error) => {
                             // A failed scan is not fatal: the index keeps what

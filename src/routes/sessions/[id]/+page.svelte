@@ -13,6 +13,11 @@
    * the conversation to be parsed, which for a long session takes a moment,
    * and fill in when it is. A session whose file has gone has no timeline, and
    * its conversation says why.
+   *
+   * The header is read again whenever the index changes, and the timeline when
+   * that finds the session active since. The conversation watches the session
+   * itself and reads its newest turns whenever a scan reads anything new of
+   * it, so a session still going fills in as its agent works.
    */
   import { afterNavigate } from "$app/navigation";
   import { page } from "$app/state";
@@ -39,9 +44,11 @@
   import PageHeader, { pageIcon } from "#lib/components/ui/PageHeader.svelte";
   import Timeline from "#lib/components/charts/Timeline.svelte";
   import Transcript from "#lib/components/transcript/Transcript.svelte";
-  import { agentName, resumeCommand, roleName, sessionLabel } from "#lib/agents.ts";
+  import { agentName, isLive, resumeCommand, roleName, sessionLabel } from "#lib/agents.ts";
   import { errorLine } from "#lib/errors.ts";
   import { activeTime, asMarkdown } from "#lib/transcript.ts";
+  import { getEngine } from "#lib/state/engine.svelte.ts";
+  import { getClock } from "#lib/state/clock.svelte.ts";
   import {
     UNKNOWN,
     formatCount,
@@ -53,10 +60,12 @@
     formatUsd,
   } from "#lib/format.ts";
 
+  const engine = getEngine();
+  const clock = getClock();
+
   const sessionId = $derived(page.params.id ?? "");
 
-  /** The turn last chosen on the timeline, for the conversation to bring into view. */
-  let target = $state<{ session: string; index: number } | null>(null);
+  let transcript = $state<ReturnType<typeof Transcript>>();
   /** Whether the resume command was just copied. */
   let copied = $state(false);
   /** Why the last action outside the window failed, if it did. */
@@ -72,14 +81,29 @@
   });
 
   /**
-   * Where every turn falls, read once for both the timeline and the counts.
+   * The session as the index has it, read again whenever the index changes.
+   *
+   * The revision is a parameter so that the read depends on it: Svelte runs it
+   * again for each change and keeps the header on screen meanwhile.
+   */
+  async function readSession(id: string, revision: number) {
+    void revision;
+    return getSession(id);
+  }
+
+  /**
+   * Where every turn falls, read once for both the timeline and the counts,
+   * and again when the session has been active since.
    *
    * It takes the whole conversation parsed, which for a long session is a
    * moment's work, so the header shows from the index at once and these fill
    * in when the read is done. Null when the file cannot be read, which the
    * conversation below explains.
    */
-  const timeline = $derived(getTimeline(sessionId).catch(() => null));
+  function readTimeline(id: string, activeAt: number) {
+    void activeAt;
+    return getTimeline(id).catch(() => null);
+  }
 
   async function copy(command: string) {
     problem = null;
@@ -184,8 +208,12 @@
     </button>
   {/snippet}
 
-  {@const session = await getSession(sessionId)}
+  {@const session = await readSession(sessionId, engine.revision)}
   {@const resume = resumeCommand(session)}
+  <!-- A number, so the timeline is read again only when the session was active
+       since, not on every read of an unchanged session. -->
+  {@const activeAt = session.updatedAt}
+  {@const timeline = readTimeline(sessionId, activeAt)}
 
   <PageHeader title={sessionLabel(session)} description={about(session)}>
     {#snippet icon()}
@@ -193,6 +221,15 @@
       <AgentMark agent={session.agent} size={20} />
     {/snippet}
     {#snippet actions()}
+      {#if isLive(session, clock.now.getTime())}
+        <span
+          class="flex items-center gap-1.5 text-meta text-(--live)"
+          title="Active in the last two minutes; what its agent adds appears here"
+        >
+          <span class="size-1.5 animate-pulse rounded-full bg-(--live)" aria-hidden="true"></span>
+          Live
+        </span>
+      {/if}
       <!-- One control in the shape of a segmented one, so the actions sit
            beside the title without outweighing it. -->
       <div class="flex h-9 items-center gap-0.5 rounded-control border border-border p-0.5">
@@ -292,7 +329,7 @@
     {#if session.models.length > 0}
       <div class="min-w-0">
         <dt class="text-meta text-muted">{session.models.length === 1 ? "Model" : "Models"}</dt>
-        <dd class="mt-0.5 flex flex-wrap gap-x-3 font-mono text-meta leading-[22px]">
+        <dd class="mt-0.5 flex flex-wrap gap-x-3 font-mono text-meta leading-5.5">
           {#each session.models as slice (slice.model)}
             <span title="{formatCount(slice.tokens.total)} tokens · {formatUsd(slice.costUsd)}">
               {slice.model}
@@ -305,26 +342,18 @@
 
   <svelte:boundary>
     {#snippet pending()}
-      <div class="mt-6 h-[62px] animate-pulse rounded-control bg-hover" aria-hidden="true"></div>
+      <div class="mt-6 h-15.5 animate-pulse rounded-control bg-hover" aria-hidden="true"></div>
     {/snippet}
 
     {@const marks = await timeline}
     {#if marks !== null && marks.length > 1}
       <div class="mt-6">
-        <Timeline
-          {marks}
-          agent={session.agent}
-          onselect={(index) => (target = { session: session.id, index })}
-        />
+        <Timeline {marks} agent={session.agent} onselect={(index) => transcript?.reveal(index)} />
       </div>
     {/if}
   </svelte:boundary>
 
   <section class="mt-8" aria-label="Conversation">
-    <Transcript
-      {sessionId}
-      agent={agentName(session.agent)}
-      target={target?.session === session.id ? target : null}
-    />
+    <Transcript bind:this={transcript} {sessionId} agent={agentName(session.agent)} />
   </section>
 </svelte:boundary>

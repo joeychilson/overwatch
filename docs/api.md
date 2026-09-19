@@ -63,7 +63,10 @@ answer is the path it was written to.
 scans at startup and every five seconds after. It emits `index_changed`,
 carrying a `Status`, whenever a scan finishes or a subscription's limits are
 read, and every quarter second during a long scan, when `Status.progress` holds
-the files read and the files to read. It emits `open`, carrying a path such as
+the files read and the files to read. After a scan that read anything new it
+emits `sessions_changed`, carrying the ids of the sessions it read anything new
+of, each once, so a window showing a session still going reads that one again
+and no other. It emits `open`, carrying a path such as
 `/subscriptions`, to the app's window when its menu or `open_window` asks it to
 show a destination; a path such as `/sessions#search` also names an element to
 focus there. It emits `command`, carrying `back` or `forward`, to the app's

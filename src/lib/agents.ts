@@ -61,6 +61,14 @@ export function resumeCommand(
   return session.cwd === null ? command : `cd ${quote(session.cwd)} && ${command}`;
 }
 
+/** How recently a session must have been active to count as still going. */
+const LIVE = 2 * 60_000;
+
+/** Whether a session was active so recently that its agent is likely still at work. */
+export function isLive(session: Pick<Session, "updatedAt">, now: number): boolean {
+  return now - session.updatedAt < LIVE;
+}
+
 /** A value as a single shell word. */
 function quote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;

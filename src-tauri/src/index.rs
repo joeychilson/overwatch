@@ -39,6 +39,8 @@ pub struct Index {
     status: Mutex<Status>,
     /// The conversation most recently read, so paging through it is free.
     open: Mutex<Option<Held>>,
+    /// The sessions the last scan read anything new of.
+    changed: Mutex<Vec<String>>,
 }
 
 /// A conversation held after its first read, and where it was read from.
@@ -70,6 +72,7 @@ impl Index {
             home,
             status: Mutex::new(status),
             open: Mutex::new(None),
+            changed: Mutex::new(Vec::new()),
         })
     }
 
@@ -157,6 +160,7 @@ impl Index {
         changed.sort_by_key(|unit| std::cmp::Reverse(unit.mtime));
 
         let files_read = changed.len() as i64;
+        self.changed.lock().expect("never poisoned").clear();
         self.mark(|status| {
             status.files_read = files_read;
             status.agents = agents.iter().map(|(agent, _)| *agent).collect();
@@ -232,11 +236,14 @@ impl Index {
             let mut reported = Instant::now();
             for (done, (unit, read)) in (1..).zip(receive) {
                 match read {
-                    Ok(summaries) => {
-                        if let Err(error) = self.write(|store| store.put(&unit, &summaries)) {
-                            problems.push(error.to_string());
-                        }
-                    }
+                    Ok(summaries) => match self.write(|store| store.put(&unit, &summaries)) {
+                        Ok(()) => self
+                            .changed
+                            .lock()
+                            .expect("never poisoned")
+                            .extend(summaries.iter().map(|summary| summary.session.id.clone())),
+                        Err(error) => problems.push(error.to_string()),
+                    },
                     Err(error) => problems.push(error.to_string()),
                 }
                 if reported.elapsed() >= PROGRESS {
@@ -253,6 +260,15 @@ impl Index {
         problems.dedup();
         problems.truncate(20);
         problems
+    }
+
+    /// The sessions the last scan read anything new of, each once, so a window
+    /// showing one can read it again without asking about the rest.
+    pub fn changed(&self) -> Vec<String> {
+        let mut changed = self.changed.lock().expect("never poisoned").clone();
+        changed.sort();
+        changed.dedup();
+        changed
     }
 
     /// A window of one session's conversation.
@@ -750,6 +766,33 @@ mod tests {
         write_session(&projects.join("abc.jsonl"), "abc", "Not yet scanned", 500);
         let kept = index.transcript("claude_code:abc", 0, 10).expect("reads");
         assert_eq!(kept.turns[0].text, "First prompt");
+    }
+
+    #[test]
+    fn a_scan_names_the_sessions_it_read_anything_new_of() {
+        let home = home();
+        let index = index(&home);
+        index.scan(|_| {}).expect("scans");
+        assert_eq!(index.changed(), ["claude_code:abc"]);
+
+        index.scan(|_| {}).expect("rescans");
+        assert!(index.changed().is_empty(), "nothing moved");
+
+        let projects = home.path().join(".claude/projects/-w-proj");
+        write_session(&projects.join("other.jsonl"), "other", "Elsewhere", 100);
+        index.scan(|_| {}).expect("rescans");
+        assert_eq!(index.changed(), ["claude_code:other"], "only what moved");
+
+        // One session carried on in a second file is named once.
+        write_session(
+            &projects.join("abc.jsonl"),
+            "abc",
+            "First prompt, again",
+            500,
+        );
+        write_session(&projects.join("resumed.jsonl"), "abc", "Carried on", 700);
+        index.scan(|_| {}).expect("rescans");
+        assert_eq!(index.changed(), ["claude_code:abc"]);
     }
 
     #[test]
