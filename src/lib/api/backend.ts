@@ -1,13 +1,9 @@
 /**
  * The engine's command surface.
  *
- * Every type here is written by hand and mirrors a Rust type in
- * `src-tauri/src/session.rs` one to one. There are eighteen commands and about
- * two dozen shapes, which is small enough to keep honest by reading.
- *
- * Counts and money are plain numbers. The largest total any agent records is a
- * few billion tokens, which JavaScript represents exactly, so nothing here
- * parses a decimal string.
+ * Every type mirrors one in `src-tauri/src/session.rs`, by hand; change both
+ * together. Counts and money are plain numbers, since no agent's totals come
+ * near what JavaScript represents exactly.
  */
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -351,8 +347,8 @@ async function call<T>(command: string, args: Record<string, unknown> = {}): Pro
     return await invoke<T>(command, args);
   } catch (error) {
     if (isEngineError(error)) throw error;
-    // Outside Tauri — browser development and the Playwright suite — `invoke`
-    // itself fails, which is a different thing from the engine refusing.
+    // Outside Tauri, in browser development and tests, `invoke` itself fails,
+    // which is not the engine refusing.
     throw {
       kind: "unavailable",
       message: error instanceof Error ? error.message : String(error),
@@ -362,192 +358,140 @@ async function call<T>(command: string, args: Record<string, unknown> = {}): Pro
 
 /** One page of the session list, with the totals of the whole match. */
 export function listSessions(filter: Filter = {}): Promise<SessionPage> {
-  return call<SessionPage>("list_sessions", { filter });
+  return call("list_sessions", { filter });
 }
 
 /** One session's summary. */
 export function getSession(id: string): Promise<Session> {
-  return call<Session>("get_session", { id });
+  return call("get_session", { id });
 }
 
 /**
- * A window of one session's conversation.
- *
- * `offset` counts readable turns. The engine parses the conversation once and
- * holds it, so paging through a long session costs nothing further.
+ * A window of one session's conversation, `offset` counting readable turns.
+ * The engine holds the parsed conversation, so later pages cost no parse.
  */
-export function getTranscript(id: string, offset = 0, limit = 200): Promise<Transcript> {
-  return call<Transcript>("get_transcript", { id, offset, limit });
+export function getTranscript(id: string, offset: number, limit: number): Promise<Transcript> {
+  return call("get_transcript", { id, offset, limit });
 }
 
 /** Where every turn of a session falls, however long it is. */
 export function getTimeline(id: string): Promise<Mark[]> {
-  return call<Mark[]>("get_timeline", { id });
+  return call("get_timeline", { id });
 }
 
-/**
- * The turns of a session's conversation that contain a query, ignoring case,
- * in order: in what was said, thought or added by the harness, or in a tool
- * call's name, arguments or result.
- */
+/** The turns of a session's conversation that contain a query, ignoring case. */
 export function findInTranscript(id: string, query: string): Promise<number[]> {
-  return call<number[]>("find_in_transcript", { id, query });
+  return call("find_in_transcript", { id, query });
 }
 
 /**
- * Look through what was said in the conversation of every session a filter
- * matches, newest first, for a query, handing `onfound` each batch of sessions
- * that mention it as they turn up. Resolves with how far the search got once
- * it ends; a later search, or {@link stopSearching}, ends one still running.
+ * Look through what was said in every session a filter matches, newest first,
+ * handing `onfound` each batch of sessions that mention `query` as they turn
+ * up. A later search, or {@link stopSearching}, ends one still running.
  */
 export async function searchConversations(
   query: string,
   filter: Filter,
   onfound: (batch: Mention[]) => void,
 ): Promise<Searched> {
-  let found: Channel<Mention[]>;
-  try {
-    found = new Channel<Mention[]>(onfound);
-  } catch (error) {
-    // Outside Tauri there is nothing to open a channel to.
-    throw {
-      kind: "unavailable",
-      message: error instanceof Error ? error.message : String(error),
-    } satisfies EngineError;
-  }
-  return call<Searched>("search_conversations", { query, filter, found });
+  return call("search_conversations", { query, filter, found: new Channel(onfound) });
 }
 
 /** End a search of every conversation that is still running. */
 export function stopSearching(): Promise<void> {
-  return call<void>("stop_searching");
+  return call("stop_searching");
 }
 
 /** Release the held conversation when the reader leaves it. */
 export function closeTranscript(): Promise<void> {
-  return call<void>("close_transcript");
+  return call("close_transcript");
 }
 
 /** Show the file a session's history is in, in Finder. */
 export function revealSession(id: string): Promise<void> {
-  return call<void>("reveal_session", { id });
+  return call("reveal_session", { id });
 }
 
 /** Open the folder a session worked in. */
 export function openSessionFolder(id: string): Promise<void> {
-  return call<void>("open_session_folder", { id });
+  return call("open_session_folder", { id });
 }
 
 /** Models ranked by recorded usage over a period. */
-export function listModels(since?: number, until?: number): Promise<ModelUsage[]> {
-  return call<ModelUsage[]>("list_models", { since, until });
+export function listModels(since?: number): Promise<ModelUsage[]> {
+  return call("list_models", { since });
 }
 
 /** Projects ranked by recorded usage over a period. */
-export function listProjects(since?: number, until?: number): Promise<ProjectUsage[]> {
-  return call<ProjectUsage[]>("list_projects", { since, until });
+export function listProjects(since?: number): Promise<ProjectUsage[]> {
+  return call("list_projects", { since });
 }
 
-/** Totals for the overview, with days that break at local midnight. */
+/** Totals for a period, with days that break at local midnight. */
 export function getOverview(since?: number, until?: number): Promise<Overview> {
-  return call<Overview>("get_overview", { since, until });
+  return call("get_overview", { since, until });
 }
 
 /** Totals for each local hour of a period that had any usage, oldest first. */
-export function listHours(since?: number, until?: number): Promise<HourTotals[]> {
-  return call<HourTotals[]>("list_hours", { since, until });
+export function listHours(since?: number): Promise<HourTotals[]> {
+  return call("list_hours", { since });
 }
 
 /** What indexing has done so far. Never waits for a scan. */
 export function getStatus(): Promise<Status> {
-  return call<Status>("get_status");
+  return call("get_status");
 }
 
 /**
- * Write a picture the window drew to the Desktop, and answer with where it
- * went.
- *
- * `name` has no extension: the engine gives it one, and a name already taken
- * gets a number rather than overwriting what is there. `png` is the image's
- * bytes in base64, which is what a canvas's data URL already carries.
+ * Write a PNG the window drew to the Desktop, answering where it went. `name`
+ * has no extension, and `png` is base64, as a canvas's data URL carries it.
  */
 export function saveCard(name: string, png: string): Promise<string> {
-  return call<string>("save_card", { name, png });
+  return call("save_card", { name, png });
 }
 
-/** Bring the app's window forward, at a destination such as `/subscriptions` when one is given. */
+/** Bring the app's window forward, at a destination such as `/subscriptions` when given. */
 export function openWindow(path?: string): Promise<void> {
-  return call<void>("open_window", { path });
+  return call("open_window", { path });
 }
 
 /** Quit the app, and with it the menu bar item. */
 export function quit(): Promise<void> {
-  return call<void>("quit");
-}
-
-/**
- * Listen for an event the engine sends to this window alone.
- *
- * A listener registered through `listen` hears an event whichever window it was
- * sent to, and the menu bar panel runs the same root layout as the app's
- * window, so an event meant for one window is listened for on that window.
- * Outside Tauri there is no window, and the teardown is a no-op.
- */
-async function listenHere<T>(event: string, handler: (payload: T) => void): Promise<UnlistenFn> {
-  try {
-    return await getCurrentWebviewWindow().listen<T>(event, (heard) => handler(heard.payload));
-  } catch {
-    return () => {};
-  }
+  return call("quit");
 }
 
 /** A command the app's menu asks the window to carry out. */
 export type Command = "back" | "forward" | "find" | "find_next" | "find_previous";
 
 /**
- * Subscribe to the app's menu asking the window to carry out a command, such as
- * going back.
- *
- * Resolves to an unlisten function, as {@link onIndexChanged} does.
+ * Start listening, answering a teardown that works whether or not the
+ * listener has been established yet. Outside Tauri nothing is heard.
  */
-export function onCommand(handler: (command: Command) => void): Promise<UnlistenFn> {
-  return listenHere("command", handler);
+function listening(listen: () => Promise<UnlistenFn>): () => void {
+  const established = (async () => listen())().catch(() => () => {});
+  return () => void established.then((stop) => stop()).catch(() => {});
 }
 
-/**
- * Subscribe to the app's menu asking the window to show a destination, such as
- * `/subscriptions`.
- *
- * Resolves to an unlisten function, as {@link onIndexChanged} does.
- */
-export function onOpen(handler: (path: string) => void): Promise<UnlistenFn> {
-  return listenHere("open", handler);
+/** Hear the index change: after each scan, and after each read of a subscription's limits. */
+export function onIndexChanged(handler: (status: Status) => void): () => void {
+  return listening(() => listen<Status>("index_changed", (event) => handler(event.payload)));
 }
 
-/**
- * Subscribe to the engine naming the sessions a scan read anything new of,
- * such as one whose agent is still at work.
- *
- * Resolves to an unlisten function, as {@link onIndexChanged} does.
- */
-export async function onSessionsChanged(handler: (ids: string[]) => void): Promise<UnlistenFn> {
-  try {
-    return await listen<string[]>("sessions_changed", (event) => handler(event.payload));
-  } catch {
-    return () => {};
-  }
+/** Hear which sessions a scan read anything new of. */
+export function onSessionsChanged(handler: (ids: string[]) => void): () => void {
+  return listening(() => listen<string[]>("sessions_changed", (event) => handler(event.payload)));
 }
 
-/**
- * Subscribe to the engine's "the index changed" notice.
- *
- * Resolves to an unlisten function the caller must invoke on teardown. Outside
- * Tauri the subscription never establishes and the teardown is a no-op.
- */
-export async function onIndexChanged(handler: (status: Status) => void): Promise<UnlistenFn> {
-  try {
-    return await listen<Status>("index_changed", (event) => handler(event.payload));
-  } catch {
-    return () => {};
-  }
+/** Hear the app's menu ask this window to carry out a command, such as going back. */
+export function onCommand(handler: (command: Command) => void): () => void {
+  return listening(() =>
+    getCurrentWebviewWindow().listen<Command>("command", (event) => handler(event.payload)),
+  );
+}
+
+/** Hear the app's menu ask this window to show a destination, such as `/subscriptions`. */
+export function onOpen(handler: (path: string) => void): () => void {
+  return listening(() =>
+    getCurrentWebviewWindow().listen<string>("open", (event) => handler(event.payload)),
+  );
 }

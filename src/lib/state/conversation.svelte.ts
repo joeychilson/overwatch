@@ -1,17 +1,13 @@
 /**
  * One session's conversation, as far as it has been read.
  *
- * Owned rather than awaited, for the two things an `await` does not express:
- * pages accumulate as the reader goes rather than replacing one another, and
- * while the session is live its newest turns are read again as its agent adds
- * to them. The first page is still an `await`, in the boundary that creates
- * this from it, so the first load and its failure belong to that boundary.
+ * Owned rather than awaited because its pages accumulate, and because a live
+ * session's newest turns are read again as its agent adds to them. The first
+ * page is still an `await`, in the boundary that creates this from it.
  *
- * The engine holds the conversation it parsed, so every read after the first
- * is a slice of it until the session's file changes. Reads run one at a time,
- * in the order they were asked for: each changes the turns the next one
- * continues from. Each method untracks its work, since it reads and writes
- * this state and the page follows a live session from an effect.
+ * Reads run one at a time, in the order they were asked for, since each
+ * changes the turns the next continues from. Each method untracks its work,
+ * since it reads and writes this state.
  */
 import { untrack } from "svelte";
 import { getTranscript, type Transcript, type Turn } from "#lib/api/backend.ts";
@@ -23,13 +19,24 @@ export const PAGE_SIZE = 150;
 const LARGEST_PAGE = 2_000;
 /**
  * How many of the newest turns are read again when a live session changes. A
- * tool's result is written after its call and lands in the call's turn, which
- * is among the newest while the agent waits for it.
+ * tool's result lands in its call's turn, which is among the newest while the
+ * agent waits for it.
  */
 const TAIL = 100;
 
+/** Every turn of a session, without drawing any of them. */
+export async function allTurns(session: string): Promise<Turn[]> {
+  const turns: Turn[] = [];
+  for (let total = Infinity; turns.length < total;) {
+    const read = await getTranscript(session, turns.length, LARGEST_PAGE);
+    total = read.total;
+    if (read.turns.length === 0) break;
+    turns.push(...read.turns);
+  }
+  return turns;
+}
+
 export class Conversation {
-  /** The session it is of. */
   readonly session: string;
   /** Turns read so far, from the first, in order. */
   turns = $state.raw<readonly Turn[]>([]);
@@ -37,11 +44,10 @@ export class Conversation {
   total = $state(0);
   /** Why the last page failed; the turns already read are unaffected. */
   failure = $state<string | null>(null);
-  /** How many pages, or reads as far as a turn, are in flight. */
   #loading = $state(0);
 
   #queue: Promise<unknown> = Promise.resolve();
-  /** Whether a read of the newest turns is waiting its turn, which serves every change until it runs. */
+  /** Whether a read of the newest turns is waiting its turn; it serves every change until it runs. */
   #following = false;
 
   constructor(session: string, first: Transcript) {
@@ -50,7 +56,6 @@ export class Conversation {
     this.total = first.total;
   }
 
-  /** Whether every turn has been read. */
   get complete(): boolean {
     return this.turns.length >= this.total;
   }
@@ -62,56 +67,58 @@ export class Conversation {
 
   /** Append the next page, unless one is already coming or there is none. */
   more(): Promise<void> {
-    return untrack(() => {
-      if (this.loading || this.complete) return Promise.resolve();
-      return this.#load(() => this.#append(PAGE_SIZE));
-    });
+    return untrack(() =>
+      this.loading || this.complete ? Promise.resolve() : this.#load(() => this.#append(PAGE_SIZE)),
+    );
   }
 
   /** Read as far as a turn and a page past it, answering whether it has been read. */
   reach(index: number): Promise<boolean> {
-    return untrack(() => this.#reach(index));
-  }
-
-  async #reach(index: number): Promise<boolean> {
-    if (index < this.turns.length) return true;
-    await this.#load(async () => {
-      while (this.turns.length <= index && !this.complete) {
-        if ((await this.#append(index + PAGE_SIZE - this.turns.length)) === 0) break;
-      }
+    return untrack(async () => {
+      if (index < this.turns.length) return true;
+      await this.#load(async () => {
+        while (this.turns.length <= index && !this.complete) {
+          if ((await this.#append(index + PAGE_SIZE - this.turns.length)) === 0) break;
+        }
+      });
+      return index < this.turns.length;
     });
-    return index < this.turns.length;
   }
 
   /**
-   * Read the newest turns again, after the session changed while it was open,
-   * answering how many were added to those read.
+   * Read the newest turns again after the session changed, answering how many
+   * were added to those read.
    *
-   * A reader who has read to the end is given what the agent added, and the
-   * newest turns as they now stand. One who has not only learns how far the
-   * session now goes; its end arrives by paging, as the rest did. A failure
-   * leaves what was read as it was, for the next change to try again.
+   * A reader who has read to the end is given what the agent added and the
+   * newest turns as they now stand; one who has not only learns how far the
+   * session now goes, and reaches its end by paging. A failure leaves what was
+   * read for the next change to try again.
    */
   follow(): Promise<number> {
-    return untrack(() => this.#follow());
-  }
-
-  #follow(): Promise<number> {
-    if (this.#following) return Promise.resolve(0);
-    this.#following = true;
-    return this.#serially(async () => {
-      this.#following = false;
-      const read = this.turns.length;
-      if (read < this.total) {
-        this.total = (await getTranscript(this.session, read, 1)).total;
+    return untrack(async () => {
+      if (this.#following) return 0;
+      this.#following = true;
+      try {
+        return await this.#serially(async () => {
+          this.#following = false;
+          const read = this.turns.length;
+          if (read < this.total) {
+            this.total = (await getTranscript(this.session, read, 1)).total;
+            return 0;
+          }
+          const from = Math.max(0, read - TAIL);
+          const newest = await getTranscript(this.session, from, LARGEST_PAGE);
+          this.turns = [
+            ...this.turns.slice(0, from),
+            ...kept(this.turns.slice(from), newest.turns),
+          ];
+          this.total = newest.total;
+          return this.turns.length - read;
+        });
+      } catch {
         return 0;
       }
-      const from = Math.max(0, read - TAIL);
-      const newest = await getTranscript(this.session, from, LARGEST_PAGE);
-      this.turns = [...this.turns.slice(0, from), ...kept(this.turns.slice(from), newest.turns)];
-      this.total = newest.total;
-      return this.turns.length - read;
-    }).catch(() => 0);
+    });
   }
 
   /** Read `count` turns after those read, answering how many arrived. */
@@ -141,7 +148,6 @@ export class Conversation {
     });
   }
 
-  /** Run reads one after another, each after the last has settled. */
   #serially<T>(task: () => Promise<T>): Promise<T> {
     const run = this.#queue.then(task, task);
     this.#queue = run.catch(() => undefined);
@@ -150,8 +156,8 @@ export class Conversation {
 }
 
 /**
- * Turns read again, each one unchanged kept as the object already shown, so
- * what is on screen is not drawn again for nothing.
+ * Turns read again, each unchanged one kept as the object already shown, so
+ * that what is on screen is not drawn again for nothing.
  */
 function kept(shown: readonly Turn[], read: readonly Turn[]): Turn[] {
   const before = new Map(shown.map((turn) => [turn.index, turn]));
@@ -161,7 +167,6 @@ function kept(shown: readonly Turn[], read: readonly Turn[]): Turn[] {
   });
 }
 
-/** Whether two readings of a turn say the same. */
 function same(a: Turn, b: Turn): boolean {
   return (
     a.speaker === b.speaker &&

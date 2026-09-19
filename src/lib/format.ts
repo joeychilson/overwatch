@@ -1,13 +1,8 @@
 /**
  * Presentation of the engine's values.
  *
- * Counts and money arrive as plain numbers: the largest total any agent records
- * is a few billion tokens, well inside what JavaScript represents exactly, so
- * nothing here parses a decimal string.
- *
- * Unknown is not zero. A value the engine could not establish renders as
- * {@link UNKNOWN} everywhere, so a real recorded zero stays distinguishable
- * from an absent one at a glance.
+ * Unknown is not zero: a value the engine could not establish renders as
+ * {@link UNKNOWN}, so a recorded zero stays distinguishable from an absent one.
  */
 
 import { addDays, startOfDay } from "./periods.ts";
@@ -81,14 +76,14 @@ export function formatMeasure(value: Maybe, measure: Measure): string {
   return measure === "cost" ? formatUsd(value) : formatCountCompact(value);
 }
 
-/** A percentage, such as `67%`. */
-export function formatPercent(value: Maybe, decimals = 0): string {
+/** A whole percentage, such as `67%`. */
+export function formatPercent(value: Maybe): string {
   if (!known(value)) return UNKNOWN;
-  return `${value.toFixed(decimals)}%`;
+  return `${value.toFixed(0)}%`;
 }
 
 /** A Unix millisecond instant as a `Date`, or null when there is none. */
-export function instant(at: Maybe): Date | null {
+function instant(at: Maybe): Date | null {
   if (!known(at) || at === 0) return null;
   const date = new Date(at);
   return Number.isNaN(date.getTime()) ? null : date;

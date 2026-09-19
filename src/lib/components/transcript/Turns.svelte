@@ -1,26 +1,25 @@
 <script lang="ts">
   /**
-   * A conversation's turns, as far as they have been read.
+   * A conversation's turns, as far as they have been read: what was said in
+   * full, and the steps between gathered into blocks. The next page is read as
+   * the end comes into view, and what a search looks for is marked wherever it
+   * shows.
    *
-   * What was said reads in full and the steps between gather into blocks, as
-   * `blocks` lays them out. The next page is read as the end of what has been
-   * read comes into view, and {@link reveal} reads as far as a turn and brings
-   * it into view for whoever chose it, opened when a search found something
-   * inside it. What a search is looking for is marked wherever it shows.
-   *
-   * The session is watched while it is on screen: whenever a scan reads
-   * anything new of it, its newest turns are read again. A reader already at
-   * the bottom stays there as they arrive, as in a terminal; one reading
-   * further up is left where they are and told there is more below.
+   * While on screen, the session's newest turns are read again whenever a scan
+   * reads anything new of it. A reader at the bottom stays there as they
+   * arrive, as in a terminal; one further up is told there is more below.
    */
   import { onMount, tick } from "svelte";
   import type { Attachment } from "svelte/attachments";
+  import { on } from "svelte/events";
   import { SvelteSet } from "svelte/reactivity";
   import ArrowDown from "@lucide/svelte/icons/arrow-down";
+  import Failure from "#lib/components/ui/Failure.svelte";
+  import { onReach } from "#lib/attachments.ts";
   import type { Conversation } from "#lib/state/conversation.svelte.ts";
   import { getEngine } from "#lib/state/engine.svelte.ts";
   import { formatCount } from "#lib/format.ts";
-  import { blocks } from "#lib/transcript.ts";
+  import { blocks, findPattern } from "#lib/transcript.ts";
   import Gathered from "./Gathered.svelte";
   import Message from "./Message.svelte";
 
@@ -99,27 +98,28 @@
     const stopWatching = engine.watch(conversation.session, () => void catchUp());
     // Reaching the bottom by any means shows what the notice was about.
     const area = scroller();
-    const settle = () => {
-      if (unseen && atBottom()) unseen = false;
-    };
-    area?.addEventListener("scroll", settle, { passive: true });
+    const stopScrolling = area
+      ? on(area, "scroll", () => {
+          if (unseen && atBottom()) unseen = false;
+        })
+      : () => {};
     return () => {
       stopWatching();
-      area?.removeEventListener("scroll", settle);
+      stopScrolling();
     };
   });
 
   /**
    * Mark every place `sought` shows among the turns, and more strongly within
    * the turn at `here`, through the highlight registry, which marks text
-   * without changing the page. The marks follow whatever is drawn next, such
-   * as a page read or a step opened. A WebKit too old to have the registry
-   * marks nothing, and the chosen turn still stands out.
+   * without changing the page, and follows whatever is drawn next. A WebKit
+   * too old to have the registry marks nothing; the chosen turn still stands
+   * out.
    */
-  function marks(sought: string, here: number | null): Attachment<HTMLElement> {
+  function marks(sought: string | null, here: number | null): Attachment<HTMLElement> {
     return (root) => {
-      if (sought === "" || !("highlights" in CSS)) return;
-      const pattern = new RegExp(sought.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
+      const pattern = findPattern(sought ?? "");
+      if (pattern === null || !("highlights" in CSS)) return;
       const mark = () => {
         const within = here === null ? null : document.getElementById(`turn-${here}`);
         const found: Range[] = [];
@@ -150,24 +150,12 @@
       };
     };
   }
-
-  /** Load the next page as the end of the turns read comes into view. */
-  function loadOnReach(node: HTMLElement) {
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) void conversation.more();
-    });
-    observer.observe(node);
-    return { destroy: () => observer.disconnect() };
-  }
 </script>
 
 {#if conversation.turns.length === 0}
   <p class="text-muted">This session recorded nothing readable.</p>
 {:else}
-  <div
-    class="grid grid-cols-[minmax(0,1fr)] gap-3"
-    {@attach marks(highlight?.trim() ?? "", revealed)}
-  >
+  <div class="grid grid-cols-[minmax(0,1fr)] gap-3" {@attach marks(highlight, revealed)}>
     {#each blocks(conversation.turns) as block (block.index)}
       {#if block.kind === "message"}
         <Message
@@ -196,15 +184,15 @@
     {/each}
   </div>
 
-  <div use:loadOnReach class="h-px"></div>
+  <div class="h-px" {@attach onReach(() => conversation.more())}></div>
 
   {#if conversation.failure !== null}
-    <div class="mt-4 grid justify-items-start gap-2">
-      <code class="text-meta text-muted" role="alert">{conversation.failure}</code>
-      <button class="h-9 rounded-control bg-active px-3" onclick={() => void conversation.more()}>
-        Retry loading more
-      </button>
-    </div>
+    <Failure
+      class="mt-4"
+      error={conversation.failure}
+      onretry={() => conversation.more()}
+      retry="Retry loading more"
+    />
   {:else if conversation.loading}
     <p class="mt-4 text-meta text-muted">Loading more of the conversation…</p>
   {:else if !conversation.complete}

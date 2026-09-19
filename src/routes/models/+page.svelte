@@ -1,21 +1,14 @@
 <script lang="ts">
   /**
-   * The models your own sessions used.
-   *
-   * The period and the ordering live in the address, so opening a model's
-   * sessions and coming back finds the ranking as it was left. The ranking is
-   * an `await` inside the boundary below: changing the period changes what is
-   * awaited, so Svelte re-reads, keeps the previous ranking on screen while it
-   * does, discards a result that arrives after a newer one, and routes a
-   * failure to the boundary. Ordering happens here, on rows already read.
-   *
-   * Cost is estimated at list prices. A model with no listed price shows no
-   * cost rather than $0.00, which would say its usage was free.
+   * The models your sessions used. The period and the ordering live in the
+   * address, so opening a model's sessions and coming back finds the ranking
+   * as it was left. Ordering happens here, on the rows already read.
    */
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import Layers from "@lucide/svelte/icons/layers";
+  import Failure from "#lib/components/ui/Failure.svelte";
   import PageHeader, { pageIcon } from "#lib/components/ui/PageHeader.svelte";
   import Segmented from "#lib/components/ui/Segmented.svelte";
   import ModelRows, {
@@ -24,12 +17,12 @@
     type ModelKey,
   } from "#lib/components/models/ModelRows.svelte";
   import { listModels } from "#lib/api/backend.ts";
-  import { REPLACE, parseSort, sortParam, withParams } from "#lib/address.ts";
-  import { errorLine } from "#lib/errors.ts";
+  import { REPLACE, withParams } from "#lib/address.ts";
   import { PERIODS, parsePeriod, periodParam, periodStart } from "#lib/periods.ts";
+  import { parseSort, sortParam, toggled } from "#lib/sort.ts";
   import { getEngine } from "#lib/state/engine.svelte.ts";
   import { ALL_TIME } from "#lib/state/sessions.svelte.ts";
-  import { formatCountCompact, formatUsd } from "#lib/format.ts";
+  import { formatCount, formatCountCompact, formatUsd } from "#lib/format.ts";
 
   const engine = getEngine();
 
@@ -39,23 +32,13 @@
   const days = $derived(parsePeriod(page.url.searchParams.get("period")));
   const sort = $derived(parseSort(page.url.searchParams.get("sort"), MODEL_KEYS, MOST_TOKENS));
 
-  /**
-   * Read the ranking for a period, as of a given index revision.
-   *
-   * The revision is a parameter so that the read depends on it: when indexing
-   * finds new work, Svelte re-runs this and nothing else has to know.
-   */
-  async function read(days: number | null, revision: number) {
-    void revision;
+  async function read(days: number | null, _revision: number) {
     const since = periodStart(days);
     return { since, models: await listModels(since) };
   }
 
   function toggleSort(key: ModelKey) {
-    const next =
-      sort.key === key
-        ? { key, descending: !sort.descending }
-        : { key, descending: DESCENDING_FIRST.has(key) };
+    const next = toggled(sort, key, DESCENDING_FIRST);
     void goto(withParams(page.url, { sort: sortParam(next, MOST_TOKENS) }), REPLACE);
   }
 
@@ -83,7 +66,7 @@
   </PageHeader>
 {/snippet}
 
-<!-- The header's line comes from the read, so every state of the read draws the header. -->
+<!-- The header's line comes from the read, so every state draws the header. -->
 <svelte:boundary>
   {#snippet pending()}
     {@render header("Reading model usage…")}
@@ -96,11 +79,7 @@
 
   {#snippet failed(error, reset)}
     {@render header()}
-    <div class="grid justify-items-start gap-3">
-      <p role="alert">Could not read model usage.</p>
-      <code class="text-meta text-muted">{errorLine(error)}</code>
-      <button class="h-9 rounded-control bg-active px-3" onclick={() => reset()}>Retry</button>
-    </div>
+    <Failure title="Could not read model usage." {error} onretry={reset} />
   {/snippet}
 
   {@const { since, models } = await read(days, engine.revision)}
@@ -114,7 +93,7 @@
     models.length === 0
       ? undefined
       : [
-          `${models.length} models`,
+          `${formatCount(models.length)} ${models.length === 1 ? "model" : "models"}`,
           `${formatCountCompact(tokens)} tokens`,
           cost === null ? null : `${formatUsd(cost)} estimated`,
         ]

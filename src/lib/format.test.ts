@@ -15,7 +15,6 @@ import {
   formatWhen,
   formatTime,
   formatUsd,
-  instant,
   projectName,
 } from "./format.ts";
 
@@ -72,10 +71,9 @@ describe("money", () => {
 });
 
 describe("percentages", () => {
-  test("rounds to whole percents by default", () => {
+  test("round to whole percents", () => {
     expect(formatPercent(67)).toBe("67%");
     expect(formatPercent(40.6)).toBe("41%");
-    expect(formatPercent(40.64, 1)).toBe("40.6%");
     expect(formatPercent(null)).toBe(UNKNOWN);
   });
 });
@@ -112,14 +110,6 @@ describe("durations", () => {
     expect(formatCountdown(now + 44 * 60_000 + 1_000, now)).toBe("45m");
     expect(formatCountdown(now + 72 * 60_000, now)).toBe("1h 12m");
     expect(formatCountdown(now + (3 * 24 + 4) * 3_600_000, now)).toBe("3d 4h");
-  });
-});
-
-describe("instants", () => {
-  test("treats a missing or zero instant as none", () => {
-    expect(instant(null)).toBeNull();
-    expect(instant(0)).toBeNull();
-    expect(instant(1_789_169_902_696)?.getTime()).toBe(1_789_169_902_696);
   });
 });
 

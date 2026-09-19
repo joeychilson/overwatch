@@ -1,17 +1,12 @@
 <script lang="ts">
   /**
-   * Finding within a conversation.
+   * Finding within a conversation, which the engine searches as it holds it.
    *
-   * A search is something asked for, and answering one means taking the reader
-   * to what it found, so it runs in what asks for it: typing that has settled,
-   * Return, the menu's Find Next and Find Previous, and once when the bar opens
-   * with a search already in it, as from a link. The engine searches the
-   * conversation it holds. When a scan reads anything new of the session the
-   * search runs again, staying on the turn it was on while that is still found.
-   *
-   * Return steps forward through what was found, Shift-Return back, and Escape
-   * closes the bar. It holds its place at the top of the view while the
-   * conversation scrolls beneath it.
+   * A search runs when typing settles, on Return, and once when the bar opens
+   * with a search already in it, as from a link. When a scan reads anything
+   * new of the session it runs again, staying on the turn it was on while that
+   * is still found. Return steps forward through what was found, Shift-Return
+   * back, and Escape closes the bar.
    */
   import { onMount, tick } from "svelte";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";

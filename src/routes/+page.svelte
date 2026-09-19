@@ -3,22 +3,17 @@
    * What your agents have been doing: how much and on which days, with which
    * models, and in which projects and sessions.
    *
-   * Each read is an `await` in markup that depends on the period and the index
-   * revision, so choosing another period or finishing a scan re-reads, keeps the
-   * last answer on screen meanwhile, and drops one that arrives late. Days are
-   * bucketed by the engine in this machine's own zone, so a day here starts at
-   * the reader's midnight, clock changes included. Today is drawn by the hour,
-   * which the engine buckets the same way.
-   *
    * The measure, tokens or cost, is the whole page's: the chart draws it and
-   * every ranking orders by it. Only the top sessions are read for it, because
-   * they are a different five by each; the other rankings reorder what they hold.
+   * every ranking orders by it. Only the top sessions are read again for it,
+   * since they are a different five by each; the other rankings reorder what
+   * they hold.
    */
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import Folder from "@lucide/svelte/icons/folder";
   import LayoutGrid from "@lucide/svelte/icons/layout-grid";
+  import Failure from "#lib/components/ui/Failure.svelte";
   import PageHeader, { pageIcon } from "#lib/components/ui/PageHeader.svelte";
   import Segmented from "#lib/components/ui/Segmented.svelte";
   import ShareButton from "#lib/components/share/ShareButton.svelte";
@@ -34,9 +29,9 @@
     listSessions,
   } from "#lib/api/backend.ts";
   import { sessionLabel } from "#lib/agents.ts";
+  import { REPLACE, withParams } from "#lib/address.ts";
   import { card, type Card } from "#lib/card.ts";
-  import { errorLine } from "#lib/errors.ts";
-  import { REPLACE, sortParam, withParams } from "#lib/address.ts";
+  import { sortParam } from "#lib/sort.ts";
   import {
     PERIODS,
     addDays,
@@ -45,8 +40,8 @@
     periodStart,
     startOfDay,
   } from "#lib/periods.ts";
+  import { now } from "#lib/state/clock.ts";
   import { getEngine } from "#lib/state/engine.svelte.ts";
-  import { getClock } from "#lib/state/clock.svelte.ts";
   import { ALL_TIME, NEWEST_FIRST } from "#lib/state/sessions.svelte.ts";
   import {
     formatCount,
@@ -60,15 +55,12 @@
   } from "#lib/format.ts";
 
   const engine = getEngine();
-  const clock = getClock();
 
   const MEASURES: readonly { value: Measure; label: string }[] = [
     { value: "tokens", label: "Tokens" },
     { value: "cost", label: "Cost" },
   ];
 
-  // The period and the measure live in the address, so coming back from what a
-  // ranking opened finds the overview as it was left.
   const days = $derived(parsePeriod(page.url.searchParams.get("period")));
   const measure = $derived<Measure>(
     page.url.searchParams.get("measure") === "cost" ? "cost" : "tokens",
@@ -76,15 +68,8 @@
   /** Largest first, which is how every ranking here orders and opens its list. */
   const largest = $derived({ key: measure, descending: true });
 
-  /**
-   * The period's totals and rankings, and the totals of as long just before it
-   * to compare with.
-   *
-   * The revision is a parameter so that the read depends on it: when indexing
-   * finds new work, Svelte re-runs this and nothing else has to know.
-   */
-  async function read(days: number | null, revision: number) {
-    void revision;
+  /** The period's totals and rankings, and the totals of as long just before it. */
+  async function read(days: number | null, _revision: number) {
     const since = periodStart(days);
     const [overview, before, models, projects, hours] = await Promise.all([
       getOverview(since),
@@ -99,11 +84,9 @@
   }
 
   /** The period's sessions that used the most by a measure. */
-  async function readSessions(days: number | null, measure: Measure, revision: number) {
-    void revision;
-    const since = periodStart(days);
+  async function readSessions(days: number | null, measure: Measure, _revision: number) {
     const top = await listSessions({
-      since,
+      since: periodStart(days),
       sort: { key: measure, descending: true },
       limit: SHOWN,
     });
@@ -118,16 +101,14 @@
     return `${percent > 0 ? "↑" : "↓"} ${formatPercent(Math.abs(percent))}`;
   }
 
-  /**
-   * The days a period covers, such as `Aug 16 – Sep 14`, or for all of history
-   * the day anything was first used, once that is known.
-   */
+  /** The days a period covers, or for all of history the day anything was first used, once known. */
   function covered(since: number | undefined, first?: number) {
-    if (since !== undefined) return formatDays(since, startOfDay(clock.now.getTime()), clock.now);
-    return first === undefined ? undefined : `Since ${formatDay(first, false, clock.now)}`;
+    const today = now();
+    if (since !== undefined) return formatDays(since, startOfDay(today.getTime()), today);
+    return first === undefined ? undefined : `Since ${formatDay(first, false, today)}`;
   }
 
-  /** The sessions of the period, ordered as the rankings are, narrowed further by `changes`. */
+  /** The period's sessions, ordered as the rankings are, narrowed further by `changes`. */
   function sessionsHref(changes: Record<string, string> = {}) {
     return withParams(
       { pathname: resolve("/sessions"), search: "" },
@@ -171,8 +152,26 @@
   </div>
 {/snippet}
 
-<!-- For all of history the header's line comes from the read, so every state of
-     the read draws the header. -->
+{#snippet stat(label: string, value: string, moved: string | null)}
+  <div>
+    <dt class="text-meta text-muted">{label}</dt>
+    <dd class="mt-1 flex items-baseline gap-2">
+      <span class="text-title tabular-nums">{value}</span>
+      {#if moved}
+        <span
+          class="text-meta text-muted tabular-nums"
+          title={days === 1
+            ? "Compared with yesterday up to this time"
+            : `Compared with the ${days} days before`}
+        >
+          {moved}
+        </span>
+      {/if}
+    </dd>
+  </div>
+{/snippet}
+
+<!-- For all of history the header's line comes from the read, so every state draws the header. -->
 <svelte:boundary>
   {#snippet pending()}
     {@render header(covered(periodStart(days)))}
@@ -184,11 +183,7 @@
 
   {#snippet failed(error, reset)}
     {@render header(covered(periodStart(days)))}
-    <div class="grid justify-items-start gap-3">
-      <p role="alert">Could not read your totals.</p>
-      <code class="text-meta text-muted">{errorLine(error)}</code>
-      <button class="h-9 rounded-control bg-active px-3" onclick={() => reset()}>Retry</button>
-    </div>
+    <Failure title="Could not read your totals." {error} onretry={reset} />
   {/snippet}
 
   <!-- Awaited together so that both start at once; another measure reads only the sessions. -->
@@ -201,7 +196,7 @@
 
   {@render header(
     covered(since, overview.daily[0]?.day),
-    overview.sessions === 0 ? undefined : card({ overview, models, days, measure, now: clock.now }),
+    overview.sessions === 0 ? undefined : card({ overview, models, days, measure, now: now() }),
   )}
 
   {#if overview.sessions === 0}
@@ -212,24 +207,21 @@
     </p>
   {:else}
     <dl class="flex flex-wrap gap-x-12 gap-y-4">
-      {#each [{ label: "Estimated cost", value: formatUsd(overview.costUsd), moved: change(overview.costUsd, before?.costUsd) }, { label: "Tokens", value: formatCountCompact(overview.tokens.total), moved: change(overview.tokens.total, before?.tokens.total) }, { label: "Sessions", value: formatCount(overview.sessions), moved: change(overview.sessions, before?.sessions) }] as stat (stat.label)}
-        <div>
-          <dt class="text-meta text-muted">{stat.label}</dt>
-          <dd class="mt-1 flex items-baseline gap-2">
-            <span class="text-title tabular-nums">{stat.value}</span>
-            {#if stat.moved}
-              <span
-                class="text-meta text-muted tabular-nums"
-                title={days === 1
-                  ? "Compared with yesterday up to this time"
-                  : `Compared with the ${days} days before`}
-              >
-                {stat.moved}
-              </span>
-            {/if}
-          </dd>
-        </div>
-      {/each}
+      {@render stat(
+        "Estimated cost",
+        formatUsd(overview.costUsd),
+        change(overview.costUsd, before?.costUsd),
+      )}
+      {@render stat(
+        "Tokens",
+        formatCountCompact(overview.tokens.total),
+        change(overview.tokens.total, before?.tokens.total),
+      )}
+      {@render stat(
+        "Sessions",
+        formatCount(overview.sessions),
+        change(overview.sessions, before?.sessions),
+      )}
     </dl>
 
     <section class="mt-10">

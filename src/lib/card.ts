@@ -1,16 +1,11 @@
 /**
- * The card a reader shares: what a period says about their agents, and how that
- * is drawn into a picture.
+ * The card a reader shares: what a period says about their agents, and how
+ * that is drawn into a picture.
  *
- * A card is an artifact rather than a view. It leaves the app and is looked at
- * somewhere else, so it is drawn at a fixed size into a canvas and carries its
- * own copy of the theme's colours: the same period drawn twice is the same
- * picture, whatever the window is doing meanwhile. The colours mirror
- * `app.css`, which is where the window reads them from; a change there belongs
- * here too.
- *
- * What the card says is built apart from how it is drawn, so the claims can be
- * checked without a canvas.
+ * A card leaves the app, so it is drawn at a fixed size in either palette,
+ * whatever the window's theme; its colours mirror `app.css`, and a change there
+ * belongs here too. What it says is built apart from how it is drawn, so the
+ * claims can be tested without a canvas.
  */
 import type { Agent, ModelUsage, Overview } from "./api/backend.ts";
 import { agentDisplay } from "./agents.ts";
@@ -25,6 +20,7 @@ import {
   type Measure,
 } from "./format.ts";
 import { dayKey, periodStart, startOfDay } from "./periods.ts";
+import { sorted } from "./sort.ts";
 
 /** Which of the app's two palettes a card is drawn in. */
 export type Theme = "light" | "dark";
@@ -110,8 +106,7 @@ function usage(model: ModelUsage, measure: Measure): number | null {
  * price says nothing rather than something made up.
  */
 function verdict(models: readonly CardModel[], total: number, top: number, measure: Measure) {
-  if (models.length === 0) return "";
-  const first = models[0];
+  const [first] = models;
   if (first === undefined) return "";
   if (models.length === 1) return `${first.model}, and nothing else.`;
   if (total <= 0) return `${models.length} models in play.`;
@@ -155,9 +150,7 @@ export function card(input: {
     share: busiest > 0 ? share.value / busiest : 0,
   }));
 
-  const ranked = [...models]
-    .sort((a, b) => (usage(b, measure) ?? -1) - (usage(a, measure) ?? -1))
-    .slice(0, SHOWN);
+  const ranked = sorted(models, (model) => usage(model, measure), true).slice(0, SHOWN);
   const largest = Math.max(0, ...ranked.map((model) => usage(model, measure) ?? 0));
   const priced = models.reduce((sum, model) => sum + (usage(model, measure) ?? 0), 0);
   const shown: CardModel[] = ranked.map((model) => ({

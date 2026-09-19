@@ -1,5 +1,5 @@
 <script module lang="ts">
-  import type { Ordering } from "#lib/address.ts";
+  import type { Ordering } from "#lib/sort.ts";
 
   /** The columns models can be ordered by. */
   export const MODEL_KEYS = ["model", "sessions", "tokens", "cost"] as const;
@@ -10,19 +10,17 @@
 
 <script lang="ts">
   /**
-   * Models ranked by the work that went through them.
-   *
-   * Each row opens the sessions that used its model. The trend draws the
-   * period a day or a week to a bar, so a model coming into use or falling out
-   * of it shows without a chart of its own; a period of one day has no trend
-   * to draw, so it has no such column. The share is of all the period's
-   * tokens.
+   * Models ranked by the work that went through them, each opening the
+   * sessions that used it. The trend draws the period a day or a week to a
+   * bar, so a model coming into use or falling out of it shows at a glance; a
+   * period of one day has none. The share is of all the period's tokens.
    */
   import type { ModelUsage } from "#lib/api/backend.ts";
   import AgentMark from "#lib/components/marks/AgentMark.svelte";
   import Sparkline from "#lib/components/charts/Sparkline.svelte";
   import SortButton from "#lib/components/ui/SortButton.svelte";
   import { columns } from "#lib/components/charts/columns.ts";
+  import { sorted } from "#lib/sort.ts";
   import {
     UNKNOWN,
     formatCount,
@@ -45,21 +43,14 @@
 
   let { models, tokens, since, sort, onsort, sessionsHref }: Props = $props();
 
-  const ranked = $derived.by(() => {
-    const direction = sort.descending ? -1 : 1;
-    const measure = (model: ModelUsage) =>
-      sort.key === "sessions"
-        ? model.sessions
-        : sort.key === "tokens"
-          ? model.tokens.total
-          : // A model with no price sorts as cheaper than every priced one.
-            (model.costUsd ?? -1);
-    return [...models].sort(
-      (a, b) =>
-        direction *
-        (sort.key === "model" ? a.model.localeCompare(b.model) : measure(a) - measure(b)),
-    );
-  });
+  const COLUMNS: Record<ModelKey, (model: ModelUsage) => number | string | null> = {
+    model: (model) => model.model,
+    sessions: (model) => model.sessions,
+    tokens: (model) => model.tokens.total,
+    cost: (model) => model.costUsd,
+  };
+
+  const ranked = $derived(sorted(models, COLUMNS[sort.key], sort.descending));
 
   /** The period's columns, from its start or, for all of history, the first day of use. */
   const laid = $derived(

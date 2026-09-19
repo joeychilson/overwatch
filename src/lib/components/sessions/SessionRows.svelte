@@ -2,25 +2,24 @@
   /**
    * The rows of a session list, one line each.
    *
-   * A list rather than a table, because a table sizes its columns to their
-   * content: one long title widens the whole thing and pushes the numbers off
-   * screen. Here the title is the only flexible part and it truncates, so the
-   * figures stay in the same place on every row, in the same order as the
-   * Models page.
+   * A list rather than a table, since a table sizes its columns to their
+   * content and one long title would push the figures off screen. Here the
+   * title alone flexes and truncates, so the figures stay in place on every row.
    *
    * Each row opens its session, and its project or model narrows the list to
    * the sessions that share it. The arrow keys move between rows from anything
-   * in one, so the list reads from the keyboard as a native one does.
-   *
-   * Rows a search of what was said found quote it under their titles, with
-   * the search marked, and open their conversations searching for it.
+   * in one, as in a native list. Rows a full-text search found quote it, and
+   * open their conversations finding it.
    */
+  import { on } from "svelte/events";
   import { resolve } from "$app/paths";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
   import type { Session, Sort, SortKey } from "#lib/api/backend.ts";
   import { isLive, sessionLabel } from "#lib/agents.ts";
   import AgentMark from "#lib/components/marks/AgentMark.svelte";
   import SortButton from "#lib/components/ui/SortButton.svelte";
+  import { now } from "#lib/state/clock.ts";
+  import { findPattern } from "#lib/transcript.ts";
   import {
     UNKNOWN,
     formatCount,
@@ -34,8 +33,6 @@
   interface Props {
     sessions: readonly Session[];
     sort: Sort;
-    /** The moment relative times are measured against. */
-    now: Date;
     onsort: (key: SortKey) => void;
     /** Where the list narrowed to one project is. */
     projectHref: (cwd: string) => string;
@@ -51,7 +48,7 @@
     found?: { query: string; quotes: ReadonlyMap<string, { excerpt: string; turns: number }> };
   }
 
-  let { sessions, sort, now, onsort, projectHref, modelHref, onabove, found }: Props = $props();
+  let { sessions, sort, onsort, projectHref, modelHref, onabove, found }: Props = $props();
 
   let list = $state<HTMLUListElement>();
 
@@ -67,30 +64,22 @@
     return first !== undefined;
   }
 
-  /** Move focus a row up or down with the arrow keys, from whatever in a row has it. */
-  function arrows(node: HTMLElement) {
-    function step(event: KeyboardEvent) {
-      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-      const links = rows();
-      const row = (event.target as Element).closest("li");
-      const at = links.findIndex((link) => link.closest("li") === row);
-      if (at === -1) return;
-      event.preventDefault();
-      const next = at + (event.key === "ArrowDown" ? 1 : -1);
-      if (next < 0) onabove?.();
-      else links[next]?.focus();
-    }
-    node.addEventListener("keydown", step);
-    return { destroy: () => node.removeEventListener("keydown", step) };
+  /** Move a row up or down with the arrow keys, from whatever in a row has focus. */
+  function step(event: KeyboardEvent) {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const links = rows();
+    const row = (event.target as Element).closest("li");
+    const at = links.findIndex((link) => link.closest("li") === row);
+    if (at === -1) return;
+    event.preventDefault();
+    const next = at + (event.key === "ArrowDown" ? 1 : -1);
+    if (next < 0) onabove?.();
+    else links[next]?.focus();
   }
 
-  /** A quote cut at each mention of the search, the mentions at odd positions. */
-  const pieces = $derived.by(() => {
-    const sought = found?.query.trim().replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&") ?? "";
-    const pattern = sought === "" ? null : new RegExp(`(${sought})`, "iu");
-    return (quote: string) => (pattern === null ? [quote] : quote.split(pattern));
-  });
+  const pattern = $derived(found ? findPattern(found.query) : null);
+  const at = $derived(now().getTime());
 
   /**
    * Column widths, shared by the header and every row so they stay aligned
@@ -138,9 +127,9 @@
   />
 </div>
 
-<ul aria-label="Sessions" bind:this={list} use:arrows>
+<ul aria-label="Sessions" bind:this={list} {@attach (node) => on(node, "keydown", step)}>
   {#each sessions as session (session.id)}
-    {@const live = isLive(session, now.getTime())}
+    {@const live = isLive(session, at)}
     {@const [main, ...others] = session.models}
     {@const quote = found?.quotes.get(session.id)}
     <!-- The title's link covers the whole row; the project's, and anything
@@ -182,9 +171,8 @@
         {#if quote}
           <span class="flex min-w-0 gap-2 text-meta text-muted">
             <span class="truncate">
-              {#each pieces(quote.excerpt) as piece, index (index)}
-                {#if index % 2 === 1}<mark class="rounded-[2px] bg-warning/25 text-text"
-                    >{piece}</mark
+              {#each pattern ? quote.excerpt.split(pattern) : [quote.excerpt] as piece, index (index)}
+                {#if index % 2 === 1}<mark class="rounded-xs bg-warning/25 text-text">{piece}</mark
                   >{:else}{piece}{/if}
               {/each}
             </span>
@@ -246,7 +234,7 @@
             class="mr-1 inline-block size-1.5 animate-pulse rounded-full bg-(--live) align-middle"
           ></span>Now
         {:else}
-          {formatWhen(session.updatedAt, now)}
+          {formatWhen(session.updatedAt, now())}
         {/if}
       </span>
     </li>

@@ -2,28 +2,27 @@
   import { onMount, type Snippet } from "svelte";
   import { goto, snapshot } from "$app/navigation";
   import { page } from "$app/state";
+  import { ModeWatcher } from "mode-watcher";
   import Sidebar from "#lib/components/sidebar/Sidebar.svelte";
   import { onCommand, onOpen } from "#lib/api/backend.ts";
   import { pathOf } from "#lib/address.ts";
-  import { Engine, setEngine } from "#lib/state/engine.svelte.ts";
-  import { Clock, setClock } from "#lib/state/clock.svelte.ts";
   import { Commands, setCommands } from "#lib/commands.ts";
-  import { ModeWatcher } from "mode-watcher";
+  import { Engine, setEngine } from "#lib/state/engine.svelte.ts";
   import "../app.css";
 
   let { children }: { children: Snippet } = $props();
 
-  // Bound only in the app's window, which is the only one that navigates.
+  /** The app window's scrolling area; the menu bar panel has none. */
   let content = $state() as HTMLElement;
 
-  // The window owns one engine state for its whole lifetime: indexing runs in
-  // the background and announces itself, and a per-page subscription would drop
-  // those notices while navigating.
   const engine = setEngine(new Engine());
-  const clock = setClock(new Clock());
   const commands = setCommands(new Commands());
 
-  /** Show a destination, focusing an element there when it names one, as `/sessions#search` does. */
+  /**
+   * Show a destination from the app's menu or the menu bar panel, focusing an
+   * element there when it names one, as `/sessions#search` does. A destination
+   * already on screen keeps what it is narrowed to.
+   */
   async function show(path: string) {
     const [route = "/", focus] = path.split("#");
     if (route !== pathOf(page.url)) await goto(route);
@@ -31,27 +30,17 @@
   }
 
   onMount(() => {
-    const stopEngine = engine.start();
-    const stopClock = clock.start();
-    // The app's menu and the menu bar panel open the window at a destination,
-    // and may name an element there to focus, as `/sessions#search` does. A
-    // destination already on screen keeps what it is narrowed to.
-    const opening = onOpen((path) => void show(path));
-    // A page that has taken a command carries it out. Otherwise Back and
-    // Forward move through the window's own history, as a browser's buttons
-    // would, and Find searches the sessions, the one thing every page can.
-    const commanding = onCommand((command) => {
-      if (commands.run(command)) return;
-      if (command === "back") history.back();
-      else if (command === "forward") history.forward();
-      else if (command === "find") void show("/sessions#search");
-    });
-    return () => {
-      stopEngine();
-      stopClock();
-      void opening.then((stop) => stop());
-      void commanding.then((stop) => stop());
-    };
+    const stops = [
+      engine.start(),
+      onOpen((path) => void show(path)),
+      onCommand((command) => {
+        if (commands.run(command)) return;
+        if (command === "back") history.back();
+        else if (command === "forward") history.forward();
+        else if (command === "find") void show("/sessions#search");
+      }),
+    ];
+    return () => stops.forEach((stop) => stop());
   });
 
   snapshot({

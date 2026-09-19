@@ -14,6 +14,7 @@
   import type { Snippet } from "svelte";
   import type { Tokens } from "#lib/api/backend.ts";
   import { formatMeasure, type Measure } from "#lib/format.ts";
+  import { sorted } from "#lib/sort.ts";
 
   interface Props {
     items: readonly T[];
@@ -31,9 +32,7 @@
     return measure === "cost" ? item.costUsd : item.tokens.total;
   }
 
-  const ranked = $derived(
-    [...items].sort((a, b) => (amount(b) ?? -1) - (amount(a) ?? -1)).slice(0, SHOWN),
-  );
+  const ranked = $derived(sorted(items, amount, true).slice(0, SHOWN));
   const largest = $derived(Math.max(0, ...ranked.map((item) => amount(item) ?? 0)));
 </script>
 

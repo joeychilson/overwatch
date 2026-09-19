@@ -1,10 +1,4 @@
-/**
- * How each agent is named and marked in the interface.
- *
- * The engine identifies an agent by a closed set of keys — an agent is
- * supported when a reader exists for its format — so this is a total mapping
- * with no fallback case to carry.
- */
+/** How each agent is named, marked and resumed in the interface. */
 import { AGENTS, type Agent, type Session } from "./api/backend.ts";
 import type { MarkName } from "./components/marks/marks.ts";
 
@@ -107,19 +101,10 @@ export function roleName(role: string | null): string {
 }
 
 /**
- * What to call a session in a list.
- *
- * A recorded title always wins. Without one, a spawned run is named for what it
- * was for, and work a person started is untitled: titles are read with the
- * rest of the index, so one missing means the session never had a prompt of
- * its own, and its identifier, a UUID, would tell a reader nothing.
+ * What to call a session in a list: its title, or for a spawned run without
+ * one what it was for. Its identifier, a UUID, would tell a reader nothing.
  */
-export function sessionLabel(session: {
-  title: string | null;
-  spawned: boolean;
-  role: string | null;
-  nativeId: string;
-}): string {
+export function sessionLabel(session: Pick<Session, "title" | "spawned" | "role">): string {
   if (session.title !== null && session.title.trim() !== "") return session.title;
   return session.spawned ? roleName(session.role) : "Untitled";
 }

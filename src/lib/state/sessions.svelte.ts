@@ -1,24 +1,18 @@
 /**
  * A browsable list of sessions.
  *
- * The engine answers a filter with one indexed query in well under a
- * millisecond, so this holds no view, no cursor and no pinned revision: it
- * sends the filter, keeps the rows, and sends it again when something changes.
- * Pages accumulate rather than replace, which is the one thing no derivation
- * expresses and the only reason this is a class rather than an `await` in a
- * component.
+ * Owned rather than awaited because its pages accumulate as the reader
+ * scrolls. The engine answers a filter in a few milliseconds, so this keeps no
+ * cursor: it sends the filter and keeps the rows.
  *
- * Two failures are kept apart because they need different recoveries. A failed
- * first page has no rows to show and offers a retry; a failed later page keeps
- * every row already loaded and retries only that page.
+ * A failed first read has no rows to show and offers a retry; a failed later
+ * page keeps the rows loaded and retries only itself. The engine keeps
+ * indexing meanwhile, so rows can shift between two reads: a page leaves out
+ * rows already loaded, and the next refresh, which reads every loaded row
+ * again, restores the order.
  *
- * The engine keeps indexing while the list is open, so rows can shift between
- * two reads. A page that repeats a row already loaded leaves it out, and the
- * next refresh, which reads every loaded row again, restores the order.
- *
- * Every method reads and writes the list's own state, and the page refreshes
- * from an effect, so each one untracks its work: an effect calling it must
- * depend only on what the effect itself reads.
+ * Each method untracks its work, since it reads and writes this state and the
+ * page calls it from an effect.
  */
 import { untrack } from "svelte";
 import {
@@ -36,9 +30,6 @@ const PAGE_SIZE = 100;
 /** The most rows the engine returns for one read. */
 const LARGEST_PAGE = 500;
 
-/** Where a list is in its reading. */
-type Phase = "initial" | "ready" | "updating" | "error";
-
 /** The default ordering: newest first, which is what someone opens the list for. */
 export const NEWEST_FIRST: Sort = { key: "updated", descending: true };
 
@@ -54,63 +45,69 @@ const NO_TOKENS: Tokens = {
   total: 0,
 };
 
+/** Where a list is in its reading: before its first answer, answered, re-reading, or failed. */
+type Phase = "initial" | "ready" | "updating" | "error";
+
 export class SessionList {
   /** Rows loaded so far, in order. */
   sessions = $state.raw<readonly Session[]>([]);
   /** How many sessions match the filter, loaded or not. */
   total = $state(0);
   /** Usage across every match, not only the loaded rows. */
-  tokens = $state<Tokens>(NO_TOKENS);
+  tokens = $state.raw<Tokens>(NO_TOKENS);
   /** Estimated cost across every match; null when none of it is priced. */
   costUsd = $state<number | null>(null);
-  /** Where the list is in its reading. */
   phase = $state<Phase>("initial");
-  /** Why the first page failed, when it did. */
+  /** Why the first page failed. */
   error = $state<string | null>(null);
-  /** Why a later page failed; the loaded rows are unaffected. */
+  /** Why a later page failed. */
   pageError = $state<string | null>(null);
-  /** Whether a later page is in flight. */
   loadingPage = $state(false);
 
-  #filter: Filter = { sort: NEWEST_FIRST };
+  #filter: Filter = {};
+  /** The filter shown, as text, and the index revision it was read at. */
+  #shown: string | undefined;
+  #revision = 0;
   /** Distinguishes overlapping reads, so a slow one cannot overwrite a newer. */
   #sequence = 0;
-  /** The latest read of the list from its top, which a later page must follow. */
+  /** The latest read from the top, which a later page must follow. */
   #reading: Promise<void> = Promise.resolve();
 
-  /** Whether every matching row has been loaded. */
   get complete(): boolean {
     return this.sessions.length >= this.total;
   }
 
   /**
-   * Read the first page for a filter, replacing whatever is loaded.
-   *
-   * Called by whichever handler changed a control, and once on mount. Reading
-   * is work a person asked for, so it belongs where they asked for it.
+   * Show what a filter matches as of an index revision: a new filter from its
+   * first page, and a new revision by reading the loaded rows again. Showing
+   * what is already shown reads nothing.
    */
-  apply(filter: Filter): Promise<void> {
-    this.#filter = { sort: NEWEST_FIRST, ...filter };
-    return untrack(() => this.#read(PAGE_SIZE));
+  show(filter: Filter, revision: number): void {
+    untrack(() => {
+      const shown = JSON.stringify(filter);
+      if (shown !== this.#shown) {
+        this.#shown = shown;
+        this.#filter = filter;
+        void this.#read(PAGE_SIZE);
+      } else if (revision !== this.#revision) {
+        void this.refresh();
+      }
+      this.#revision = revision;
+    });
   }
 
   /**
-   * Read the filter again, keeping the rows on screen until it answers.
-   *
-   * It reads as many rows as are loaded, so a list scrolled far down keeps its
-   * length, and its place, when the engine finds new work.
+   * Read the filter again, as many rows as are loaded, so that a list
+   * scrolled far down keeps its length and its place.
    */
   refresh(): Promise<void> {
     return untrack(() => this.#read(Math.max(PAGE_SIZE, this.sessions.length)));
   }
 
   /**
-   * Read `count` rows from the top, in as few reads as the engine allows, and
-   * replace the rows with them.
-   *
-   * Whatever the list last answered stays on screen until this answers, an
-   * empty answer included, so a refresh never flashes a skeleton; only a list
-   * with no answer to show starts over from one.
+   * Replace the rows with `count` from the top, in as few reads as the engine
+   * allows. Whatever was answered last stays on screen until this answers, so
+   * only a list with no answer yet shows a skeleton.
    */
   #read(count: number): Promise<void> {
     const sequence = ++this.#sequence;
@@ -118,7 +115,7 @@ export class SessionList {
       this.sessions.length > 0 || this.phase === "ready" || this.phase === "updating";
     this.phase = answered ? "updating" : "initial";
     this.pageError = null;
-    const reading = (async () => {
+    this.#reading = (async () => {
       try {
         let rows: readonly Session[] = [];
         let offset = 0;
@@ -142,56 +139,43 @@ export class SessionList {
         this.phase = "error";
       }
     })();
-    this.#reading = reading;
-    return reading;
+    return this.#reading;
   }
 
   /**
-   * Append the next page, if there is one.
-   *
-   * A page follows the rows loaded when it is read, so it waits for a read
-   * from the top that is still in flight, and is read again if one starts
-   * while it is out: arriving first, it would be replaced along with the rows
-   * it followed.
+   * Append the next page, if there is one. It follows the rows loaded when it
+   * is read, so it waits for a read from the top still in flight, and is read
+   * again if one starts while it is out.
    */
   more(): Promise<void> {
-    return untrack(() => this.#more());
-  }
-
-  async #more(): Promise<void> {
-    if (this.loadingPage) return;
-    this.loadingPage = true;
-    this.pageError = null;
-    try {
-      for (;;) {
-        while (this.phase === "initial" || this.phase === "updating") await this.#reading;
-        if (this.complete || this.sessions.length === 0) return;
-        const sequence = this.#sequence;
-        try {
-          const page = await listSessions({
-            ...this.#filter,
-            offset: this.sessions.length,
-            limit: PAGE_SIZE,
-          });
-          if (sequence !== this.#sequence) continue;
-          this.sessions = joined(this.sessions, page.sessions);
-          this.total = page.total;
-          return;
-        } catch (failure) {
-          if (sequence !== this.#sequence) continue;
-          this.pageError = errorLine(failure);
+    return untrack(async () => {
+      if (this.loadingPage) return;
+      this.loadingPage = true;
+      this.pageError = null;
+      try {
+        for (;;) {
+          while (this.phase === "initial" || this.phase === "updating") await this.#reading;
+          if (this.complete || this.sessions.length === 0) return;
+          const sequence = this.#sequence;
+          try {
+            const page = await listSessions({
+              ...this.#filter,
+              offset: this.sessions.length,
+              limit: PAGE_SIZE,
+            });
+            if (sequence !== this.#sequence) continue;
+            this.sessions = joined(this.sessions, page.sessions);
+            this.total = page.total;
+          } catch (failure) {
+            if (sequence !== this.#sequence) continue;
+            this.pageError = errorLine(failure);
+          }
           return;
         }
+      } finally {
+        this.loadingPage = false;
       }
-    } finally {
-      this.loadingPage = false;
-    }
-  }
-
-  /** Try the last failed page again. */
-  retryPage(): Promise<void> {
-    this.pageError = null;
-    return this.more();
+    });
   }
 }
 

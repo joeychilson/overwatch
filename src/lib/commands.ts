@@ -2,13 +2,11 @@
  * Who carries out a command from the app's menu.
  *
  * The root layout hears every command. A page that does something of its own
- * with one takes it while it is on screen — a session's page finds within its
- * conversation — and the layout does what the command means everywhere else.
+ * with one takes it while it is on screen, as a session's page takes Find, and
+ * the layout does what the command means everywhere else.
  */
-import { getContext, setContext } from "svelte";
+import { createContext } from "svelte";
 import type { Command } from "./api/backend.ts";
-
-const key = Symbol("overwatch.commands");
 
 export class Commands {
   #taken = new Map<Command, () => void>();
@@ -29,12 +27,4 @@ export class Commands {
   }
 }
 
-/** Publish the window's commands to every descendant. */
-export function setCommands(commands: Commands): Commands {
-  return setContext(key, commands);
-}
-
-/** The window's commands, as published by the root layout. */
-export function getCommands(): Commands {
-  return getContext<Commands>(key);
-}
+export const [getCommands, setCommands] = createContext<Commands>();

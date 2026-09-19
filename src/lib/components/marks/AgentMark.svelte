@@ -1,5 +1,5 @@
 <script lang="ts">
-  /** The mark for one agent. */
+  /** The mark for one agent, decorative: whatever sits beside it names the agent. */
   import type { Agent } from "#lib/api/backend.ts";
   import { agentDisplay } from "#lib/agents.ts";
   import Mark from "./Mark.svelte";
@@ -7,14 +7,10 @@
   interface Props {
     agent: Agent;
     size?: number;
-    /** Accessible name, when no adjacent text names the agent. */
-    labelled?: boolean;
     class?: string;
   }
 
-  let { agent, size = 20, labelled = false, class: className = "" }: Props = $props();
-
-  const display = $derived(agentDisplay(agent));
+  let { agent, size = 20, class: className = "" }: Props = $props();
 </script>
 
-<Mark name={display.mark} {size} label={labelled ? display.name : undefined} class={className} />
+<Mark name={agentDisplay(agent).mark} {size} class={className} />

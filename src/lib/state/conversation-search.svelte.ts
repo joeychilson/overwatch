@@ -1,15 +1,11 @@
 /**
  * A search of what was said in every conversation.
  *
- * Owned rather than awaited, because its answer accumulates: the engine reads
- * the agents' own files newest first and hands over what it finds a batch at
- * a time, so the sessions found appear while the rest are still being read.
- * The list orders them as it orders its own rows.
- *
- * Asked for from the handlers that change what the list shows, as the list
- * itself is, so it holds the search it last ran and running it again for the
- * same search does nothing. Each method untracks its work, since it reads and
- * writes this state.
+ * Owned rather than awaited because its answer accumulates: the engine hands
+ * over what it finds a batch at a time, so the sessions found appear while the
+ * rest are still being read. Running the search already shown does nothing.
+ * Each method untracks its work, since it reads and writes this state and the
+ * page calls it from an effect.
  */
 import { untrack } from "svelte";
 import {
@@ -21,7 +17,6 @@ import {
 } from "#lib/api/backend.ts";
 import { errorLine } from "#lib/errors.ts";
 
-/** Where a search is. */
 type Phase = "idle" | "searching" | "done" | "error";
 
 export class ConversationSearch {

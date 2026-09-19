@@ -1,27 +1,24 @@
 <script lang="ts">
   /**
    * One limit of a subscription: its window, a bar of what is left, how much
-   * that is, and when that changes.
+   * that is, and when that changes. A window that has ended since it was read
+   * has refilled, so its old figure is not shown as current.
    *
-   * The parts name their grid areas — `name`, `bar`, `value` and `when` — so
-   * where the row puts them is the caller's to say: all on one line, or the bar
-   * under the rest.
-   *
-   * A window that has ended since it was read has refilled, so its old figure
-   * is not shown as current.
+   * The parts name their grid areas, `name`, `bar`, `value` and `when`, so the
+   * caller places them: all on one line, or the bar under the rest.
    */
   import type { Limit } from "#lib/api/backend.ts";
   import { band, ended, left, runsOut, type Band } from "#lib/limits.ts";
+  import { now } from "#lib/state/clock.ts";
   import { formatCountdown, formatDateTime, formatPercent } from "#lib/format.ts";
 
   interface Props {
     limit: Limit;
-    now: Date;
     /** The row's areas, columns and spacing, which suit where it is shown. */
     class: string;
   }
 
-  let { limit, now, class: className }: Props = $props();
+  let { limit, class: className }: Props = $props();
 
   const TONE: Record<Band, string> = {
     blocked: "bg-danger",
@@ -30,7 +27,7 @@
     fine: "bg-muted",
   };
 
-  const at = $derived(now.getTime());
+  const at = $derived(now().getTime());
   const level = $derived(band(limit, at));
   const refilled = $derived(ended(limit, at));
   const remaining = $derived(left(limit, at));

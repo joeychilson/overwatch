@@ -2,22 +2,10 @@
   /**
    * One session.
    *
-   * The read is an `await` inside the boundary below, not a request fired from
-   * an effect. Svelte owns the asynchrony: the read re-runs when the route
-   * parameter changes, the previous session stays on screen while the next one
-   * loads, a result that arrives after a newer one is discarded, and a failure
-   * lands in the boundary with a way to try again.
-   *
-   * The page shows in stages. The header comes from the index at once; the
-   * timeline, the counts taken from it and the conversation each wait for
-   * the conversation to be parsed, which for a long session takes a moment,
-   * and fill in when it is. A session whose file has gone has no timeline, and
-   * its conversation says why.
-   *
-   * The header is read again whenever the index changes, and the timeline when
-   * that finds the session active since. The conversation watches the session
-   * itself and reads its newest turns whenever a scan reads anything new of
-   * it, so a session still going fills in as its agent works.
+   * The header comes from the index at once; the timeline, the counts taken
+   * from it and the conversation wait for the conversation to be parsed, which
+   * for a long session takes a moment. The header is read again whenever the
+   * index changes, and the timeline when that finds the session active since.
    *
    * Finding within the conversation takes the menu's Find commands while the
    * page is open, and keeps its search in the address as `find`.
@@ -27,7 +15,6 @@
   import { page } from "$app/state";
   import { resolve } from "$app/paths";
   import ArrowLeft from "@lucide/svelte/icons/arrow-left";
-  import Check from "@lucide/svelte/icons/check";
   import ClipboardCopy from "@lucide/svelte/icons/clipboard-copy";
   import FileSearch from "@lucide/svelte/icons/file-search";
   import FolderOpen from "@lucide/svelte/icons/folder-open";
@@ -38,11 +25,9 @@
   import {
     getSession,
     getTimeline,
-    getTranscript,
     openSessionFolder,
     revealSession,
     type Session,
-    type Turn,
   } from "#lib/api/backend.ts";
   import AgentMark from "#lib/components/marks/AgentMark.svelte";
   import CopyButton from "#lib/components/ui/CopyButton.svelte";
@@ -54,8 +39,9 @@
   import { agentName, isLive, resumeCommand, roleName, sessionLabel } from "#lib/agents.ts";
   import { errorLine } from "#lib/errors.ts";
   import { activeTime, asMarkdown } from "#lib/transcript.ts";
+  import { now } from "#lib/state/clock.ts";
+  import { allTurns } from "#lib/state/conversation.svelte.ts";
   import { getEngine } from "#lib/state/engine.svelte.ts";
-  import { getClock } from "#lib/state/clock.svelte.ts";
   import {
     UNKNOWN,
     formatCount,
@@ -68,15 +54,24 @@
   } from "#lib/format.ts";
 
   const engine = getEngine();
-  const clock = getClock();
-
   const commands = getCommands();
+
+  const TOOL =
+    "grid aspect-square h-full place-items-center rounded-item text-muted hover:bg-hover hover:text-text";
 
   const sessionId = $derived(page.params.id ?? "");
   /** What is being found in the conversation; null while the find bar is closed. */
   const finding = $derived(page.url.searchParams.get("find"));
 
   let transcript = $state<ReturnType<typeof Transcript>>();
+  /** Why the last action outside the window failed, if it did. */
+  let problem = $state<string | null>(null);
+
+  /** Whether the session was opened from the list, so going back returns to it as it was left. */
+  let fromList = false;
+  afterNavigate(({ from }) => {
+    if (from?.route?.id !== page.route.id) fromList = from?.url?.pathname === "/sessions";
+  });
 
   /** Open the find bar, or return to it, with its search ready to replace. */
   async function find() {
@@ -99,54 +94,18 @@
     ];
     return () => taken.forEach((give) => give());
   });
-  /** Whether the resume command was just copied. */
-  let copied = $state(false);
-  /** Why the last action outside the window failed, if it did. */
-  let problem = $state<string | null>(null);
 
-  /**
-   * Whether the session was opened from the session list, so that going back
-   * returns to the list as it was left: searched, ordered and scrolled.
-   */
-  let fromList = false;
-  afterNavigate(({ from }) => {
-    if (from?.route?.id !== page.route.id) fromList = from?.url?.pathname === "/sessions";
-  });
-
-  /**
-   * The session as the index has it, read again whenever the index changes.
-   *
-   * The revision is a parameter so that the read depends on it: Svelte runs it
-   * again for each change and keeps the header on screen meanwhile.
-   */
-  async function readSession(id: string, revision: number) {
-    void revision;
+  function readSession(id: string, _revision: number) {
     return getSession(id);
   }
 
   /**
-   * Where every turn falls, read once for both the timeline and the counts,
-   * and again when the session has been active since.
-   *
-   * It takes the whole conversation parsed, which for a long session is a
-   * moment's work, so the header shows from the index at once and these fill
-   * in when the read is done. Null when the file cannot be read, which the
-   * conversation below explains.
+   * Where every turn falls, for the timeline and the counts: read once, and
+   * again when the session was active since. Null when the file cannot be
+   * read, which the conversation explains.
    */
-  function readTimeline(id: string, activeAt: number) {
-    void activeAt;
+  function readTimeline(id: string, _activeAt: number) {
     return getTimeline(id).catch(() => null);
-  }
-
-  async function copy(command: string) {
-    problem = null;
-    try {
-      await navigator.clipboard.writeText(command);
-      copied = true;
-      setTimeout(() => (copied = false), 1500);
-    } catch (error) {
-      problem = errorLine(error);
-    }
   }
 
   function act(action: Promise<void>) {
@@ -167,29 +126,13 @@
       .join(" · ");
   }
 
-  /** The most turns the engine hands over at once. */
-  const LARGEST_PAGE = 2_000;
-
-  /**
-   * The whole conversation as Markdown, however much of it is on screen.
-   *
-   * The engine holds the conversation it parsed for this page, so reading it
-   * all again is a slice per page rather than another parse.
-   */
-  async function conversation(session: Session): Promise<string> {
-    const turns: Turn[] = [];
-    let total = Infinity;
-    while (turns.length < total) {
-      const read = await getTranscript(session.id, turns.length, LARGEST_PAGE);
-      total = read.total;
-      if (read.turns.length === 0) break;
-      turns.push(...read.turns);
-    }
+  /** The whole conversation as Markdown, however much of it is on screen. */
+  async function markdown(session: Session) {
     return asMarkdown({
       title: sessionLabel(session),
       about: about(session),
       agent: agentName(session.agent),
-      turns,
+      turns: await allTurns(session.id),
       now: new Date(),
     });
   }
@@ -232,10 +175,7 @@
         {#snippet icon()}<TriangleAlert {...pageIcon} />{/snippet}
       </PageHeader>
     </div>
-    <button
-      class="flex h-9 items-center gap-2 rounded-control bg-active px-3"
-      onclick={() => reset()}
-    >
+    <button class="flex h-9 items-center gap-2 rounded-control bg-active px-3" onclick={reset}>
       <RotateCcw class="shrink-0" size={14} aria-hidden="true" />
       <span>Try again</span>
     </button>
@@ -243,8 +183,7 @@
 
   {@const session = await readSession(sessionId, engine.revision)}
   {@const resume = resumeCommand(session)}
-  <!-- A number, so the timeline is read again only when the session was active
-       since, not on every read of an unchanged session. -->
+  <!-- A number, so that a session read again unchanged does not read its timeline again. -->
   {@const activeAt = session.updatedAt}
   {@const timeline = readTimeline(sessionId, activeAt)}
 
@@ -254,7 +193,7 @@
       <AgentMark agent={session.agent} size={20} />
     {/snippet}
     {#snippet actions()}
-      {#if isLive(session, clock.now.getTime())}
+      {#if isLive(session, now().getTime())}
         <span
           class="flex items-center gap-1.5 text-meta text-(--live)"
           title="Active in the last two minutes; what its agent adds appears here"
@@ -267,34 +206,33 @@
            beside the title without outweighing it. -->
       <div class="flex h-9 items-center gap-0.5 rounded-control border border-border p-0.5">
         {#if resume}
-          <button
-            class="flex h-full items-center gap-1.5 rounded-item px-2.5 hover:bg-hover"
+          <CopyButton
+            text={resume}
+            label="Copy resume command"
             title={resume}
-            aria-label="Copy resume command"
-            onclick={() => copy(resume)}
+            icon={SquareTerminal}
+            size={15}
+            class="h-full gap-1.5 px-2.5 hover:bg-hover"
           >
-            {#if copied}
-              <Check class="shrink-0" size={15} aria-hidden="true" />
-            {:else}
-              <SquareTerminal class="shrink-0 text-muted" size={15} aria-hidden="true" />
-            {/if}
-            <!-- Both words hold the space, so confirming the copy moves nothing. -->
-            <span class="grid">
-              <span class="col-start-1 row-start-1 {copied ? 'invisible' : ''}">Resume</span>
-              <span class="col-start-1 row-start-1 {copied ? '' : 'invisible'}">Copied</span>
-            </span>
-          </button>
+            {#snippet children(copied)}
+              <!-- Both words hold the space, so confirming the copy moves nothing. -->
+              <span class="grid text-text">
+                <span class={["col-start-1 row-start-1", { invisible: copied }]}>Resume</span>
+                <span class={["col-start-1 row-start-1", { invisible: !copied }]}>Copied</span>
+              </span>
+            {/snippet}
+          </CopyButton>
           <span class="mx-0.5 h-4 w-px bg-border" aria-hidden="true"></span>
         {/if}
         <CopyButton
-          text={() => conversation(session)}
+          text={() => markdown(session)}
           label="Copy the conversation as Markdown"
           icon={ClipboardCopy}
           size={15}
           class="aspect-square h-full hover:bg-hover"
         />
         <button
-          class="grid aspect-square h-full place-items-center rounded-item text-muted hover:bg-hover hover:text-text"
+          class={TOOL}
           title="Find in the conversation (⌘F)"
           aria-label="Find in the conversation"
           onclick={find}
@@ -303,7 +241,7 @@
         </button>
         {#if session.cwd}
           <button
-            class="grid aspect-square h-full place-items-center rounded-item text-muted hover:bg-hover hover:text-text"
+            class={TOOL}
             title="Open the project folder"
             aria-label="Open the project folder"
             onclick={() => act(openSessionFolder(session.id))}
@@ -312,7 +250,7 @@
           </button>
         {/if}
         <button
-          class="grid aspect-square h-full place-items-center rounded-item text-muted hover:bg-hover hover:text-text"
+          class={TOOL}
           title="Show the session file"
           aria-label="Show the session file"
           onclick={() => act(revealSession(session.id))}
@@ -352,16 +290,19 @@
 
       {@const marks = await timeline}
       {@const active = marks === null ? null : activeTime(marks)}
-      {@const said = marks?.filter(
-        (mark) => mark.speaker === "user" || mark.speaker === "assistant",
-      )}
       {@render figure(
         "Active",
         active === null
           ? formatElapsed(session.startedAt, session.updatedAt)
           : formatDuration(active / 1000),
       )}
-      {@render figure("Messages", formatCount(said?.length ?? session.messages))}
+      {@render figure(
+        "Messages",
+        formatCount(
+          marks?.filter((mark) => mark.speaker === "user" || mark.speaker === "assistant").length ??
+            session.messages,
+        ),
+      )}
       {@render figure(
         "Tool calls",
         formatCount(marks?.filter((mark) => mark.speaker === "tool").length ?? session.tools),

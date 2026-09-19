@@ -6,7 +6,7 @@
   import Monitor from "@lucide/svelte/icons/monitor";
   import ChevronUp from "@lucide/svelte/icons/chevron-up";
   import Check from "@lucide/svelte/icons/check";
-  import { sidebarIcon, sidebarItem } from "./item";
+  import { sidebarIcon, sidebarItem } from "./item.ts";
 
   const choices = [
     { value: "light", label: "Light" },

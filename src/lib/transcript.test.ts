@@ -5,6 +5,7 @@ import {
   activeTime,
   asMarkdown,
   blocks,
+  findPattern,
   noteTitle,
   stepsSummary,
   toolKind,
@@ -59,6 +60,13 @@ describe("layout", () => {
       true,
     ]);
   });
+});
+
+test("a search is found as written, ignoring case, each mention at an odd position", () => {
+  const pattern = findPattern(" a.b(c) ");
+  expect("x A.B(C) y a.b(c)".split(pattern ?? "")).toEqual(["x ", "A.B(C)", " y ", "a.b(c)", ""]);
+  expect("aXb(c)".split(pattern ?? "")).toEqual(["aXb(c)"]);
+  expect(findPattern("   ")).toBeNull();
 });
 
 describe("tool calls", () => {

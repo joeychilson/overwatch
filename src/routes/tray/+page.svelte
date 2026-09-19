@@ -1,14 +1,13 @@
 <script lang="ts">
   /**
    * The panel the menu bar item drops down: how much of each subscription is
-   * left, the ones in use first, since those are what the menu bar's figure
-   * follows, and what today has used so far, which opens the overview of it.
+   * left, those in use first, since the menu bar's figure follows them, and
+   * what today has used so far.
    *
    * It is drawn on its window's material, which takes the window's appearance,
-   * so the window is given the app's: the light theme's text on a dark material
-   * would be unreadable. The window takes the size of what it holds. It hides
-   * on Escape, and the engine hides it once anything else is clicked, as a menu
-   * does.
+   * so the window is given the app's: the light theme's text on a dark
+   * material would be unreadable. The window takes the size of what it holds,
+   * and hides on Escape; the engine hides it once anything else is clicked.
    */
   import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
   import { mode } from "mode-watcher";
@@ -18,48 +17,38 @@
   import { UNKNOWN, formatCountCompact, formatUsd } from "#lib/format.ts";
   import { PROVIDERS, byUrgency, explain, inUse } from "#lib/limits.ts";
   import { periodStart, startOfDay } from "#lib/periods.ts";
+  import { now } from "#lib/state/clock.ts";
   import { getEngine } from "#lib/state/engine.svelte.ts";
-  import { getClock } from "#lib/state/clock.svelte.ts";
 
   const engine = getEngine();
-  const clock = getClock();
 
-  /** Menu items share one look. */
   const ITEM = "flex h-7 w-full items-center rounded-item px-2 text-left hover:bg-text/10";
 
-  const now = $derived(clock.now.getTime());
-  /**
-   * The accounts in use and the rest, each nearest to stopping work first. With
-   * none in use there is nothing to set apart, so they stand unlabelled.
-   */
+  /** The accounts in use and the rest; with none in use there is nothing to set apart. */
   const groups = $derived.by(() => {
-    const accounts = byUrgency(engine.status.accounts, now);
-    const working = accounts.filter((account) => inUse(account, now));
+    const at = now().getTime();
+    const accounts = byUrgency(engine.status.accounts, at);
+    const working = accounts.filter((account) => inUse(account, at));
     const groups =
       working.length === 0
         ? [{ label: null, accounts }]
         : [
             { label: "In use", accounts: working },
-            { label: "Not in use", accounts: accounts.filter((account) => !inUse(account, now)) },
+            { label: "Not in use", accounts: accounts.filter((account) => !inUse(account, at)) },
           ];
     return groups.filter((group) => group.accounts.length > 0);
   });
 
   /** The day it is, which changes only at midnight however often the clock ticks. */
-  const day = $derived(startOfDay(clock.now.getTime()));
+  const day = $derived(startOfDay(now().getTime()));
 
   /**
-   * What today has used, read again when the index changes and when the day
-   * does. A failed read shows as unknown and is tried again with the next
-   * change, rather than taking the limits down with it.
+   * What today has used, read again when the index or the day changes. A
+   * failure shows as unknown rather than taking the limits down with it.
    */
-  async function readToday(revision: number, day: number) {
-    void revision;
+  function readToday(_revision: number, day: number) {
     return getOverview(periodStart(1, day)).catch(() => null);
   }
-
-  let width = $state(0);
-  let height = $state(0);
 
   /** Do something with the panel's own window; outside Tauri there is none. */
   function withPanel(action: (panel: ReturnType<typeof getCurrentWindow>) => Promise<void>) {
@@ -70,10 +59,15 @@
     }
   }
 
-  $effect(() => {
-    const size = new LogicalSize(width, height);
-    if (width > 0 && height > 0) withPanel((panel) => panel.setSize(size));
-  });
+  /** Size the panel's window to what it holds. */
+  function fit(content: HTMLElement) {
+    const observer = new ResizeObserver(() => {
+      const size = new LogicalSize(content.offsetWidth, content.offsetHeight);
+      if (size.width > 0 && size.height > 0) withPanel((panel) => panel.setSize(size));
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }
 
   $effect(() => {
     const theme = mode.current ?? null;
@@ -89,7 +83,7 @@
   }}
 />
 
-<div class="w-85 select-none" bind:clientWidth={width} bind:clientHeight={height}>
+<div class="w-85 select-none" {@attach fit}>
   <div class="grid gap-4 px-2 pt-3 pb-2">
     {#each groups as group (group.label)}
       <section class="grid gap-3" aria-label={group.label ?? undefined}>
@@ -113,7 +107,6 @@
               {#each account.limits as limit, index (index)}
                 <LimitRow
                   {limit}
-                  now={clock.now}
                   class="grid-cols-[minmax(0,1fr)_auto_auto] [grid-template-areas:'name_when_value'_'bar_bar_bar'] gap-x-2 gap-y-1 px-1 pt-2"
                 />
               {/each}

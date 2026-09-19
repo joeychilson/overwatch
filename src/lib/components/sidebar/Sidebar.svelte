@@ -11,13 +11,12 @@
   import { agentName, parseAgent } from "#lib/agents.ts";
   import { formatCount } from "#lib/format.ts";
   import { attention } from "#lib/limits.ts";
+  import { now } from "#lib/state/clock.ts";
   import { getEngine } from "#lib/state/engine.svelte.ts";
-  import { getClock } from "#lib/state/clock.svelte.ts";
   import ThemeMenu from "./ThemeMenu.svelte";
-  import { sidebarIcon, sidebarItem } from "./item";
+  import { sidebarIcon, sidebarItem } from "./item.ts";
 
   const engine = getEngine();
-  const clock = getClock();
 
   /** How Subscriptions is marked while a limit needs attention. */
   const ALARM = {
@@ -29,7 +28,7 @@
    * A mark rather than a message: it clears itself when the limit recovers, so
    * there is nothing to dismiss, and the page it marks says which and when.
    */
-  const alarm = $derived(attention(engine.status.accounts, clock.now.getTime()));
+  const alarm = $derived(attention(engine.status.accounts, now().getTime()));
 
   const items = [
     { href: "/", label: "Overview", icon: LayoutGrid },
@@ -43,10 +42,8 @@
     "aria-[current=page]:bg-active aria-[current=page]:font-[550] aria-[current=page]:text-text";
 
   /**
-   * The agent the session list is narrowed to, if it is.
-   *
-   * A narrowed list is marked on its agent's link rather than on Sessions, so
-   * exactly one row says where the reader is.
+   * The agent the session list is narrowed to, if it is. Its link is marked
+   * rather than Sessions, so exactly one row says where the reader is.
    */
   const narrowed = $derived(
     page.route.id === "/sessions" ? parseAgent(page.url.searchParams.get("agent")) : null,
@@ -123,7 +120,7 @@
           <span class="tabular-nums">{formatCount(read)} of {formatCount(total)}</span>
         </span>
         <span class="h-1 overflow-hidden rounded-full bg-hover">
-          <span class="block h-full rounded-full bg-active" style="width:{(read / total) * 100}%"
+          <span class="block h-full rounded-full bg-active" style:width="{(read / total) * 100}%"
           ></span>
         </span>
       </div>

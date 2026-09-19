@@ -1,20 +1,11 @@
 /**
  * What the engine is doing, for the whole window.
  *
- * One owner holds this: indexing runs in the background and announces itself,
- * and a per-page subscription would drop those notices while navigating. The
- * root layout creates it, starts it once, and puts it in context.
- *
- * `revision` exists so screens can re-read when the index changes without
- * having to understand what changed. It is a counter, not a database revision:
- * anything derived from it simply re-runs. A view of one session that keeps
- * what it read, such as a conversation read a page at a time, watches that
- * session instead, and hears only of changes to it.
+ * The root layout owns the one instance, so that no notice is missed while
+ * pages change.
  */
-import { getContext, setContext } from "svelte";
+import { createContext } from "svelte";
 import { getStatus, onIndexChanged, onSessionsChanged, type Status } from "#lib/api/backend.ts";
-
-const key = Symbol("overwatch.engine");
 
 /** What the engine reports before it has answered for the first time. */
 const UNKNOWN: Status = {
@@ -31,20 +22,14 @@ export class Engine {
   /** The engine's last reported state. */
   status = $state.raw<Status>(UNKNOWN);
   /**
-   * Bumped whenever the index changes.
-   *
-   * Screens derive their reads from this, so a conversation finished in
-   * another window appears without anyone polling for it.
+   * Bumped whenever a scan reads something new. A read of the index takes it
+   * as an argument, so that it runs again when the index changes.
    */
   revision = $state(0);
 
-  /** What is watching each session for changes, by the session's id. */
   #watching = new Map<string, Set<() => void>>();
 
-  /**
-   * Call `handler` whenever a scan reads anything new of a session, until the
-   * returned function is called.
-   */
+  /** Call `handler` whenever a scan reads anything new of a session, until the returned function is called. */
   watch(session: string, handler: () => void): () => void {
     const handlers = this.#watching.get(session) ?? new Set();
     handlers.add(handler);
@@ -55,66 +40,30 @@ export class Engine {
     };
   }
 
-  /**
-   * Read the engine's current state.
-   *
-   * A failure leaves the last status standing: the engine scans every five
-   * seconds and announces each result, so the next notice brings what this
-   * could not read.
-   */
-  async #read(): Promise<void> {
-    try {
-      const status = await getStatus();
-      // A scan announced while this was asked is newer.
-      if (this.status === UNKNOWN) this.status = status;
-    } catch {
-      // The next announced scan brings the status instead.
-    }
-  }
-
-  /**
-   * Subscribe to index changes and read the first status.
-   *
-   * Returns the teardown; the owner must call it. Outside Tauri the
-   * subscription never establishes and the teardown is a no-op.
-   */
+  /** Follow the engine, answering the teardown. */
   start(): () => void {
-    const unlisten: (() => void)[] = [];
-    let stopped = false;
-    const keep = (subscribed: Promise<() => void>) =>
-      void subscribed.then((stop) => {
-        if (stopped) stop();
-        else unlisten.push(stop);
-      });
-    keep(
+    const stops = [
       onIndexChanged((status) => {
         const grew = status.sessions !== this.status.sessions;
         this.status = status;
-        // A scan that parsed nothing changed nothing, so screens holding
-        // results are not asked to re-read for it.
+        // Limits are announced with the last scan's status; only a scan that
+        // read something makes anything worth reading again.
         if (grew || status.filesRead > 0) this.revision += 1;
       }),
-    );
-    keep(
       onSessionsChanged((ids) => {
         for (const id of ids) for (const handler of this.#watching.get(id) ?? []) handler();
       }),
+    ];
+    // A failure leaves the status to the next announced scan, as does an
+    // answer that arrives after one.
+    getStatus().then(
+      (status) => {
+        if (this.status === UNKNOWN) this.status = status;
+      },
+      () => {},
     );
-    void this.#read();
-    return () => {
-      stopped = true;
-      // Teardown must not depend on the subscriptions unwinding cleanly.
-      for (const stop of unlisten) void Promise.resolve(stop()).catch(() => undefined);
-    };
+    return () => stops.forEach((stop) => stop());
   }
 }
 
-/** Publish the window's engine state to every descendant. */
-export function setEngine(engine: Engine): Engine {
-  return setContext(key, engine);
-}
-
-/** The window's engine state, as published by the root layout. */
-export function getEngine(): Engine {
-  return getContext<Engine>(key);
-}
+export const [getEngine, setEngine] = createContext<Engine>();

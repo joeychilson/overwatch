@@ -58,6 +58,16 @@ export function blocks(turns: readonly Turn[]): Block[] {
   return laid;
 }
 
+/**
+ * What a search looks for, found anywhere in text ignoring case, or null for a
+ * search of nothing. The mention is captured, so splitting text with it puts
+ * each mention at an odd position.
+ */
+export function findPattern(query: string): RegExp | null {
+  const sought = query.trim().replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return sought === "" ? null : new RegExp(`(${sought})`, "giu");
+}
+
 /** The first line of a text with anything on it. */
 export function firstLine(text: string): string {
   return (
