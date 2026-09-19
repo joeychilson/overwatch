@@ -1,6 +1,6 @@
 [package]
 name = "overwatch"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local coding session history, model usage, and cost insights"
 license = "MIT"
 authors = ["Joey Chilson"]
