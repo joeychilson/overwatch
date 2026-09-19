@@ -135,8 +135,13 @@ which keeps an HTTP client and TLS stack out of the binary and the credential
 out of any process listing. The last successful read is kept in the index, so
 limits show at once on launch.
 
-Readings of a limit over the last hour give its recent pace. When a limit would
-run out at that pace before it resets, the Subscriptions page says when and a
+Each limit is read with when its window began, from the window's length or
+period as its provider gives it. A tick on the limit's bar marks how much of
+the window's time is left, so a bar that reaches past it is going more slowly
+than the window and will outlast it; hovering says where the window's average
+pace puts it by the reset. Readings over the last hour give a limit's recent
+pace, which is kept with each reading. When a limit would run out at that pace
+before it resets, the Subscriptions page says when, and a
 notification says so once per window, as one does when a limit is reached and
 when it is available again. While a limit is used up or running out, a dot on
 Subscriptions in the sidebar shows it from every page. A pace needs fifteen

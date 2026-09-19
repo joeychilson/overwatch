@@ -113,6 +113,7 @@
             {#each account.limits as limit, index (index)}
               <LimitRow
                 {limit}
+                readAt={account.readAt}
                 class="grid-cols-[minmax(0,1fr)_auto_auto] [grid-template-areas:'name_when_value'_'bar_bar_bar'] gap-x-3 gap-y-1.5 not-first:pt-3"
               />
             {/each}

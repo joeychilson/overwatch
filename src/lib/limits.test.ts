@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vite-plus/test";
 import type { Account, Limit } from "./api/backend.ts";
-import { arrange, followed, tightest } from "./limits.ts";
+import { arrange, followed, onTrackFor, tightest, timeLeft } from "./limits.ts";
 
 const MINUTE = 60_000;
 const NOW = 1_000 * MINUTE;
@@ -108,5 +108,38 @@ describe("the order the panel and the page show accounts in", () => {
   test("puts an account with no limit read yet last", () => {
     const accounts = [account("unread", null), account("read", null, [limit("5 hours", 10)])];
     expect(runs(accounts)).toEqual([[null, ["read", "unread"]]]);
+  });
+});
+
+describe("the window's pace", () => {
+  const HOUR = 60 * MINUTE;
+  const DAY = 24 * HOUR;
+  /** A week's limit `used` percent through, `gone` days into its week. */
+  const weekly = (used: number, gone: number) =>
+    limit("Weekly", used, { startsAt: NOW - gone * DAY, resetsAt: NOW + (7 - gone) * DAY });
+
+  test("sets how much of the window is left beside how much of the limit is", () => {
+    // Four days into a week, three are left: 3/7 of it.
+    expect(timeLeft(weekly(46, 4), NOW)).toBeCloseTo(300 / 7);
+    // 46% in four days is 80.5% in seven.
+    expect(onTrackFor(weekly(46, 4), NOW)).toBeCloseTo(80.5);
+    // Going faster than the week runs out first.
+    expect(onTrackFor(weekly(70, 3.5), NOW)).toBeCloseTo(140);
+  });
+
+  test("waits for enough of the window before saying where it is heading", () => {
+    // Two hours into a week is under a twentieth of it.
+    const begun = weekly(3, 2 / 24);
+    expect(timeLeft(begun, NOW)).toBeCloseTo(100 - 100 / 84);
+    expect(onTrackFor(begun, NOW)).toBeNull();
+  });
+
+  test("says nothing without a start, or once the window has ended", () => {
+    expect(timeLeft(limit("Weekly", 40), NOW)).toBeNull();
+    expect(onTrackFor(limit("Weekly", 40), NOW)).toBeNull();
+    const ended = limit("5 hours", 40, { startsAt: NOW - 6 * HOUR, resetsAt: NOW - HOUR });
+    expect(timeLeft(ended, NOW)).toBeNull();
+    const empty = limit("5 hours", 40, { startsAt: NOW + HOUR, resetsAt: NOW + HOUR });
+    expect(timeLeft(empty, NOW)).toBeNull();
   });
 });

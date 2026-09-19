@@ -62,6 +62,40 @@ export function left(limit: Limit, now: number): number {
   return ended(limit, now) ? 100 : Math.max(0, 100 - limit.usedPercent);
 }
 
+/**
+ * How much of a window must have passed before its average pace says where it
+ * is heading: early on, a few minutes' use would read as a flood.
+ */
+const SETTLED = 0.05;
+
+/** How much of a limit's window has passed, from 0 to 1, while it is running. */
+function elapsed(limit: Limit, now: number): number | null {
+  if (limit.startsAt === null || limit.resetsAt === null || ended(limit, now)) return null;
+  const length = limit.resetsAt - limit.startsAt;
+  if (length <= 0) return null;
+  return Math.min(1, Math.max(0, (now - limit.startsAt) / length));
+}
+
+/**
+ * How much of a limit's window is still to come, from 0 to 100, set beside
+ * how much of the limit is left; null when the provider does not say when the
+ * window began, or once it has ended.
+ */
+export function timeLeft(limit: Limit, now: number): number | null {
+  const passed = elapsed(limit, now);
+  return passed === null ? null : (1 - passed) * 100;
+}
+
+/**
+ * How much of a limit will have been used by its reset if the rest of the
+ * window goes as it has so far, from 0; above 100 means it runs out first.
+ * Null until enough of the window has passed to say.
+ */
+export function onTrackFor(limit: Limit, now: number): number | null {
+  const passed = elapsed(limit, now);
+  return passed === null || passed < SETTLED ? null : limit.usedPercent / passed;
+}
+
 /** When a limit runs out at the recent rate of use, while that is still ahead. */
 export function runsOut(limit: Limit, now: number): number | null {
   return limit.runsOutAt !== null && limit.runsOutAt > now && !ended(limit, now)

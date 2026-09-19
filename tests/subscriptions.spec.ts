@@ -154,3 +154,24 @@ test("no subscriptions explains where limits come from", async ({ page }) => {
   await expect(page.getByText("No subscriptions found")).toBeVisible();
   await expect(page.getByText(/^Overwatch reads/)).toBeVisible();
 });
+
+test("a limit marks how much of its window is left, and says where it is heading", async ({
+  page,
+}) => {
+  await page.goto("/subscriptions");
+  const DAY = 24 * 60 * 60_000;
+  // 40% used four days into a week: 70% by its end, at that rate.
+  const week = {
+    ...limit(40),
+    startsAt: Date.now() - 4 * DAY,
+    resetsAt: Date.now() + 3 * DAY,
+  };
+  const read = account({ limits: [week], readAt: Date.now() });
+  await settle(page, "get_status", status({ accounts: [read] }));
+
+  const codex = page.getByRole("region", { name: "Codex joey@example.com" });
+  await expect(codex.getByText("60% left")).toBeVisible();
+  const said = "40% used with 57% of the window gone: at that rate, about 70% by the reset.";
+  await expect(codex.getByText(/^Resets in /)).toHaveAttribute("title", new RegExp(`${said}$`));
+  await expect(codex.getByRole("listitem")).toContainText(said);
+});
