@@ -69,6 +69,17 @@ pub fn get_timeline(index: State<'_, Arc<Index>>, id: String) -> Result<Vec<Mark
     index.timeline(&id)
 }
 
+/// The turns of a session's conversation that contain a query, ignoring case,
+/// in order.
+#[tauri::command(async)]
+pub fn find_in_transcript(
+    index: State<'_, Arc<Index>>,
+    id: String,
+    query: String,
+) -> Result<Vec<i64>> {
+    index.find(&id, &query)
+}
+
 /// Release the held conversation when the reader leaves it.
 #[tauri::command(async)]
 pub fn close_transcript(index: State<'_, Arc<Index>>) {
@@ -198,6 +209,7 @@ pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         get_session,
         get_transcript,
         get_timeline,
+        find_in_transcript,
         close_transcript,
         reveal_session,
         open_session_folder,

@@ -498,3 +498,15 @@ test("the menu's Back and Forward move through the window's history", async ({ p
   await emitTo(page, "main", "command", "forward");
   await expect(page).toHaveTitle("Models · Overwatch");
 });
+
+test("the menu's Find searches the sessions from a page that has nothing to find in", async ({
+  page,
+}) => {
+  await installIpc(page);
+  await page.goto("/models");
+  await expect(page).toHaveTitle("Models · Overwatch");
+
+  await emitTo(page, "main", "command", "find");
+  await expect(page).toHaveTitle("Sessions · Overwatch");
+  await expect(page.getByLabel("Search sessions")).toBeFocused();
+});

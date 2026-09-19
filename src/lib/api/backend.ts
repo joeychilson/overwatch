@@ -2,7 +2,7 @@
  * The engine's command surface.
  *
  * Every type here is written by hand and mirrors a Rust type in
- * `src-tauri/src/session.rs` one to one. There are fifteen commands and about
+ * `src-tauri/src/session.rs` one to one. There are sixteen commands and about
  * two dozen shapes, which is small enough to keep honest by reading.
  *
  * Counts and money are plain numbers. The largest total any agent records is a
@@ -364,6 +364,15 @@ export function getTimeline(id: string): Promise<Mark[]> {
   return call<Mark[]>("get_timeline", { id });
 }
 
+/**
+ * The turns of a session's conversation that contain a query, ignoring case,
+ * in order: in what was said, thought or added by the harness, or in a tool
+ * call's name, arguments or result.
+ */
+export function findInTranscript(id: string, query: string): Promise<number[]> {
+  return call<number[]>("find_in_transcript", { id, query });
+}
+
 /** Release the held conversation when the reader leaves it. */
 export function closeTranscript(): Promise<void> {
   return call<void>("close_transcript");
@@ -443,7 +452,7 @@ async function listenHere<T>(event: string, handler: (payload: T) => void): Prom
 }
 
 /** A command the app's menu asks the window to carry out. */
-export type Command = "back" | "forward";
+export type Command = "back" | "forward" | "find" | "find_next" | "find_previous";
 
 /**
  * Subscribe to the app's menu asking the window to carry out a command, such as

@@ -8,22 +8,34 @@
    * accumulates rather than replaces, so it belongs to a conversation made from
    * that page. Changing session reads another first page, which makes another
    * conversation, and the turns drawn from it start afresh.
+   *
+   * The find bar belongs to the conversation it steps through, so it opens
+   * with the turns it can bring into view, and a search the page opened with,
+   * as from a link, goes to what it found as soon as there is somewhere to go.
    */
   import { onMount } from "svelte";
   import { closeTranscript, getTranscript } from "#lib/api/backend.ts";
   import { errorLine } from "#lib/errors.ts";
   import { Conversation, PAGE_SIZE } from "#lib/state/conversation.svelte.ts";
+  import FindBar from "./FindBar.svelte";
   import Turns from "./Turns.svelte";
 
   interface Props {
     sessionId: string;
     /** Who the model's turns are attributed to, such as `Codex`. */
     agent: string;
+    /** What is being found in the conversation; null while the find bar is closed. */
+    finding: string | null;
+    /** Keep a new search. */
+    onquery: (query: string) => void;
+    /** Close the find bar. */
+    onclose: () => void;
   }
 
-  let { sessionId, agent }: Props = $props();
+  let { sessionId, agent, finding, onquery, onclose }: Props = $props();
 
   let turns = $state<ReturnType<typeof Turns>>();
+  let bar = $state<ReturnType<typeof FindBar>>();
 
   /**
    * Bring a turn into view, reading as far as it first. Before the first page
@@ -31,6 +43,16 @@
    */
   export function reveal(index: number) {
     void turns?.reveal(index);
+  }
+
+  /** Put the cursor in the find bar, once it is open. */
+  export function find(): Promise<void> {
+    return bar?.focus() ?? Promise.resolve();
+  }
+
+  /** Move to the next turn found, or the one before. */
+  export function step(direction: 1 | -1) {
+    bar?.step(direction);
   }
 
   // The engine holds the parsed conversation so paging is free; tell it when
@@ -58,6 +80,16 @@
   {@const first = await getTranscript(sessionId, 0, PAGE_SIZE)}
   {@const conversation = new Conversation(sessionId, first)}
   {#key conversation}
-    <Turns bind:this={turns} {conversation} {agent} />
+    {#if finding !== null}
+      <FindBar
+        bind:this={bar}
+        session={sessionId}
+        query={finding}
+        {onquery}
+        onreveal={(index) => void turns?.reveal(index, true)}
+        {onclose}
+      />
+    {/if}
+    <Turns bind:this={turns} {conversation} {agent} highlight={finding} />
   {/key}
 </svelte:boundary>

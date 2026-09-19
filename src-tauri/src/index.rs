@@ -290,6 +290,12 @@ impl Index {
         self.held(id, Transcript::marks)
     }
 
+    /// The turns of a session's conversation that contain `query`, ignoring
+    /// case, as [`Transcript::find`] finds them.
+    pub fn find(&self, id: &str, query: &str) -> Result<Vec<i64>> {
+        self.held(id, |transcript| transcript.find(query))
+    }
+
     /// Read from a session's whole conversation, parsing it unless it is the
     /// one already held.
     ///

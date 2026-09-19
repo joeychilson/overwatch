@@ -760,6 +760,15 @@ export function answer(command: string, args: Record<string, unknown>): unknown 
       return id === FEATURED.id ? marks(TURNS) : [];
     case "get_transcript":
       return transcript(id, number(args.offset) ?? 0, number(args.limit) ?? 150);
+    case "find_in_transcript": {
+      const sought = typeof args.query === "string" ? args.query.trim().toLowerCase() : "";
+      if (sought === "" || id !== FEATURED.id) return [];
+      return TURNS.filter((turn) =>
+        [turn.text, turn.tool?.name, turn.tool?.input, turn.tool?.output].some((text) =>
+          text?.toLowerCase().includes(sought),
+        ),
+      ).map((turn) => turn.index);
+    }
     case "save_card":
       // Nothing is written here, so the answer is where the engine would have
       // put it: the Desktop, under the name the window asked for.

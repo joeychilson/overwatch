@@ -19,11 +19,13 @@
     turns: readonly Turn[];
     open: boolean;
     ontoggle: () => void;
-    /** The turn the timeline last brought into view, if any. */
+    /** The turn the timeline or a search last brought into view, if any. */
     revealed: number | null;
+    /** The turn opened to show what a search found in it, if any. */
+    unfolded: number | null;
   }
 
-  let { turns, open, ontoggle, revealed }: Props = $props();
+  let { turns, open, ontoggle, revealed, unfolded }: Props = $props();
 
   const notes = $derived(turns[0]?.speaker === "system");
   const Item = $derived(notes ? Note : Step);
@@ -39,7 +41,11 @@
 </script>
 
 {#if turns.length === 1 && turns[0]}
-  <Item turn={turns[0]} revealed={revealed === turns[0].index} />
+  <Item
+    turn={turns[0]}
+    revealed={revealed === turns[0].index}
+    expanded={unfolded === turns[0].index}
+  />
 {:else}
   <div class="min-w-0">
     <button
@@ -64,7 +70,7 @@
     {#if open}
       <div class="mt-0.5 ml-[15px] grid min-w-0 border-l border-border pl-2">
         {#each turns as turn (turn.index)}
-          <Item {turn} revealed={revealed === turn.index} />
+          <Item {turn} revealed={revealed === turn.index} expanded={unfolded === turn.index} />
         {/each}
       </div>
     {/if}

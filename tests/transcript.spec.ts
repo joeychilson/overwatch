@@ -441,3 +441,98 @@ test("a reader at the bottom stays there as what the agent adds arrives", async 
   await expect(page.getByText("Something new")).toBeInViewport();
   await expect(page.getByRole("button", { name: "Newer turns" })).toHaveCount(0);
 });
+
+test("finding steps through the turns found, reading as far as each", async ({ page }) => {
+  const all = Array.from({ length: 300 }, (_, index) =>
+    turn(index, index % 2 === 0 ? "user" : "assistant", `Turn number ${index}`),
+  );
+  await openSession(page, all.slice(0, 150), { total: 300, timeline: all });
+
+  await emit(page, "command", "find");
+  const box = page.getByRole("searchbox", { name: "Find in conversation" });
+  await expect(box).toBeFocused();
+  await box.fill("needle");
+  await settle(page, "find_in_transcript", [3, 250]);
+  expect(await lastArgs(page, "find_in_transcript")).toEqual({
+    id: "codex:ses_a",
+    query: "needle",
+  });
+  await expect(page).toHaveURL(/\?find=needle$/);
+  await expect(page.getByRole("status")).toHaveText("1 of 2");
+  await expect(page.locator("#turn-3")).toBeInViewport();
+
+  // The next one is past what has been read, so it is read as far as first.
+  await box.press("Enter");
+  await expect
+    .poll(() => page.evaluate(() => window.__ipc.pendingCount("get_transcript")))
+    .toBeGreaterThan(0);
+  await settle(page, "get_transcript", transcript(all.slice(150), { total: 300 }));
+  await expect(page.locator("#turn-250")).toBeInViewport();
+  await expect(page.getByRole("status")).toHaveText("2 of 2");
+
+  await box.press("Shift+Enter");
+  await expect(page.getByRole("status")).toHaveText("1 of 2");
+  // The menu's Find Next goes round from the last to the first.
+  await emit(page, "command", "find_previous");
+  await expect(page.getByRole("status")).toHaveText("2 of 2");
+
+  await box.press("Escape");
+  await expect(box).toBeHidden();
+  await expect(page).toHaveURL(/\/sessions\/codex:ses_a$/);
+});
+
+test("a tool call found by a search opens to show what was found", async ({ page }) => {
+  await recordClipboard(page);
+  await page.goto("/sessions/codex:ses_a?find=panicked");
+  await settle(page, "get_status", status());
+  await settle(page, "get_session", session("codex:ses_a", "Fix the parser"));
+  const turns = [
+    turn(0, "user", "Run the tests"),
+    turn(1, "reasoning", "Running them."),
+    turn(2, "tool", "", { name: "Bash", input: "cargo test", output: "thread panicked" }),
+    turn(3, "assistant", "One failed."),
+  ];
+  await settle(page, "get_timeline", marks(turns));
+  await settle(page, "get_transcript", transcript(turns));
+  await settle(page, "find_in_transcript", [2]);
+
+  await expect(page.getByRole("searchbox", { name: "Find in conversation" })).toHaveValue(
+    "panicked",
+  );
+  await expect(page.getByRole("status")).toHaveText("1 of 1");
+  await expect(page.getByText("thread panicked")).toBeVisible();
+});
+
+test("a search that finds nothing says so", async ({ page }) => {
+  await page.goto("/sessions/codex:ses_a?find=absent");
+  await settle(page, "get_status", status());
+  await settle(page, "get_session", session("codex:ses_a", "Fix the parser"));
+  await settle(page, "get_timeline", marks([turn(0, "user", "Fix the parser")]));
+  await settle(page, "get_transcript", transcript([turn(0, "user", "Fix the parser")]));
+  await settle(page, "find_in_transcript", []);
+
+  await expect(page.getByRole("status")).toHaveText("No matches");
+  await expect(page.getByRole("button", { name: "Next match" })).toBeDisabled();
+});
+
+test("a search runs again as the session changes, staying on the turn it was on", async ({
+  page,
+}) => {
+  const turns = [
+    turn(0, "user", "Find the needle"),
+    turn(1, "assistant", "Looking."),
+    turn(2, "user", "Keep going"),
+  ];
+  await page.goto("/sessions/codex:ses_a?find=needle");
+  await settle(page, "get_status", status());
+  await settle(page, "get_session", session("codex:ses_a", "Fix the parser"));
+  await settle(page, "get_timeline", marks(turns));
+  await settle(page, "get_transcript", transcript(turns));
+  await settle(page, "find_in_transcript", [0]);
+  await expect(page.getByRole("status")).toHaveText("1 of 1");
+
+  await emit(page, "sessions_changed", ["codex:ses_a"]);
+  await settle(page, "find_in_transcript", [0, 3]);
+  await expect(page.getByRole("status")).toHaveText("1 of 2");
+  await expect(page.locator("#turn-0")).toBeInViewport();
+});

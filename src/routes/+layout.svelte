@@ -6,6 +6,7 @@
   import { onCommand, onOpen } from "#lib/api/backend.ts";
   import { Engine, setEngine } from "#lib/state/engine.svelte.ts";
   import { Clock, setClock } from "#lib/state/clock.svelte.ts";
+  import { Commands, setCommands } from "#lib/commands.ts";
   import { ModeWatcher } from "mode-watcher";
   import "../app.css";
 
@@ -19,6 +20,14 @@
   // those notices while navigating.
   const engine = setEngine(new Engine());
   const clock = setClock(new Clock());
+  const commands = setCommands(new Commands());
+
+  /** Show a destination, focusing an element there when it names one, as `/sessions#search` does. */
+  async function show(path: string) {
+    const [route = "/", focus] = path.split("#");
+    if (route !== page.url.pathname) await goto(route);
+    if (focus) document.getElementById(focus)?.focus();
+  }
 
   onMount(() => {
     const stopEngine = engine.start();
@@ -26,16 +35,15 @@
     // The app's menu and the menu bar panel open the window at a destination,
     // and may name an element there to focus, as `/sessions#search` does. A
     // destination already on screen keeps what it is narrowed to.
-    const opening = onOpen(async (path) => {
-      const [route = "/", focus] = path.split("#");
-      if (route !== page.url.pathname) await goto(route);
-      if (focus) document.getElementById(focus)?.focus();
-    });
-    // The menu's Back and Forward move through the window's own history, as
-    // the buttons of a browser would.
+    const opening = onOpen((path) => void show(path));
+    // A page that has taken a command carries it out. Otherwise Back and
+    // Forward move through the window's own history, as a browser's buttons
+    // would, and Find searches the sessions, the one thing every page can.
     const commanding = onCommand((command) => {
+      if (commands.run(command)) return;
       if (command === "back") history.back();
-      else history.forward();
+      else if (command === "forward") history.forward();
+      else if (command === "find") void show("/sessions#search");
     });
     return () => {
       stopEngine();

@@ -1,9 +1,10 @@
 //! The app's own menu, and what choosing an item in it does.
 //!
-//! Every destination has a shortcut, ⌘F searches sessions from anywhere, and
-//! ⌘[ and ⌘] go back and forward through the window's history. Opening at
-//! login belongs to the app rather than to any page, so it sits in the app's
-//! own submenu.
+//! Every destination has a shortcut, ⌘[ and ⌘] go back and forward through
+//! the window's history, and ⌘F finds: within the conversation a session's
+//! page shows, or among the sessions from anywhere else, which ⇧⌘F also does
+//! from everywhere. Opening at login belongs to the app rather than to any
+//! page, so it sits in the app's own submenu.
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -68,6 +69,17 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                     &PredefinedMenuItem::copy(app, None)?,
                     &PredefinedMenuItem::paste(app, None)?,
                     &PredefinedMenuItem::select_all(app, None)?,
+                    &separator()?,
+                    &Submenu::with_items(
+                        app,
+                        "Find",
+                        true,
+                        &[
+                            &command("find", "Find…", "CmdOrCtrl+F")?,
+                            &command("find_next", "Find Next", "CmdOrCtrl+G")?,
+                            &command("find_previous", "Find Previous", "CmdOrCtrl+Shift+G")?,
+                        ],
+                    )?,
                 ],
             )?,
             &Submenu::with_items(
@@ -83,7 +95,7 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                     &go("/models", "Models", "CmdOrCtrl+3")?,
                     &go("/subscriptions", "Subscriptions", "CmdOrCtrl+4")?,
                     &separator()?,
-                    &go("/sessions#search", "Search Sessions", "CmdOrCtrl+F")?,
+                    &go("/sessions#search", "Search Sessions", "CmdOrCtrl+Shift+F")?,
                 ],
             )?,
             &Submenu::with_items(

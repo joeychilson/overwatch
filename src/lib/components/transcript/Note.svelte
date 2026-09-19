@@ -13,13 +13,16 @@
 
   interface Props {
     turn: Turn;
-    /** Whether the timeline last brought it into view. */
+    /** Whether the timeline or a search last brought it into view. */
     revealed: boolean;
+    /** Whether it opens by itself, as it does to show what a search found in it. */
+    expanded?: boolean;
   }
 
-  let { turn, revealed }: Props = $props();
+  let { turn, revealed, expanded = false }: Props = $props();
 
-  let open = $state(false);
+  // Opened or closed by hand from then on, until a search opens it again.
+  let open = $derived(expanded);
 
   const title = $derived(noteTitle(turn.text));
   const text = $derived(turn.text.trim());

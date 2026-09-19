@@ -272,6 +272,29 @@ impl Transcript {
         }
     }
 
+    /// The turns that contain `query`, ignoring case, in order: in what was
+    /// said or thought or what the harness added, or in a tool call's name,
+    /// arguments or result. A query of nothing but space finds nothing.
+    pub fn find(&self, query: &str) -> Vec<i64> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let holds = |text: &str| text.to_lowercase().contains(&needle);
+        self.turns
+            .iter()
+            .filter(|turn| {
+                holds(&turn.text)
+                    || turn.tool.as_ref().is_some_and(|tool| {
+                        holds(&tool.name)
+                            || holds(&tool.input)
+                            || tool.output.as_deref().is_some_and(holds)
+                    })
+            })
+            .map(|turn| turn.index)
+            .collect()
+    }
+
     /// Where each turn falls, for the session's timeline.
     pub fn marks(&self) -> Vec<Mark> {
         self.turns
@@ -791,5 +814,51 @@ mod tests {
         // And an absurd request is clamped rather than overflowing.
         assert_eq!(whole.window(i64::MAX, i64::MAX).turns.len(), 0);
         assert_eq!(whole.window(0, i64::MAX).turns.len(), 10);
+    }
+
+    #[test]
+    fn finding_looks_through_everything_a_turn_holds_ignoring_case() {
+        let said = |index: i64, speaker: Speaker, text: &str| Turn {
+            index,
+            speaker,
+            at: None,
+            model: Some("gpt-parser".into()),
+            text: text.into(),
+            tool: None,
+        };
+        let call = |index: i64, name: &str, input: &str, output: Option<&str>| Turn {
+            tool: Some(ToolCall {
+                name: name.into(),
+                input: input.into(),
+                output: output.map(Into::into),
+                failed: false,
+            }),
+            ..said(index, Speaker::Tool, "")
+        };
+        let whole = Transcript::new(
+            "codex:a".into(),
+            vec![
+                said(0, Speaker::User, "Fix the PARSER in the École module"),
+                said(1, Speaker::Reasoning, "The parser drops the last token."),
+                call(2, "Read", r#"{"path":"src/parser.rs"}"#, Some("fn parse()")),
+                call(3, "Bash", "cargo test", Some("thread 'parser' panicked")),
+                call(4, "ParserCheck", "{}", None),
+                said(5, Speaker::System, "<environment_context>"),
+                said(6, Speaker::Assistant, "Done."),
+            ],
+        );
+
+        assert_eq!(whole.find("parser"), [0, 1, 2, 3, 4]);
+        assert_eq!(
+            whole.find("  PANICKED "),
+            [3],
+            "surrounding space is ignored"
+        );
+        assert_eq!(whole.find("école"), [0], "case is ignored beyond ASCII");
+        assert_eq!(whole.find("environment"), [5]);
+        // The model is who spoke, not what was said.
+        assert!(whole.find("gpt").is_empty());
+        assert!(whole.find("   ").is_empty());
+        assert!(whole.find("nowhere").is_empty());
     }
 }

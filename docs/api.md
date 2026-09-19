@@ -1,6 +1,6 @@
 # API
 
-The engine is reached through fifteen Tauri commands. Rust owns discovery,
+The engine is reached through sixteen Tauri commands. Rust owns discovery,
 parsing, every query, and the requests for subscription limits; the frontend
 selects and presents. No runtime server route exists.
 
@@ -34,6 +34,7 @@ one and are written by hand.
 | `get_session`         | `id`                      | `Session`        |
 | `get_transcript`      | `id`, `offset?`, `limit?` | `Transcript`     |
 | `get_timeline`        | `id`                      | `Mark[]`         |
+| `find_in_transcript`  | `id`, `query`             | `number[]`       |
 | `close_transcript`    | —                         | —                |
 | `reveal_session`      | `id`                      | —                |
 | `open_session_folder` | `id`                      | —                |
@@ -69,8 +70,10 @@ of, each once, so a window showing a session still going reads that one again
 and no other. It emits `open`, carrying a path such as
 `/subscriptions`, to the app's window when its menu or `open_window` asks it to
 show a destination; a path such as `/sessions#search` also names an element to
-focus there. It emits `command`, carrying `back` or `forward`, to the app's
-window when the menu's Back or Forward is chosen. Both are sent to that window
+focus there. It emits `command`, carrying `back`, `forward`, `find`,
+`find_next` or `find_previous`, to the app's window when that menu item is
+chosen; a page that can find within itself does, and elsewhere Find searches
+the sessions. Both are sent to that window
 alone, so the window listens for them on itself: a listener for any window
 hears every event, and the menu bar panel runs the same layout.
 
@@ -128,6 +131,11 @@ What a harness sends as the person's but wrote itself — Codex's
 `<environment_context>` and `AGENTS.md` preamble, Claude Code's reminders,
 task notices and command output, Grok's `<user_info>` — is a `system` turn,
 and a slash command is a `user` turn reading `/name args`.
+
+`find_in_transcript` answers the index of every turn of the held conversation
+that contains `query`, ignoring case, in order: in what was said or thought or
+what the harness added, or in a tool call's name, arguments or result. A query
+of nothing but space finds nothing.
 
 `get_timeline` returns a `Mark` for every turn of the session, however long:
 its `index`, `at`, `speaker`, whether it `failed`, and a `label` holding the

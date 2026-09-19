@@ -18,8 +18,12 @@
    * that finds the session active since. The conversation watches the session
    * itself and reads its newest turns whenever a scan reads anything new of
    * it, so a session still going fills in as its agent works.
+   *
+   * Finding within the conversation takes the menu's Find commands while the
+   * page is open, and keeps its search in the address as `find`.
    */
-  import { afterNavigate } from "$app/navigation";
+  import { onMount, tick } from "svelte";
+  import { afterNavigate, goto } from "$app/navigation";
   import { page } from "$app/state";
   import { resolve } from "$app/paths";
   import ArrowLeft from "@lucide/svelte/icons/arrow-left";
@@ -28,6 +32,7 @@
   import FileSearch from "@lucide/svelte/icons/file-search";
   import FolderOpen from "@lucide/svelte/icons/folder-open";
   import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
+  import Search from "@lucide/svelte/icons/search";
   import SquareTerminal from "@lucide/svelte/icons/square-terminal";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
   import {
@@ -44,6 +49,8 @@
   import PageHeader, { pageIcon } from "#lib/components/ui/PageHeader.svelte";
   import Timeline from "#lib/components/charts/Timeline.svelte";
   import Transcript from "#lib/components/transcript/Transcript.svelte";
+  import { REPLACE, withParams } from "#lib/address.ts";
+  import { getCommands } from "#lib/commands.ts";
   import { agentName, isLive, resumeCommand, roleName, sessionLabel } from "#lib/agents.ts";
   import { errorLine } from "#lib/errors.ts";
   import { activeTime, asMarkdown } from "#lib/transcript.ts";
@@ -63,9 +70,35 @@
   const engine = getEngine();
   const clock = getClock();
 
+  const commands = getCommands();
+
   const sessionId = $derived(page.params.id ?? "");
+  /** What is being found in the conversation; null while the find bar is closed. */
+  const finding = $derived(page.url.searchParams.get("find"));
 
   let transcript = $state<ReturnType<typeof Transcript>>();
+
+  /** Open the find bar, or return to it, with its search ready to replace. */
+  async function find() {
+    if (finding === null) await goto(withParams(page.url, { find: "" }), REPLACE);
+    await tick();
+    await transcript?.find();
+  }
+
+  /** Step through what was found, opening the find bar first if it is closed. */
+  function step(direction: 1 | -1) {
+    if (finding === null) void find();
+    else transcript?.step(direction);
+  }
+
+  onMount(() => {
+    const taken = [
+      commands.take("find", () => void find()),
+      commands.take("find_next", () => step(1)),
+      commands.take("find_previous", () => step(-1)),
+    ];
+    return () => taken.forEach((give) => give());
+  });
   /** Whether the resume command was just copied. */
   let copied = $state(false);
   /** Why the last action outside the window failed, if it did. */
@@ -260,6 +293,14 @@
           size={15}
           class="aspect-square h-full hover:bg-hover"
         />
+        <button
+          class="grid aspect-square h-full place-items-center rounded-item text-muted hover:bg-hover hover:text-text"
+          title="Find in the conversation (⌘F)"
+          aria-label="Find in the conversation"
+          onclick={find}
+        >
+          <Search size={15} aria-hidden="true" />
+        </button>
         {#if session.cwd}
           <button
             class="grid aspect-square h-full place-items-center rounded-item text-muted hover:bg-hover hover:text-text"
@@ -354,6 +395,13 @@
   </svelte:boundary>
 
   <section class="mt-8" aria-label="Conversation">
-    <Transcript bind:this={transcript} {sessionId} agent={agentName(session.agent)} />
+    <Transcript
+      bind:this={transcript}
+      {sessionId}
+      agent={agentName(session.agent)}
+      {finding}
+      onquery={(query) => void goto(withParams(page.url, { find: query }), REPLACE)}
+      onclose={() => void goto(withParams(page.url, { find: null }), REPLACE)}
+    />
   </section>
 </svelte:boundary>
