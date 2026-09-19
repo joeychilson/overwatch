@@ -5,6 +5,11 @@
 //! page shows, or among the sessions from anywhere else, which ⇧⌘F also does
 //! from everywhere. Opening at login belongs to the app rather than to any
 //! page, so it sits in the app's own submenu.
+//!
+//! The app is in the Dock, with its menus in the menu bar, only while its
+//! window is open. Closed, it goes on watching limits from the menu bar item
+//! alone, as a menu bar app does, and the item's panel opens the window again
+//! or quits.
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -14,7 +19,7 @@ use tauri_plugin_autostart::ManagerExt;
 pub const HIDDEN: &str = "--hidden";
 
 /// The label of the app's one window.
-const MAIN: &str = "main";
+pub const MAIN: &str = "main";
 /// The start of an item's id that opens the window at the path after it.
 const GO: &str = "go:";
 /// The start of an item's id that asks the window to carry out the command
@@ -137,8 +142,10 @@ pub fn handle<R: Runtime>(app: &AppHandle<R>, id: &str) {
     }
 }
 
-/// Bring the window forward, at a destination when one is given.
+/// Bring the window forward, at a destination when one is given, with the app
+/// in the Dock.
 pub fn show<R: Runtime>(app: &AppHandle<R>, path: Option<&str>) {
+    dock(app, true);
     if let Some(window) = app.get_webview_window(MAIN) {
         let _ = window.unminimize();
         let _ = window.show();
@@ -146,6 +153,33 @@ pub fn show<R: Runtime>(app: &AppHandle<R>, path: Option<&str>) {
     }
     if let Some(path) = path {
         let _ = app.emit_to(MAIN, crate::bridge::OPEN, path);
+    }
+}
+
+/// Put the window away, and the app with it out of the Dock and the menu bar,
+/// leaving the menu bar item.
+pub fn hide<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window(MAIN) {
+        let _ = window.hide();
+    }
+    dock(app, false);
+}
+
+/// Put the app in the Dock, with its menus in the menu bar, or take it out.
+///
+/// An accessory app is left out of the Dock and the app switcher, but keeps its
+/// menu bar item and can still bring a window of its own forward.
+fn dock<R: Runtime>(app: &AppHandle<R>, shown: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let policy = if shown {
+            tauri::ActivationPolicy::Regular
+        } else {
+            tauri::ActivationPolicy::Accessory
+        };
+        if let Err(error) = app.set_activation_policy(policy) {
+            eprintln!("overwatch: could not change whether the app is in the Dock: {error}");
+        }
     }
 }
 

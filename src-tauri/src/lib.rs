@@ -49,11 +49,11 @@ const REFRESH: Duration = Duration::from_secs(5);
 /// run on background threads and announce themselves when they finish, so none
 /// stands between the user and the interface.
 ///
-/// Closing the window hides it rather than quitting, so limits go on being
-/// watched and their notifications still arrive; the Dock icon or the menu bar
-/// item's panel shows it again. Opened at login, the app waits in the menu bar
-/// with its window closed. The window comes back at the size and place it was
-/// left.
+/// Closing the window hides it rather than quitting, and takes the app out of
+/// the Dock, so limits go on being watched from the menu bar and their
+/// notifications still arrive; the menu bar item's panel shows it again, as
+/// does opening the app. Opened at login, the app waits in the menu bar with
+/// its window closed. The window comes back at the size and place it was left.
 ///
 /// # Errors
 ///
@@ -84,8 +84,12 @@ pub fn run() -> tauri::Result<()> {
 
             app.set_menu(shell::menu(app.handle())?)?;
             // The window starts hidden, so it appears only once it is where it
-            // was left, and not at all when the app is opened at login.
-            if !std::env::args().any(|arg| arg == shell::HIDDEN) {
+            // was left. Opened at login, it does not appear at all, and the
+            // app stays out of the Dock from the start.
+            if std::env::args().any(|arg| arg == shell::HIDDEN) {
+                #[cfg(target_os = "macos")]
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            } else {
                 shell::show(app.handle(), None);
             }
             tray::create(app.handle())?;
@@ -108,7 +112,11 @@ pub fn run() -> tauri::Result<()> {
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
-                let _ = window.hide();
+                if window.label() == shell::MAIN {
+                    shell::hide(window.app_handle());
+                } else {
+                    let _ = window.hide();
+                }
             }
             // The panel closes as a menu does, once anything else is clicked.
             WindowEvent::Focused(false) if window.label() == tray::PANEL => tray::dismiss(window),

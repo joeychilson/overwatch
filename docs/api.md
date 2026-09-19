@@ -52,7 +52,8 @@ one and are written by hand.
 `reveal_session` shows the file a session's history is in, and
 `open_session_folder` opens the folder it worked in, both in Finder.
 `open_window` brings the app's window forward, at `path` when one is given, and
-`quit` quits; the menu bar item's panel offers both.
+`quit` quits; the menu bar item's panel offers both, and is the only way to
+quit while the window is closed and the app is out of the Dock.
 
 `save_card` writes a picture the window drew — the overview's share card — to
 the Desktop, or to the home directory when there is none. `name` carries no

@@ -150,8 +150,8 @@ tightest limit on all usage among the subscriptions in use, or among those used
 last when none is, and its ring is drawn as far round as that limit has left.
 Clicking it drops down a panel with every account's limits, those in use first,
 which hides once anything else is clicked. Closing the window hides it rather
-than quitting, and Open at Login starts the app with its window closed, so
-limits are watched until Overwatch is quit.
+than quitting and takes the app out of the Dock, and Open at Login starts the
+app that way, so limits are watched from the menu bar until Overwatch is quit.
 
 None of these endpoints is publicly documented. An answer that stops matching
 what the reader expects is reported as changed, never shown as zero.
@@ -169,7 +169,7 @@ Data moves through the crate in this order:
 | `index.rs`     | Keeping the index current                                    |
 | `account/`     | Reading subscription limits; one module per provider         |
 | `bridge.rs`    | The commands the window and the menu bar panel call          |
-| `shell.rs`     | The app's menu, and what its items do                        |
+| `shell.rs`     | The app's menu, what its items do, and its place in the Dock |
 | `tray.rs`      | The menu bar item that shows limits, and its panel           |
 | `timestamp.rs` | Instants, as Unix milliseconds                               |
 | `error.rs`     | The one failure type                                         |
