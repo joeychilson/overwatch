@@ -232,3 +232,74 @@ test("a session that could not be opened offers a retry", async ({ page }) => {
   await expect(page.getByRole("alert")).toContainText("was not found");
   await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
 });
+
+/** Keep what the page puts on the clipboard, since a test cannot read the system's. */
+async function recordClipboard(page: Page) {
+  await page.addInitScript(() => {
+    const copied: string[] = [];
+    (window as unknown as { __copied: string[] }).__copied = copied;
+    Object.defineProperty(navigator, "clipboard", {
+      value: {
+        writeText: async (text: string) => void copied.push(text),
+        write: async (items: ClipboardItem[]) => {
+          for (const item of items) copied.push(await (await item.getType("text/plain")).text());
+        },
+      },
+    });
+  });
+}
+
+/** What the page last put on the clipboard. */
+async function lastCopied(page: Page) {
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __copied: string[] }).__copied.length))
+    .toBeGreaterThan(0);
+  return page.evaluate(() => (window as unknown as { __copied: string[] }).__copied.at(-1));
+}
+
+test("a message, a block of code and a tool's output each copy as they were recorded", async ({
+  page,
+}) => {
+  await recordClipboard(page);
+  await openSession(page, [
+    turn(0, "user", "Run the tests"),
+    turn(1, "tool", "", { name: "Bash", input: '{"command":"npm test"}', output: "4 passed" }),
+    turn(2, "assistant", "They pass. Run them with:\n\n```sh\nnpm test\n```"),
+  ]);
+
+  await page.getByText("Run the tests").hover();
+  await page.getByRole("button", { name: "Copy message" }).first().click();
+  expect(await lastCopied(page)).toBe("Run the tests");
+
+  await page.getByText("They pass.").hover();
+  await page.getByRole("button", { name: "Copy code" }).click();
+  expect(await lastCopied(page)).toBe("npm test");
+
+  await page.getByRole("button", { name: /Bash.*npm test/ }).click();
+  const output = page.getByRole("button", { name: "Copy output" });
+  await output.click();
+  expect(await lastCopied(page)).toBe("4 passed");
+  // The button says it copied, by name as well as by its icon.
+  await expect(output).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Copied" })).not.toHaveCount(0);
+});
+
+test("the whole conversation copies as Markdown, past what is on screen", async ({ page }) => {
+  await recordClipboard(page);
+  const turns = [
+    turn(0, "user", "Fix the parser"),
+    turn(1, "tool", "", { name: "exec", input: "pwd", output: "/w" }),
+    turn(2, "assistant", "Fixed."),
+  ];
+  await openSession(page, turns.slice(0, 1), { total: 3, timeline: turns });
+
+  await page.getByRole("button", { name: "Copy the conversation as Markdown" }).click();
+  // The rest is read from where the pages left off, a page at a time.
+  await settle(page, "get_transcript", transcript(turns.slice(0, 2), { total: 3 }));
+  await settle(page, "get_transcript", transcript(turns.slice(2), { total: 3 }));
+
+  const copied = (await lastCopied(page)) ?? "";
+  expect(copied).toMatch(/^# Fix the parser\n\nCodex · /);
+  expect(copied).toContain("\n\nFix the parser\n\n*exec*\n\n## Codex");
+  expect(copied).toMatch(/Fixed\.\n$/);
+});

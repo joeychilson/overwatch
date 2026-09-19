@@ -19,19 +19,29 @@
   import { resolve } from "$app/paths";
   import ArrowLeft from "@lucide/svelte/icons/arrow-left";
   import Check from "@lucide/svelte/icons/check";
+  import ClipboardCopy from "@lucide/svelte/icons/clipboard-copy";
   import FileSearch from "@lucide/svelte/icons/file-search";
   import FolderOpen from "@lucide/svelte/icons/folder-open";
   import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
   import SquareTerminal from "@lucide/svelte/icons/square-terminal";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
-  import { getSession, getTimeline, openSessionFolder, revealSession } from "#lib/api/backend.ts";
+  import {
+    getSession,
+    getTimeline,
+    getTranscript,
+    openSessionFolder,
+    revealSession,
+    type Session,
+    type Turn,
+  } from "#lib/api/backend.ts";
   import AgentMark from "#lib/components/marks/AgentMark.svelte";
+  import CopyButton from "#lib/components/ui/CopyButton.svelte";
   import PageHeader, { pageIcon } from "#lib/components/ui/PageHeader.svelte";
   import Timeline from "#lib/components/charts/Timeline.svelte";
   import Transcript from "#lib/components/transcript/Transcript.svelte";
   import { agentName, resumeCommand, roleName, sessionLabel } from "#lib/agents.ts";
   import { errorLine } from "#lib/errors.ts";
-  import { activeTime } from "#lib/transcript.ts";
+  import { activeTime, asMarkdown } from "#lib/transcript.ts";
   import {
     UNKNOWN,
     formatCount,
@@ -86,6 +96,46 @@
     problem = null;
     action.catch((error: unknown) => (problem = errorLine(error)));
   }
+
+  /** The line under the title: the agent, where and when it worked, and what a spawned run was for. */
+  function about(session: Session) {
+    return [
+      agentName(session.agent),
+      session.cwd && formatProject(session.cwd, 3),
+      session.branch,
+      formatSpan(session.startedAt, session.updatedAt),
+      session.spawned && roleName(session.role),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  /** The most turns the engine hands over at once. */
+  const LARGEST_PAGE = 2_000;
+
+  /**
+   * The whole conversation as Markdown, however much of it is on screen.
+   *
+   * The engine holds the conversation it parsed for this page, so reading it
+   * all again is a slice per page rather than another parse.
+   */
+  async function conversation(session: Session): Promise<string> {
+    const turns: Turn[] = [];
+    let total = Infinity;
+    while (turns.length < total) {
+      const read = await getTranscript(session.id, turns.length, LARGEST_PAGE);
+      total = read.total;
+      if (read.turns.length === 0) break;
+      turns.push(...read.turns);
+    }
+    return asMarkdown({
+      title: sessionLabel(session),
+      about: about(session),
+      agent: agentName(session.agent),
+      turns,
+      now: new Date(),
+    });
+  }
 </script>
 
 <svelte:head><title>Session · Overwatch</title></svelte:head>
@@ -137,18 +187,7 @@
   {@const session = await getSession(sessionId)}
   {@const resume = resumeCommand(session)}
 
-  <PageHeader
-    title={sessionLabel(session)}
-    description={[
-      agentName(session.agent),
-      session.cwd && formatProject(session.cwd, 3),
-      session.branch,
-      formatSpan(session.startedAt, session.updatedAt),
-      session.spawned && roleName(session.role),
-    ]
-      .filter(Boolean)
-      .join(" · ")}
-  >
+  <PageHeader title={sessionLabel(session)} description={about(session)}>
     {#snippet icon()}
       <!-- A brand mark is solid, so it sits a little smaller than a stroked icon. -->
       <AgentMark agent={session.agent} size={20} />
@@ -177,6 +216,13 @@
           </button>
           <span class="mx-0.5 h-4 w-px bg-border" aria-hidden="true"></span>
         {/if}
+        <CopyButton
+          text={() => conversation(session)}
+          label="Copy the conversation as Markdown"
+          icon={ClipboardCopy}
+          size={15}
+          class="aspect-square h-full hover:bg-hover"
+        />
         {#if session.cwd}
           <button
             class="grid aspect-square h-full place-items-center rounded-item text-muted hover:bg-hover hover:text-text"

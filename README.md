@@ -15,7 +15,7 @@ It reads what **Claude Code, Codex, OpenCode, Pi, and Grok Build** already keep 
 
 - **Overview**: tokens and cost by agent, plus the top models, projects, and sessions.
 - **Share**: any period as a card — your top models and agents side by side — saved to your Desktop as a PNG.
-- **Sessions**: search every session and read it as a conversation with a timeline of turns and tool calls.
+- **Sessions**: search every session and read it as a conversation with a timeline of turns and tool calls. Copy a message, a block of code, a tool's output, or the whole conversation as Markdown.
 - **Models**: usage, cost, and trend for each model.
 - **Subscriptions**: what's left of your Claude, Codex, Grok, and OpenCode Go limits, with a notification before one runs out.
 - **Menu bar**: your tightest limit at a glance. Close the window and it keeps watching.

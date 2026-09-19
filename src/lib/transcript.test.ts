@@ -3,6 +3,7 @@ import type { Turn } from "./api/backend.ts";
 import {
   IDLE,
   activeTime,
+  asMarkdown,
   blocks,
   noteTitle,
   stepsSummary,
@@ -102,4 +103,41 @@ describe("steps", () => {
     );
     expect(stepsSummary([...tools, turn(9, "reasoning", "Hm")])).toBe("Bash ×3 · Edit · Thinking");
   });
+});
+
+test("a conversation as Markdown keeps what was said and names the steps between", () => {
+  const at = (day: number, hour: number, minute: number) =>
+    new Date(2026, 8, day, hour, minute).getTime();
+  const markdown = asMarkdown({
+    title: "Add idempotency keys",
+    about: "Claude Code · ledger-api",
+    agent: "Claude Code",
+    now: new Date(2026, 8, 18),
+    turns: [
+      turn(0, "system", "<environment_context>"),
+      turn(1, "user", "Add keys to **POST /payments**\n", null, at(14, 12, 58)),
+      turn(2, "reasoning", "Looking."),
+      turn(3, "tool", "", call("Read", "{}")),
+      turn(4, "tool", "", { name: "Bash", input: "npm test", output: "1 failed", failed: true }),
+      turn(5, "assistant", "Done.", null, at(14, 13, 0)),
+      turn(6, "user", "Thanks", null, at(15, 9, 5)),
+      turn(7, "assistant", "No time was recorded for this."),
+    ],
+  });
+  // Times are written with the narrow space the locale puts before the meridiem.
+  expect(markdown.replaceAll("\u202f", " ")).toBe(
+    [
+      "# Add idempotency keys",
+      "Claude Code · ledger-api",
+      "## You · Sep 14, 12:58 PM",
+      "Add keys to **POST /payments**",
+      "*Thinking · Read · Bash · 1 failed*",
+      "## Claude Code · 1:00 PM",
+      "Done.",
+      "## You · Sep 15, 9:05 AM",
+      "Thanks",
+      "## Claude Code",
+      "No time was recorded for this.",
+    ].join("\n\n") + "\n",
+  );
 });

@@ -4,10 +4,12 @@
    *
    * A slash command is something the person did rather than said, so it reads
    * as one line. Each message carries its time, and its day as well when that
-   * changed since the message before.
+   * changed since the message before, and copies as the Markdown it was written
+   * in.
    */
   import type { Turn } from "#lib/api/backend.ts";
   import Markdown from "#lib/components/markdown/Markdown.svelte";
+  import CopyButton from "#lib/components/ui/CopyButton.svelte";
   import { formatDateTime, formatDay, formatTime } from "#lib/format.ts";
 
   interface Props {
@@ -39,11 +41,11 @@
 {:else}
   <article
     id="turn-{turn.index}"
-    class="min-w-0 scroll-mt-24 rounded-menu {person ? 'bg-sidebar px-4 py-3' : 'px-1'} {revealed
-      ? 'outline-2 outline-offset-4 outline-(--focus)'
-      : ''}"
+    class="group min-w-0 scroll-mt-24 rounded-menu {person
+      ? 'bg-sidebar px-4 py-3'
+      : 'px-1'} {revealed ? 'outline-2 outline-offset-4 outline-(--focus)' : ''}"
   >
-    <header class="flex items-baseline gap-2">
+    <header class="flex items-center gap-2">
       <span class="text-meta font-medium" title={turn.model ?? undefined}>
         {person ? "You" : agent}
       </span>
@@ -52,6 +54,12 @@
           {dated ? `${formatDay(turn.at)}, ${formatTime(turn.at)}` : formatTime(turn.at)}
         </time>
       {/if}
+      <!-- Out of the way until the message is pointed at or it is reached from the keyboard. -->
+      <CopyButton
+        text={turn.text.trim()}
+        label="Copy message"
+        class="-my-1 ml-auto size-6 opacity-0 group-hover:opacity-100 hover:bg-hover focus-visible:opacity-100"
+      />
     </header>
     <div class="mt-1.5 leading-relaxed">
       <Markdown text={turn.text} />

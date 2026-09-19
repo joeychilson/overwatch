@@ -8,6 +8,7 @@
  * one.
  */
 import type { ToolCall, Turn } from "./api/backend.ts";
+import { formatDay, formatTime } from "./format.ts";
 import { startOfDay } from "./periods.ts";
 
 /** How long a pause between turns runs before the session counts as idle. */
@@ -167,4 +168,41 @@ export function stepsSummary(turns: readonly Turn[]): string {
   const named = ranked.slice(0, 3).map(([name, count]) => (count > 1 ? `${name} ×${count}` : name));
   const rest = ranked.length - named.length;
   return [...named, ...(rest > 0 ? [`${rest} more`] : [])].join(" · ");
+}
+
+/**
+ * A conversation as Markdown, to paste where there is no Overwatch to read it.
+ *
+ * It reads as the conversation does on screen. What was said is kept whole,
+ * each under who said it and when, with the day wherever it changed. A run of
+ * steps between is the one line that names it, as the steps read while closed.
+ * What the harness added is left out: it is how the agent was set up, not part
+ * of the exchange.
+ */
+export function asMarkdown(conversation: {
+  title: string;
+  /** A line under the title saying what the session was, such as its agent and project. */
+  about: string;
+  /** Who the model's turns are attributed to, such as `Codex`. */
+  agent: string;
+  turns: readonly Turn[];
+  /** The moment its days are written against, so the current year goes unsaid. */
+  now: Date;
+}): string {
+  const parts = [`# ${conversation.title}`];
+  if (conversation.about !== "") parts.push(conversation.about);
+  for (const block of blocks(conversation.turns)) {
+    if (block.kind === "message") {
+      const { turn, dated } = block;
+      const who = turn.speaker === "user" ? "You" : conversation.agent;
+      const day =
+        dated && turn.at !== null ? `${formatDay(turn.at, false, conversation.now)}, ` : "";
+      const when = turn.at === null ? "" : ` · ${day}${formatTime(turn.at)}`;
+      parts.push(`## ${who}${when}`, turn.text.trim());
+    } else if (block.kind === "steps") {
+      const failed = block.turns.filter((turn) => turn.tool?.failed).length;
+      parts.push(`*${stepsSummary(block.turns)}${failed > 0 ? ` · ${failed} failed` : ""}*`);
+    }
+  }
+  return `${parts.join("\n\n")}\n`;
 }

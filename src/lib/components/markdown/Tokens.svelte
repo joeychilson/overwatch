@@ -14,6 +14,7 @@
   import type { Token, Tokens as MarkedTokens } from "marked";
   import Tokens from "./Tokens.svelte";
   import ImageOff from "@lucide/svelte/icons/image-off";
+  import CopyButton from "#lib/components/ui/CopyButton.svelte";
 
   let { tokens }: { tokens: Token[] } = $props();
 
@@ -55,9 +56,16 @@
     <code class="rounded-item bg-hover px-1 py-0.5 font-mono text-meta">{code.text}</code>
   {:else if token.type === "code"}
     {@const code = token as MarkedTokens.Code}
-    <pre class="overflow-x-auto rounded-menu bg-hover p-4 font-mono text-meta"><code
-        >{code.text}</code
-      ></pre>
+    <div class="group relative">
+      <pre class="overflow-x-auto rounded-menu bg-hover p-4 font-mono text-meta"><code
+          >{code.text}</code
+        ></pre>
+      <CopyButton
+        text={code.text}
+        label="Copy code"
+        class="absolute top-2 right-2 size-7 bg-hover opacity-0 group-hover:opacity-100 hover:bg-active focus-visible:opacity-100"
+      />
+    </div>
   {:else if token.type === "blockquote"}
     {@const quote = token as MarkedTokens.Blockquote}
     <blockquote class="border-l-2 border-border pl-3 text-muted">

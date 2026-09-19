@@ -16,6 +16,7 @@
   import Wrench from "@lucide/svelte/icons/wrench";
   import type { Turn } from "#lib/api/backend.ts";
   import Markdown from "#lib/components/markdown/Markdown.svelte";
+  import CopyButton from "#lib/components/ui/CopyButton.svelte";
   import { firstLine, toolKind, toolSubject, type ToolKind } from "#lib/transcript.ts";
 
   interface Props {
@@ -57,6 +58,13 @@
   });
 </script>
 
+{#snippet heading(name: string, text: string)}
+  <div class="flex items-center justify-between gap-2">
+    <p class="text-label text-muted">{name}</p>
+    <CopyButton {text} label="Copy {name.toLowerCase()}" size={13} class="size-6 hover:bg-hover" />
+  </div>
+{/snippet}
+
 <div
   id="turn-{turn.index}"
   class="min-w-0 scroll-mt-24 rounded-control {revealed ? 'bg-hover' : ''}"
@@ -78,12 +86,12 @@
     <div class="grid min-w-0 gap-1 px-2 pt-1 pb-3">
       {#if tool}
         {#if input !== null}
-          <p class="text-label text-muted">Input</p>
+          {@render heading("Input", input)}
           <pre
             class="max-h-80 overflow-auto rounded-item bg-hover p-2 font-mono text-meta wrap-anywhere whitespace-pre-wrap">{input}</pre>
         {/if}
         {#if tool.output}
-          <p class="mt-1 text-label text-muted">Output</p>
+          <div class="mt-1">{@render heading("Output", tool.output)}</div>
           <pre
             class="max-h-96 overflow-auto rounded-item bg-hover p-2 font-mono text-meta wrap-anywhere whitespace-pre-wrap">{tool.output}</pre>
         {:else}
