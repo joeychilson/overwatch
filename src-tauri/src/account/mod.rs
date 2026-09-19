@@ -372,8 +372,8 @@ fn span(seconds: i64) -> String {
         };
     }
     // Rounded to whole days, because a period that crosses a clock change is
-    // an hour long or short.
-    match (seconds + DAY / 2) / DAY {
+    // an hour long or short. Saturating, because the length is the provider's.
+    match seconds.saturating_add(DAY / 2) / DAY {
         1 => "Daily".to_owned(),
         7 => "Weekly".to_owned(),
         28..=31 => "Monthly".to_owned(),
@@ -478,6 +478,9 @@ mod tests {
         assert_eq!(span(7 * 86_400 - 3_600), "Weekly");
         assert_eq!(span(30 * 86_400), "Monthly");
         assert_eq!(span(3 * 86_400), "3 days");
+        // A provider's absurd length is named, not an overflow: 9223372036854775807
+        // seconds is 106751991167300 whole days.
+        assert_eq!(span(i64::MAX), "106751991167300 days");
     }
 
     #[test]

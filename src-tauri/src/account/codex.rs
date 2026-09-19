@@ -104,10 +104,10 @@ fn windows(rate: &Value, scope: Option<&str>, now: i64) -> Vec<Limit> {
                     .as_i64()
                     .and_then(crate::timestamp::from_unix_number)
                     .or_else(|| {
-                        window["reset_after_seconds"]
+                        let after = window["reset_after_seconds"]
                             .as_i64()
-                            .filter(|seconds| *seconds >= 0)
-                            .map(|seconds| now + seconds * 1_000)
+                            .filter(|seconds| *seconds >= 0)?;
+                        now.checked_add(after.checked_mul(1_000)?)
                     }),
             })
         })
@@ -182,6 +182,19 @@ mod tests {
     fn an_answer_without_windows_is_not_a_reading() {
         let body = json!({"plan_type": "free", "rate_limit": null});
         assert!(parse(&body, NOW).is_none());
+    }
+
+    #[test]
+    fn absurd_lengths_and_countdowns_are_not_an_overflow() {
+        let body = json!({"rate_limit": {"primary_window": {
+            "used_percent": 1,
+            "limit_window_seconds": i64::MAX,
+            "reset_after_seconds": i64::MAX,
+            "reset_at": 0
+        }}});
+        let usage = parse(&body, NOW).expect("reads");
+        // No instant is that far off, so when it resets is unknown.
+        assert_eq!(usage.limits[0].resets_at, None);
     }
 
     #[test]

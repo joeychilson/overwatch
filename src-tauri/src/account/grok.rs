@@ -80,11 +80,12 @@ fn parse(body: &Value) -> Option<Usage> {
     let used_percent = super::percent(&config["creditUsagePercent"])?;
     let period = &config["currentPeriod"];
     let (start, end) = (from_json(&period["start"]), from_json(&period["end"]));
+    let length = start
+        .zip(end)
+        .and_then(|(start, end)| end.checked_sub(start))
+        .filter(|length| *length > 0);
     let limit = Limit {
-        name: start.zip(end).map_or_else(
-            || "Usage".to_owned(),
-            |(start, end)| super::span((end - start) / 1_000),
-        ),
+        name: length.map_or_else(|| "Usage".to_owned(), |length| super::span(length / 1_000)),
         scope: None,
         used_percent,
         resets_at: end,
