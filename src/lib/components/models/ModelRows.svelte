@@ -65,7 +65,7 @@
   const laid = $derived(
     columns(
       since ??
-        Math.min(Date.now(), ...models.flatMap((model) => model.daily.map((day) => day.day))),
+        models.reduce((first, model) => Math.min(first, model.daily[0]?.day ?? first), Date.now()),
     ),
   );
 
