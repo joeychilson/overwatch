@@ -23,6 +23,10 @@ use crate::source::{
     Conversation, Summary, Tally, Unit, contains, lines, pieces, read_all, stat, text,
 };
 
+/// The files a session directory holds. Each can change without the others: a
+/// turn's usage and a generated title land minutes after the chat.
+const FILES: [&str; 3] = ["chat_history.jsonl", "summary.json", "updates.jsonl"];
+
 /// The contents of a session's `summary.json`.
 #[derive(Deserialize, Default)]
 struct SummaryFile {
@@ -68,12 +72,14 @@ pub fn discover(root: &Path) -> Vec<Unit> {
             if !directory.join("summary.json").is_file() {
                 continue;
             }
-            // The conversation file is what changes as a session runs, so it
-            // is the signal for whether this unit needs re-reading. A directory
-            // modification time would not move when a file inside it grows.
-            let (mtime, size) = stat(&directory.join("chat_history.jsonl"))
-                .or_else(|| stat(&directory.join("summary.json")))
-                .unwrap_or((0, 0));
+            // A directory's own modification time does not move when a file
+            // in it grows, so the unit changes with any of its files.
+            let (mtime, size) = FILES
+                .iter()
+                .filter_map(|name| stat(&directory.join(name)))
+                .fold((0, 0_i64), |(mtime, size), (modified, length)| {
+                    (mtime.max(modified), size.saturating_add(length))
+                });
             units.push(Unit {
                 agent: Agent::GrokBuild,
                 path: directory,
@@ -107,7 +113,7 @@ pub fn summarize(source: &Unit) -> Result<Vec<Summary>> {
         .and_then(crate::timestamp::parse_rfc3339)
         .unwrap_or(source.mtime);
 
-    let tally = usage(&source.path, updated_at);
+    let tally = usage(&source.path, updated_at)?;
     let session = Session {
         id: format!("{}:{native_id}", Agent::GrokBuild.key()),
         agent: Agent::GrokBuild,
@@ -167,13 +173,15 @@ impl ModelUsage {
 /// A session's usage, from the finished turns in its `updates.jsonl`, each
 /// dated when it finished or, with no time, `fallback`. A turn cancelled
 /// before the model answered records none, and one cancelled partway records
-/// no charge.
-fn usage(directory: &Path, fallback: i64) -> Tally {
+/// no charge. A session without the file used nothing it recorded; one whose
+/// file cannot be read is a problem, not a session that used nothing.
+fn usage(directory: &Path, fallback: i64) -> Result<Tally> {
     let mut tally = Tally::default();
-    let Ok(body) = read_all(&directory.join("updates.jsonl")) else {
-        return tally;
-    };
-    for line in lines(&body) {
+    let path = directory.join("updates.jsonl");
+    if !path.is_file() {
+        return Ok(tally);
+    }
+    for line in lines(&read_all(&path)?) {
         if !contains(line, b"\"modelUsage\"") {
             continue;
         }
@@ -195,7 +203,7 @@ fn usage(directory: &Path, fallback: i64) -> Tally {
             tally.add(at, "xai", &model, used.tokens(), cost);
         }
     }
-    tally
+    Ok(tally)
 }
 
 /// The file a session's conversation is kept in, within its directory.
@@ -363,6 +371,30 @@ mod tests {
         let (_directory, source) = fixture(false);
         let summary = summarize(&source).expect("summarizes").remove(0);
         assert!(summary.usage.is_empty());
+    }
+
+    #[test]
+    fn a_session_is_read_again_when_any_of_its_files_changes() {
+        let (directory, before) = fixture(false);
+        // Grok writes a turn's usage, and later its title, after the chat that
+        // the turn ended with; watching the chat alone missed both.
+        write(&before.path.join("updates.jsonl"), "{}\n");
+        let after = discover(&directory.path().join("sessions")).remove(0);
+        assert_eq!(after.size, before.size + 3);
+    }
+
+    #[test]
+    fn usage_that_cannot_be_read_is_a_problem_rather_than_none() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_directory, source) = fixture(true);
+        let updates = source.path.join("updates.jsonl");
+        std::fs::set_permissions(&updates, std::fs::Permissions::from_mode(0o000))
+            .expect("hides it");
+        // Reporting the file keeps a session from showing as having used nothing.
+        assert!(matches!(
+            summarize(&source),
+            Err(crate::error::Error::Read { .. })
+        ));
     }
 
     #[test]
