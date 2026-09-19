@@ -34,16 +34,7 @@
     formatRelative,
     formatUsd,
   } from "#lib/format.ts";
-  import {
-    PROVIDERS,
-    band,
-    byUrgency,
-    explain,
-    followed,
-    inUse,
-    left,
-    tightest,
-  } from "#lib/limits.ts";
+  import { PROVIDERS, arrange, band, explain, followed, left, tightest } from "#lib/limits.ts";
   import { periodStart, startOfDay } from "#lib/periods.ts";
   import { now } from "#lib/state/clock.ts";
   import { getEngine } from "#lib/state/engine.svelte.ts";
@@ -56,35 +47,16 @@
 
   const at = $derived(now().getTime());
 
-  /**
-   * The accounts in groups, those the menu bar follows first, and which of
-   * them open by themselves. Only accounts in use are set apart by name; the
-   * one used last is simply put first.
-   */
-  const view = $derived.by(() => {
-    // Accounts with no limit read yet have nothing to show, so they go last.
-    const accounts = byUrgency(engine.status.accounts, at).sort(
-      (a, b) => Number(a.limits.length === 0) - Number(b.limits.length === 0),
-    );
-    const first = followed(accounts, at);
-    const rest = accounts.filter((account) => !first.includes(account));
-    const groups = first.some((account) => inUse(account, at))
-      ? [
-          { label: "In use", accounts: first },
-          { label: "Not in use", accounts: rest },
-        ]
-      : [{ label: null, accounts: [...first, ...rest] }];
-    return {
-      groups: groups.filter((group) => group.accounts.length > 0),
-      open: new Set(first.map((account) => account.id)),
-    };
-  });
+  const groups = $derived(arrange(engine.status.accounts, at));
+
+  /** The accounts the menu bar follows, which open by themselves. */
+  const following = $derived(new Set(followed(engine.status.accounts, at).map(({ id }) => id)));
 
   /** Accounts opened or closed by hand since the panel was last put away. */
   const toggled = new SvelteMap<string, boolean>();
 
   function isOpen(account: Account): boolean {
-    return toggled.get(account.id) ?? view.open.has(account.id);
+    return toggled.get(account.id) ?? following.has(account.id);
   }
 
   /** The day it is, which changes only at midnight however often the clock ticks. */
@@ -184,7 +156,7 @@
   </svelte:boundary>
 
   <div class="grid grid-cols-1 gap-2">
-    {#each view.groups as group (group.label)}
+    {#each groups as group (group.label)}
       <section class="grid grid-cols-1" aria-label={group.label ?? undefined}>
         {#if group.label}
           <h2 class="px-2 pt-1.5 pb-1 text-label text-muted">{group.label}</h2>

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vite-plus/test";
 import type { Account, Limit } from "./api/backend.ts";
-import { followed, tightest } from "./limits.ts";
+import { arrange, followed, tightest } from "./limits.ts";
 
 const MINUTE = 60_000;
 const NOW = 1_000 * MINUTE;
@@ -75,5 +75,36 @@ describe("an account's tightest limit", () => {
   test("is none when every limit is on one model", () => {
     expect(tightest(account("a", null, [limit("Weekly", 50, { scope: "Opus" })]), NOW)).toBeNull();
     expect(tightest(account("a", null), NOW)).toBeNull();
+  });
+});
+
+describe("the order the panel and the page show accounts in", () => {
+  const runs = (accounts: Account[]) =>
+    arrange(accounts, NOW).map((group) => [group.label, ids(group.accounts)]);
+
+  test("sets the accounts in use apart, each run nearest a limit first", () => {
+    const accounts = [
+      account("idle-tight", null, [limit("5 hours", 95)]),
+      account("working", NOW - 5 * MINUTE, [limit("5 hours", 20)]),
+      account("idle", null, [limit("5 hours", 10)]),
+      account("working-tight", NOW - MINUTE, [limit("5 hours", 80)]),
+    ];
+    expect(runs(accounts)).toEqual([
+      ["In use", ["working-tight", "working"]],
+      ["Not in use", ["idle-tight", "idle"]],
+    ]);
+  });
+
+  test("puts the one used last first, unlabelled, when none is in use", () => {
+    const accounts = [
+      account("tight", null, [limit("5 hours", 95)]),
+      account("last", NOW - 2 * 60 * MINUTE, [limit("5 hours", 10)]),
+    ];
+    expect(runs(accounts)).toEqual([[null, ["last", "tight"]]]);
+  });
+
+  test("puts an account with no limit read yet last", () => {
+    const accounts = [account("unread", null), account("read", null, [limit("5 hours", 10)])];
+    expect(runs(accounts)).toEqual([[null, ["read", "unread"]]]);
   });
 });

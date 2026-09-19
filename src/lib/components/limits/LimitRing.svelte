@@ -17,9 +17,11 @@
     band: Band;
     /** Whether the figure is the last one read, which may no longer hold. */
     stale?: boolean;
+    /** Edge length in pixels; the mark inside is half of it. */
+    size?: number;
   }
 
-  let { mark, left, band, stale = false }: Props = $props();
+  let { mark, left, band, stale = false, size = 26 }: Props = $props();
 
   const TONE: Record<Band, string> = {
     blocked: "text-danger",
@@ -29,7 +31,12 @@
   };
 </script>
 
-<span class="relative grid size-6.5 shrink-0 place-items-center" aria-hidden="true">
+<span
+  class="relative grid shrink-0 place-items-center"
+  style:width="{size}px"
+  style:height="{size}px"
+  aria-hidden="true"
+>
   <svg class="absolute inset-0 -rotate-90" viewBox="0 0 26 26">
     <!-- A wash of the text colour, as a bar's track is. -->
     <circle cx="13" cy="13" r="12" fill="none" stroke-width="2" class="stroke-text/12" />
@@ -48,5 +55,5 @@
       />
     {/if}
   </svg>
-  <Mark name={mark} size={13} />
+  <Mark name={mark} size={Math.round(size / 2)} />
 </span>

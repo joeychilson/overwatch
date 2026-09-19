@@ -1,6 +1,7 @@
 /**
  * The Subscriptions page. A limit that could not be read again, or whose window
- * has ended since, must read as such rather than as current.
+ * has ended since, must read as such rather than as current, and the accounts
+ * come in the menu bar panel's order.
  */
 import { expect, test } from "@playwright/test";
 import { account, installIpc, settle, status } from "./ipc.ts";
@@ -42,12 +43,55 @@ test("two accounts of one subscription are each shown", async ({ page }) => {
   await expect(page.getByRole("region", { name: "Codex work@example.com" })).toBeVisible();
 });
 
-test("a failed refresh keeps the last limits and says how to fix it", async ({ page }) => {
+test("a failed refresh keeps the last limits, dated, and says how to fix it", async ({ page }) => {
   await page.goto("/subscriptions");
-  await settle(page, "get_status", status({ accounts: [account({ problem: "sign_in" })] }));
+  const lapsed = account({ problem: "sign_in", readAt: Date.now() - 2 * 24 * 60 * 60_000 });
+  await settle(page, "get_status", status({ accounts: [lapsed] }));
 
   await expect(page.getByText("Open Codex or Pi to renew the sign-in.")).toBeVisible();
   await expect(page.getByText("58% left")).toBeVisible();
+  // Not "Updated": nothing has been read since.
+  await expect(page.getByText("Last read 2 days ago")).toBeVisible();
+});
+
+test("the accounts in use come first and say so", async ({ page }) => {
+  await page.goto("/subscriptions");
+  const accounts = [
+    account({ id: "grok:b", provider: "grok", label: null, limits: [limit(95)] }),
+    account({ usedAt: Date.now() - 5 * 60_000 }),
+  ];
+  await settle(page, "get_status", status({ accounts }));
+
+  await expect(page.getByRole("main").getByRole("heading", { level: 2 })).toHaveText([
+    "Codex",
+    "Grok",
+  ]);
+  await expect(page.getByRole("region", { name: "Codex joey@example.com" })).toContainText(
+    "In use",
+  );
+  await expect(page.getByRole("region", { name: "Grok" })).not.toContainText("In use");
+});
+
+test("an account with no limit read yet says so, and comes last", async ({ page }) => {
+  await page.goto("/subscriptions");
+  const unread = account({
+    id: "grok:",
+    provider: "grok",
+    label: null,
+    limits: [],
+    readAt: null,
+    problem: "sign_in",
+    via: ["Grok Build"],
+  });
+  await settle(page, "get_status", status({ accounts: [unread, account()] }));
+
+  await expect(page.getByRole("main").getByRole("heading", { level: 2 })).toHaveText([
+    "Codex",
+    "Grok",
+  ]);
+  const grok = page.getByRole("region", { name: "Grok" });
+  await expect(grok).toContainText("Open Grok Build to renew the sign-in.");
+  await expect(grok).toContainText("No limits read yet.");
 });
 
 test("a used-up limit says when it is back rather than showing a percentage", async ({ page }) => {

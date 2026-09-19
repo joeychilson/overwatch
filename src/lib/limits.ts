@@ -1,10 +1,10 @@
 /**
  * How close subscription limits are to stopping work.
  *
- * The Subscriptions page and the menu bar item's panel order and colour
+ * The Subscriptions page and the menu bar item's panel order, group and colour
  * accounts by this, and the sidebar marks the page with it, so all three agree.
- * The panel also picks out the accounts the menu bar's figure follows, by the
- * engine's rule.
+ * Both put first the accounts the menu bar's figure follows, by the engine's
+ * rule.
  */
 import type { Account, Limit, Provider } from "./api/backend.ts";
 import type { MarkName } from "./components/marks/marks.ts";
@@ -102,6 +102,35 @@ export function followed(accounts: readonly Account[], now: number): Account[] {
   if (used.length === 0) return [...accounts];
   const since = Math.min(Math.max(...used), now - IN_USE);
   return accounts.filter((account) => account.usedAt !== null && account.usedAt >= since);
+}
+
+/** A run of accounts, under a label only when some are in use and others are not. */
+export interface Group {
+  label: "In use" | "Not in use" | null;
+  accounts: Account[];
+}
+
+/**
+ * Accounts as the menu bar panel and the Subscriptions page show them.
+ *
+ * Those the menu bar's figure follows come first: the accounts in use, set
+ * apart by name from the rest, or else the one used last, simply put first.
+ * Each run goes nearest to stopping work first, and an account with no limit
+ * read yet, which has nothing to show, goes last.
+ */
+export function arrange(accounts: readonly Account[], now: number): Group[] {
+  const ordered = byUrgency(accounts, now).sort(
+    (a, b) => Number(a.limits.length === 0) - Number(b.limits.length === 0),
+  );
+  const first = followed(ordered, now);
+  const rest = ordered.filter((account) => !first.includes(account));
+  const groups: Group[] = first.some((account) => inUse(account, now))
+    ? [
+        { label: "In use", accounts: first },
+        { label: "Not in use", accounts: rest },
+      ]
+    : [{ label: null, accounts: [...first, ...rest] }];
+  return groups.filter((group) => group.accounts.length > 0);
 }
 
 /**
