@@ -19,6 +19,7 @@ It reads what **Claude Code, Codex, OpenCode, Pi, and Grok Build** already keep 
 - **Models**: usage, cost, and trend for each model.
 - **Subscriptions**: what's left of your Claude, Codex, Grok, and OpenCode Go limits, with a notification before one runs out.
 - **Menu bar**: your tightest limit at a glance, and what today has used. Close the window and it leaves the Dock but keeps watching from the menu bar.
+- **Agents**: connect Claude Code, Codex, OpenCode, Grok Build, or any other MCP client, and it can find, sum up, and read your sessions from every agent, search what was said in them, total usage and cost any way it needs, and pace itself against your limits — "work on this, but stop when the 5-hour limit reaches 50%". **Connect agents** in the sidebar gives the command to run.
 
 New sessions show up within seconds while you work.
 
@@ -40,6 +41,7 @@ An agent appears once its directory exists. [docs/agents.md](docs/agents.md) cov
 - **No transcript copies.** The index holds summaries and usage counts; conversations are read from the agent's files when you open them or search what was said in them.
 - **One kind of network request.** Each subscription's usage endpoint, using the sign-ins your agents already have (including Claude Code's Keychain item).
 - **No telemetry.**
+- **Agents you connect read what you can.** Their MCP server only reads, makes no network requests, and answers from the same index, so a connected agent sees your sessions and what was said in them, and sends what it reads to its own model provider, as it does anything else it reads.
 
 [docs/architecture.md](docs/architecture.md) lists exactly what is read and where requests go.
 

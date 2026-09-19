@@ -836,6 +836,8 @@ export function answer(command: string, args: Record<string, unknown>, now = NOW
       // Nothing is written here, so the answer is where the engine would have
       // put it: the Desktop, under the name the window asked for.
       return `/Users/you/Desktop/${typeof args.name === "string" ? args.name : "overwatch"}.png`;
+    case "get_mcp_server":
+      return { command: "/Applications/Overwatch.app/Contents/MacOS/overwatch", args: ["mcp"] };
     default:
       // Subscribing to the engine's events answers with a listener id.
       return 0;

@@ -845,6 +845,17 @@ pub struct Status {
     pub accounts: Vec<Account>,
 }
 
+/// How an agent starts Overwatch's MCP server, as an agent's configuration
+/// names a local server: a program, and the arguments after it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServer {
+    /// This executable, by its full path.
+    pub command: String,
+    /// What follows it.
+    pub args: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

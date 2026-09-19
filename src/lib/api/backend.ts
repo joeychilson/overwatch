@@ -331,6 +331,13 @@ export interface Status {
   accounts: Account[];
 }
 
+/** How an agent starts Overwatch's MCP server: a program, and the arguments after it. */
+export interface McpServer {
+  /** This executable, by its full path. */
+  command: string;
+  args: string[];
+}
+
 /** What a failed command rejects with. */
 export interface EngineError {
   kind:
@@ -457,6 +464,11 @@ export function getStatus(): Promise<Status> {
  */
 export function saveCard(name: string, png: string): Promise<string> {
   return call("save_card", { name, png });
+}
+
+/** How an agent starts Overwatch's MCP server, as its configuration would name it. */
+export function getMcpServer(): Promise<McpServer> {
+  return call("get_mcp_server");
 }
 
 /** Bring the app's window forward, at a destination such as `/subscriptions` when given. */

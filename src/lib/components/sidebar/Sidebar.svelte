@@ -13,6 +13,7 @@
   import { attention } from "#lib/limits.ts";
   import { now } from "#lib/state/clock.ts";
   import { getEngine } from "#lib/state/engine.svelte.ts";
+  import ConnectAgents from "./ConnectAgents.svelte";
   import ThemeMenu from "./ThemeMenu.svelte";
   import { sidebarIcon, sidebarItem } from "./item.ts";
 
@@ -158,6 +159,7 @@
         </Popover.Portal>
       </Popover.Root>
     {/if}
+    <ConnectAgents />
     <ThemeMenu />
   </div>
 </aside>

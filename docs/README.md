@@ -5,9 +5,9 @@ computer: the conversations, tool calls, reasoning, token usage, costs, and
 subscription limits of **Claude Code, Codex, OpenCode, Pi, and Grok**.
 
 Its Rust engine reads the agents' own files read-only, keeps a small index of
-what it found, and answers eighteen Tauri commands. Its only network traffic is
-reading subscription limits from your own providers, with the sign-ins your
-agents already keep.
+what it found, and answers nineteen Tauri commands, as well as the agents
+connected to its MCP server. Its only network traffic is reading subscription
+limits from your own providers, with the sign-ins your agents already keep.
 
 ## The documents
 
@@ -26,10 +26,13 @@ Repository conventions, checks, and the commit format are in
 flowchart LR
     A[Agent files and databases] -->|changed files| B[Readers, one per agent]
     B --> C[(index.sqlite, ~3.6 MB)]
-    C --> D[Eighteen Tauri commands]
+    C --> D[Nineteen Tauri commands]
     D --> E[UI]
     A -->|whole file, on open| F[One conversation]
     F --> E
+    C -->|read-only| G[MCP server, overwatch mcp]
+    A -->|whole file, on request| G
+    G --> H[Connected agents]
 ```
 
 A scan reads the files that changed since the last one and counts every usage
@@ -59,7 +62,8 @@ opened, one session at a time; no transcript text is copied into the database.
    query is indexed.
 7. **Nothing leaves the machine but limit checks.** The only requests go to
    your own providers' usage endpoints, with sign-ins the agents keep. No
-   telemetry.
+   telemetry. An agent you connect over MCP reads what it asks for, and sends
+   that to its own model provider as it does anything else it reads.
 
 ## Out of scope
 

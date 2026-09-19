@@ -8,7 +8,17 @@
  * scripted.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { account, installIpc, lastArgs, session, sessionPage, settle, status } from "./ipc.ts";
+import { lastCopied, recordClipboard } from "./clipboard.ts";
+import {
+  account,
+  engineError,
+  installIpc,
+  lastArgs,
+  session,
+  sessionPage,
+  settle,
+  status,
+} from "./ipc.ts";
 
 test.beforeEach(async ({ page }) => {
   await installIpc(page);
@@ -109,4 +119,71 @@ test("a long scan shows how far it has got", async ({ page }) => {
   const reading = page.getByRole("progressbar", { name: "Reading history" });
   await expect(reading).toContainText("412 of 900");
   await expect(reading).toHaveAttribute("aria-valuenow", "412");
+});
+
+/** Where the app runs once it is installed. */
+const INSTALLED = "/Applications/Overwatch.app/Contents/MacOS/overwatch";
+
+test("connecting an agent gives the command that registers this app with it", async ({ page }) => {
+  await recordClipboard(page);
+  await page.goto("/");
+  // Pi has no MCP of its own, so it is passed over.
+  await settle(page, "get_status", status({ agents: ["pi", "codex"] }));
+
+  await page.getByRole("button", { name: "Connect agents" }).click();
+  const dialog = page.getByRole("dialog", { name: "Connect an agent" });
+  await expect(dialog.getByText("Finding where Overwatch is…")).toBeVisible();
+  await settle(page, "get_mcp_server", { command: INSTALLED, args: ["mcp"] });
+
+  // The first agent found on this machine is the one offered.
+  const agent = dialog.getByRole("group", { name: "Agent" });
+  await expect(agent.getByRole("button", { name: "Codex" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await dialog.getByRole("button", { name: "Copy command" }).click();
+  expect(await lastCopied(page)).toBe(`codex mcp add overwatch -- ${INSTALLED} mcp`);
+
+  await agent.getByRole("button", { name: "Claude Code" }).click();
+  await expect(
+    dialog.getByText(`claude mcp add --scope user overwatch -- ${INSTALLED} mcp`),
+  ).toBeVisible();
+
+  await expect(agent.getByRole("button", { name: "Pi", exact: true })).toHaveCount(0);
+
+  await agent.getByRole("button", { name: "Other" }).click();
+  await dialog.getByRole("button", { name: "Copy configuration" }).click();
+  expect(JSON.parse((await lastCopied(page)) ?? "")).toEqual({
+    mcpServers: { overwatch: { command: INSTALLED, args: ["mcp"] } },
+  });
+
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await expect(dialog).toBeHidden();
+});
+
+test("connecting recovers from a failure, and warns when macOS runs a temporary copy", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await settle(page, "get_status", status());
+  await page.getByRole("button", { name: "Connect agents" }).click();
+  const dialog = page.getByRole("dialog", { name: "Connect an agent" });
+
+  await expect
+    .poll(() => page.evaluate(() => window.__ipc.pendingCount("get_mcp_server")))
+    .toBeGreaterThan(0);
+  await page.evaluate(
+    (failure) => window.__ipc.settle("get_mcp_server", "reject", failure),
+    engineError("read_failed", "could not read where this app is: denied"),
+  );
+  await expect(dialog.getByRole("alert")).toHaveText("Could not find where Overwatch is.");
+  await expect(dialog.getByText("could not read where this app is: denied")).toBeVisible();
+
+  await dialog.getByRole("button", { name: "Retry" }).click();
+  const translocated =
+    "/private/var/folders/x1/T/AppTranslocation/0A1B/d/Overwatch.app/Contents/MacOS/overwatch";
+  await settle(page, "get_mcp_server", { command: translocated, args: ["mcp"] });
+  await expect(dialog.getByRole("alert")).toContainText("temporary copy");
+  // With no agent found here, Claude Code is offered.
+  await expect(dialog.getByText(`-- ${translocated} mcp`)).toBeVisible();
 });

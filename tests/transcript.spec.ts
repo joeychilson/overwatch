@@ -19,6 +19,7 @@ import {
   transcript,
   turn,
 } from "./ipc.ts";
+import { lastCopied, recordClipboard } from "./clipboard.ts";
 
 test.beforeEach(async ({ page }) => {
   await installIpc(page);
@@ -230,30 +231,6 @@ test("a session that could not be opened offers a retry", async ({ page }) => {
   await expect(page.getByRole("alert")).toContainText("was not found");
   await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
 });
-
-/** Keep what the page puts on the clipboard, since a test cannot read the system's. */
-async function recordClipboard(page: Page) {
-  await page.addInitScript(() => {
-    const copied: string[] = [];
-    (window as unknown as { __copied: string[] }).__copied = copied;
-    Object.defineProperty(navigator, "clipboard", {
-      value: {
-        writeText: async (text: string) => void copied.push(text),
-        write: async (items: ClipboardItem[]) => {
-          for (const item of items) copied.push(await (await item.getType("text/plain")).text());
-        },
-      },
-    });
-  });
-}
-
-/** What the page last put on the clipboard. */
-async function lastCopied(page: Page) {
-  await expect
-    .poll(() => page.evaluate(() => (window as unknown as { __copied: string[] }).__copied.length))
-    .toBeGreaterThan(0);
-  return page.evaluate(() => (window as unknown as { __copied: string[] }).__copied.at(-1));
-}
 
 test("a message, a block of code and a tool's output each copy as they were recorded", async ({
   page,

@@ -13,8 +13,8 @@ use tauri_plugin_opener::OpenerExt;
 use crate::error::{Error, Result};
 use crate::index::Index;
 use crate::session::{
-    Filter, HourTotals, Mark, Mention, ModelUsage, Overview, ProjectUsage, Searched, Session,
-    SessionPage, Status, Transcript,
+    Filter, HourTotals, Mark, McpServer, Mention, ModelUsage, Overview, ProjectUsage, Searched,
+    Session, SessionPage, Status, Transcript,
 };
 
 /// The event emitted when the engine's status changes: after each scan, and
@@ -208,6 +208,29 @@ pub fn save_card<R: Runtime>(app: AppHandle<R>, name: String, png: String) -> Re
     Ok(path.display().to_string())
 }
 
+/// How an agent starts the MCP server: this executable, by its full path, with
+/// the argument that makes it the server rather than the app.
+///
+/// # Errors
+///
+/// Returns an error when the system cannot say where this executable is, or
+/// its path is not text an agent's configuration could hold.
+#[tauri::command(async)]
+pub fn get_mcp_server() -> Result<McpServer> {
+    let program = std::env::current_exe().map_err(|source| Error::Read {
+        path: "where this app is".into(),
+        source,
+    })?;
+    let command = program
+        .into_os_string()
+        .into_string()
+        .map_err(|path| Error::Invalid(format!("this app's path is not text: {path:?}")))?;
+    Ok(McpServer {
+        command,
+        args: vec![crate::mcp::SERVE.to_owned()],
+    })
+}
+
 /// Bring the app's window forward, at a destination when one is given.
 #[tauri::command(async)]
 pub fn open_window<R: Runtime>(app: AppHandle<R>, path: Option<String>) {
@@ -240,6 +263,7 @@ pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         list_hours,
         get_status,
         save_card,
+        get_mcp_server,
         open_window,
         quit,
     ])

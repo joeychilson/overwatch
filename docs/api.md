@@ -1,6 +1,6 @@
 # API
 
-The engine is reached through eighteen Tauri commands. Rust owns discovery,
+The engine is reached through nineteen Tauri commands. Rust owns discovery,
 parsing, every query, and the requests for subscription limits; the frontend
 selects and presents. No runtime server route exists.
 
@@ -46,6 +46,7 @@ one and are written by hand.
 | `list_hours`           | `since?`, `until?`         | `HourTotals[]`   |
 | `get_status`           | —                          | `Status`         |
 | `save_card`            | `name`, `png`              | `string`         |
+| `get_mcp_server`       | —                          | `McpServer`      |
 | `open_window`          | `path?`                    | —                |
 | `quit`                 | —                          | —                |
 
@@ -62,6 +63,11 @@ name a file directly in that folder; a name already taken gets a number rather
 than displacing what is there. `png` is the image's bytes in base64, as a
 canvas's data URL carries them, and anything that is not a PNG is refused. The
 answer is the path it was written to.
+
+`get_mcp_server` answers how an agent starts Overwatch's MCP server: `command`
+is this executable's full path, and `args` what follows it. The window turns it
+into each agent's command for registering the server; the server itself is
+described in [the architecture](architecture.md#agents-over-mcp).
 
 `get_status` never waits for a scan, and no command starts one: the engine
 scans at startup and every five seconds after. It emits `index_changed`,

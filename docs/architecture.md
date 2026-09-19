@@ -165,6 +165,9 @@ Coding agents can ask Overwatch about the same history, through the Model
 Context Protocol. The server is the app's own executable run as
 `overwatch mcp`: an agent starts it, speaks JSON-RPC to it a line at a time on
 standard input and output, and it ends when the agent closes its input.
+**Connect agents** in the sidebar gives the command that registers it with
+each agent, or the configuration that does; Overwatch never writes an agent's
+files itself.
 
 The server only reads. It opens `index.sqlite` read-only for each request,
 beside the app that keeps it current, and never scans, so there is one writer
