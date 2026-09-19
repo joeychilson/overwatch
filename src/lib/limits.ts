@@ -3,6 +3,8 @@
  *
  * The Subscriptions page and the menu bar item's panel order and colour
  * accounts by this, and the sidebar marks the page with it, so all three agree.
+ * The panel also picks out the accounts the menu bar's figure follows, by the
+ * engine's rule.
  */
 import type { Account, Limit, Provider } from "./api/backend.ts";
 import type { MarkName } from "./components/marks/marks.ts";
@@ -75,6 +77,31 @@ export function band(limit: Limit, now: number): Band {
   // A limit on pace to run out before it resets is running low, whatever is left.
   if (remaining <= 30 || runsOut(limit, now) !== null) return "low";
   return "fine";
+}
+
+/**
+ * The limit on all usage with the least left, which stops work first; null
+ * when an account has none. The first of equals is kept.
+ */
+export function tightest(account: Account, now: number): Limit | null {
+  let found: Limit | null = null;
+  for (const limit of account.limits) {
+    if (limit.scope === null && (found === null || left(limit, now) < left(found, now))) {
+      found = limit;
+    }
+  }
+  return found;
+}
+
+/**
+ * The accounts the menu bar's figure is drawn from, as the engine picks them:
+ * those in use, or else those used last, or else every account.
+ */
+export function followed(accounts: readonly Account[], now: number): Account[] {
+  const used = accounts.flatMap((account) => (account.usedAt === null ? [] : [account.usedAt]));
+  if (used.length === 0) return [...accounts];
+  const since = Math.min(Math.max(...used), now - IN_USE);
+  return accounts.filter((account) => account.usedAt !== null && account.usedAt >= since);
 }
 
 /**

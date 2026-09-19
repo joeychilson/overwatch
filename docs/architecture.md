@@ -148,10 +148,13 @@ provider each usage record names, or when its limits rose between reads, which
 catches use from other devices and the providers' own apps. The item shows the
 tightest limit on all usage among the subscriptions in use, or among those used
 last when none is, and its ring is drawn as far round as that limit has left.
-Clicking it drops down a panel with every account's limits, those in use first,
-which hides once anything else is clicked. Closing the window hides it rather
-than quitting and takes the app out of the Dock, and Open at Login starts the
-app that way, so limits are watched from the menu bar until Overwatch is quit.
+Clicking it drops down a panel with what today has used and every account's
+limits: the accounts the figure follows come first and open, and the rest stand
+one line each until opened. An account that can no longer be read keeps its
+last limits, faded and dated. The panel hides once anything else is clicked.
+Closing the window hides it rather than quitting and takes the app out of the
+Dock, and Open at Login starts the app that way, so limits are watched from the
+menu bar until Overwatch is quit.
 
 None of these endpoints is publicly documented. An answer that stops matching
 what the reader expects is reported as changed, never shown as zero.
