@@ -1,6 +1,6 @@
 # API
 
-The engine is reached through thirteen Tauri commands. Rust owns discovery,
+The engine is reached through fifteen Tauri commands. Rust owns discovery,
 parsing, every query, and the requests for subscription limits; the frontend
 selects and presents. No runtime server route exists.
 
@@ -40,6 +40,7 @@ one and are written by hand.
 | `list_models`         | `since?`, `until?`        | `ModelUsage[]`   |
 | `list_projects`       | `since?`, `until?`        | `ProjectUsage[]` |
 | `get_overview`        | `since?`, `until?`        | `Overview`       |
+| `list_hours`          | `since?`, `until?`        | `HourTotals[]`   |
 | `get_status`          | —                         | `Status`         |
 | `save_card`           | `name`, `png`             | `string`         |
 | `open_window`         | `path?`                   | —                |
@@ -132,8 +133,8 @@ transcript holds, so opening a session parses it once for both.
 
 ### Periods, days and timezones
 
-`list_models`, `list_projects` and `get_overview` count usage by when it
-happened, to the quarter hour, so a session active across the start of a period
+`list_models`, `list_projects`, `get_overview` and `list_hours` count usage by
+when it happened, to the quarter hour, so a session active across the start of a period
 contributes only its usage inside the period. `Overview.sessions` counts the
 sessions that used tokens in the period, each `DayTotals.sessions` those that
 did that day, and `DayTotals.byAgent` splits the day by agent. `ModelUsage.daily`
@@ -145,3 +146,10 @@ sessions that used tokens in the period, and totals whole sessions.
 `get_overview` buckets days in this machine's own zone, which is the reader's,
 so a day breaks at local midnight, and a day beside a clock change is 23 or 25
 hours long rather than shifted by an hour.
+
+`list_hours` answers a `HourTotals` for each local hour of the period with any
+usage, oldest first, split by agent as a day is; the overview draws today with
+it. An hour is named by the instant it starts, and every one is an hour long:
+the hour repeated when clocks go back is two, and in a zone such as India's an
+hour starts on the half hour of universal time. `list_sessions` narrows to an
+hour as it does to any period, from its instant to the instant before the next.

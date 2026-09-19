@@ -1,7 +1,11 @@
 /** The periods and calendar days a view of usage is cut into, in local time. */
 
-/** Periods offered, in whole days back from now; `null` is all of history. */
+/**
+ * Periods offered, in whole days back from now, today included; `null` is all
+ * of history. A period of one day is today.
+ */
 export const PERIODS: readonly { value: number | null; label: string }[] = [
+  { value: 1, label: "Today" },
   { value: 7, label: "7 days" },
   { value: 30, label: "30 days" },
   { value: 90, label: "90 days" },
@@ -11,12 +15,13 @@ export const PERIODS: readonly { value: number | null; label: string }[] = [
 /** The period a page shows until another is chosen. */
 const DEFAULT_PERIOD = 30;
 
-/** A period as an address names it — `7`, `30`, `90` or `all` — or the page's default. */
+/** A period as an address names it — `today`, `7`, `30`, `90` or `all` — or the page's default. */
 export function parsePeriod(
   value: string | null,
   fallback: number | null = DEFAULT_PERIOD,
 ): number | null {
   if (value === "all") return null;
+  if (value === "today") return 1;
   return PERIODS.find((period) => String(period.value) === value)?.value ?? fallback;
 }
 
@@ -26,6 +31,7 @@ export function periodParam(
   fallback: number | null = DEFAULT_PERIOD,
 ): string | null {
   if (days === fallback) return null;
+  if (days === 1) return "today";
   return days === null ? "all" : String(days);
 }
 
@@ -70,4 +76,19 @@ export function parseDayKey(key: string | null): number | null {
   const day = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).getTime();
   // A key such as 2026-02-30 rolls over to another day; it names none.
   return dayKey(day) === key ? day : null;
+}
+
+/** An hour, in milliseconds. */
+export const HOUR = 3_600_000;
+
+/**
+ * The instant an hour named in an address starts, or null when it names none.
+ *
+ * An hour is named by its instant rather than by the clock, because the hour
+ * repeated when clocks go back is two hours with one reading.
+ */
+export function parseHour(value: string | null): number | null {
+  if (value === null || !/^\d{1,16}$/.test(value)) return null;
+  const at = Number(value);
+  return Number.isSafeInteger(at) ? at : null;
 }

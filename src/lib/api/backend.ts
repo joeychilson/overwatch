@@ -2,7 +2,7 @@
  * The engine's command surface.
  *
  * Every type here is written by hand and mirrors a Rust type in
- * `src-tauri/src/session.rs` one to one. There are fourteen commands and about
+ * `src-tauri/src/session.rs` one to one. There are fifteen commands and about
  * two dozen shapes, which is small enough to keep honest by reading.
  *
  * Counts and money are plain numbers. The largest total any agent records is a
@@ -261,7 +261,21 @@ export interface DayTotals {
   byAgent: AgentDay[];
 }
 
-/** One agent's share of a day. */
+/** One local hour's totals. */
+export interface HourTotals {
+  /**
+   * The instant the local hour starts. The hour repeated when clocks go back
+   * is two hours, each with its own instant.
+   */
+  hour: number;
+  sessions: number;
+  tokens: Tokens;
+  /** Null when none of that hour's usage has a price. */
+  costUsd: number | null;
+  byAgent: AgentDay[];
+}
+
+/** One agent's share of a day, or of an hour. */
 export interface AgentDay {
   agent: Agent;
   tokens: number;
@@ -378,6 +392,11 @@ export function listProjects(since?: number, until?: number): Promise<ProjectUsa
 /** Totals for the overview, with days that break at local midnight. */
 export function getOverview(since?: number, until?: number): Promise<Overview> {
   return call<Overview>("get_overview", { since, until });
+}
+
+/** Totals for each local hour of a period that had any usage, oldest first. */
+export function listHours(since?: number, until?: number): Promise<HourTotals[]> {
+  return call<HourTotals[]>("list_hours", { since, until });
 }
 
 /** What indexing has done so far. Never waits for a scan. */

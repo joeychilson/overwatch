@@ -147,6 +147,27 @@ export function formatWhen(at: Maybe, now: Date = new Date()): string {
   return formatDay(at, false, now);
 }
 
+/** The hour an instant starts, such as `3 PM`. */
+export function formatHour(at: Maybe): string {
+  const date = instant(at);
+  if (!date) return UNKNOWN;
+  return date.toLocaleTimeString(undefined, { hour: "numeric" });
+}
+
+/**
+ * The hours from the one starting at `from` through the one starting at `to`,
+ * such as `2 – 3 PM`, with the day unless it is today's.
+ */
+export function formatHours(from: number, to: number, now: Date = new Date()): string {
+  const today = startOfDay(from) === startOfDay(now.getTime());
+  return new Intl.DateTimeFormat(undefined, {
+    month: today ? undefined : "short",
+    day: today ? undefined : "numeric",
+    year: new Date(from).getFullYear() === now.getFullYear() ? undefined : "numeric",
+    hour: "numeric",
+  }).formatRange(from, Math.max(from, to) + 3_600_000);
+}
+
 /** A time of day in the reader's own zone, such as `5:24 PM`. */
 export function formatTime(at: Maybe): string {
   const date = instant(at);

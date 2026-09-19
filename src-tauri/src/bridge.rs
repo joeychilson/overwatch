@@ -16,7 +16,8 @@ use tauri_plugin_opener::OpenerExt;
 use crate::error::{Error, Result};
 use crate::index::Index;
 use crate::session::{
-    Filter, Mark, ModelUsage, Overview, ProjectUsage, Session, SessionPage, Status, Transcript,
+    Filter, HourTotals, Mark, ModelUsage, Overview, ProjectUsage, Session, SessionPage, Status,
+    Transcript,
 };
 
 /// The event emitted when the engine's status changes: after each scan, and
@@ -131,6 +132,17 @@ pub fn get_overview(
     index.read(|store| store.overview(since, until))
 }
 
+/// Totals for each local hour of a period that had any usage, for drawing a
+/// day by the hour.
+#[tauri::command(async)]
+pub fn list_hours(
+    index: State<'_, Arc<Index>>,
+    since: Option<i64>,
+    until: Option<i64>,
+) -> Result<Vec<HourTotals>> {
+    index.read(|store| store.hours(since, until))
+}
+
 /// What indexing has done so far. Never waits for a scan.
 #[tauri::command(async)]
 pub fn get_status(index: State<'_, Arc<Index>>) -> Status {
@@ -188,6 +200,7 @@ pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         list_models,
         list_projects,
         get_overview,
+        list_hours,
         get_status,
         save_card,
         open_window,

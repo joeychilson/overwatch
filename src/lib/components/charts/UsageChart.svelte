@@ -1,33 +1,37 @@
 <script lang="ts">
   /**
-   * Usage across a period, a column per day stacked by agent.
+   * Usage across a period, a column per day stacked by agent, or per hour when
+   * the period is a single day and its hours are given.
    *
    * Every day of the period has a column, idle ones included, so a quiet week
-   * reads as quiet instead of vanishing. A long period is drawn a week to a
-   * column, which keeps each one wide enough to point at.
+   * reads as quiet instead of vanishing, and so does every hour of a day, those
+   * still to come included. A long period is drawn a week to a column, which
+   * keeps each one wide enough to point at.
    *
    * The chart is one slider: pointing at a column, or moving along with the
    * arrow keys, reads that column out, in a card and to assistive technology.
    * Clicking a column, or pressing Enter on it, opens the sessions that used
-   * tokens in its day or week.
+   * tokens in its hour, day or week.
    */
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
-  import type { Agent, DayTotals } from "#lib/api/backend.ts";
+  import type { Agent, AgentDay, DayTotals, HourTotals } from "#lib/api/backend.ts";
   import { agentDisplay } from "#lib/agents.ts";
-  import { formatDay, formatMeasure, type Measure } from "#lib/format.ts";
+  import { formatDay, formatHour, formatHours, formatMeasure, type Measure } from "#lib/format.ts";
   import { addDays, dayKey } from "#lib/periods.ts";
-  import { columns } from "./columns.ts";
+  import { columns, hours as hourColumns } from "./columns.ts";
   import { tickLabel, ticks } from "./ticks.ts";
 
   interface Props {
     days: readonly DayTotals[];
+    /** The day's usage by the hour, which draws the day an hour to a column. */
+    hours?: readonly HourTotals[];
     /** Local midnight when the period began; unset for all of history. */
     since: number | undefined;
     measure: Measure;
   }
 
-  let { days, since, measure }: Props = $props();
+  let { days, hours, since, measure }: Props = $props();
 
   /** Heights in pixels: the whole chart, the dates beneath it, and headroom above. */
   const HEIGHT = 208;
@@ -56,12 +60,17 @@
   }
 
   const chart = $derived.by(() => {
-    const laid = columns(since ?? days[0]?.day ?? Date.now());
+    const laid = hours
+      ? hourColumns(since ?? Date.now())
+      : columns(since ?? days[0]?.day ?? Date.now());
+    const spans: { start: number; byAgent: AgentDay[] }[] = hours
+      ? hours.map((hour) => ({ start: hour.hour, byAgent: hour.byAgent }))
+      : days.map((day) => ({ start: day.day, byAgent: day.byAgent }));
     const drawn: Column[] = laid.starts.map((start) => ({ start, values: new Map(), total: null }));
-    for (const day of days) {
-      const column = drawn[laid.of(day.day) ?? -1];
+    for (const span of spans) {
+      const column = drawn[laid.of(span.start) ?? -1];
       if (!column) continue;
-      for (const share of day.byAgent) {
+      for (const share of span.byAgent) {
         const value = measure === "cost" ? share.costUsd : share.tokens;
         column.values.set(share.agent, add(column.values.get(share.agent), value));
         column.total = add(column.total, value);
@@ -73,7 +82,7 @@
       for (const [agent, value] of column.values) totals.set(agent, add(totals.get(agent), value));
     }
     const agents = [...totals].sort(([, a], [, b]) => (b ?? 0) - (a ?? 0));
-    return { columns: drawn, weekly: laid.weekly, agents };
+    return { columns: drawn, grain: laid.grain, agents };
   });
 
   const axis = $derived(ticks(Math.max(0, ...chart.columns.map((column) => column.total ?? 0))));
@@ -110,11 +119,20 @@
     }),
   );
 
-  /** The latest column and every so often back from it carry a date, as room allows. */
+  /**
+   * The columns that carry a label, as room allows: the latest day and every so
+   * often back from it, or midnight and every so many hours on from it, in a
+   * step that divides the day.
+   */
   const dated = $derived.by(() => {
-    const every = Math.max(1, Math.ceil(72 / band));
+    const room = Math.max(1, Math.ceil(72 / band));
     const indices: number[] = [];
-    for (let index = chart.columns.length - 1; index >= 0; index -= every) indices.push(index);
+    if (chart.grain === "hour") {
+      const every = [1, 2, 3, 4, 6, 12].find((step) => step >= room) ?? 12;
+      for (let index = 0; index < chart.columns.length; index += every) indices.push(index);
+      return indices;
+    }
+    for (let index = chart.columns.length - 1; index >= 0; index -= room) indices.push(index);
     return indices;
   });
 
@@ -126,7 +144,10 @@
   });
 
   function heading(column: Column) {
-    return chart.weekly ? `Week of ${formatDay(column.start)}` : formatDay(column.start, true);
+    if (chart.grain === "hour") return formatHours(column.start, column.start);
+    return chart.grain === "week"
+      ? `Week of ${formatDay(column.start)}`
+      : formatDay(column.start, true);
   }
 
   function describe(column: Column | undefined) {
@@ -137,10 +158,14 @@
     return `${heading(column)}: ${values.length > 0 ? values.join(", ") : "no usage"}`;
   }
 
-  /** Open the sessions that used tokens in a column's day or week, when any did. */
+  /** Open the sessions that used tokens in a column's hour, day or week, when any did. */
   function open(column: Column | undefined) {
     if (!column || column.values.size === 0) return;
-    const last = chart.weekly ? addDays(column.start, 6) : column.start;
+    if (chart.grain === "hour") {
+      void goto(`${resolve("/sessions")}?hour=${column.start}`);
+      return;
+    }
+    const last = chart.grain === "week" ? addDays(column.start, 6) : column.start;
     void goto(`${resolve("/sessions")}?from=${dayKey(column.start)}&to=${dayKey(last)}`);
   }
 
@@ -178,7 +203,7 @@
       height={HEIGHT}
       role="slider"
       tabindex="0"
-      aria-label="{measure === 'cost' ? 'Cost' : 'Tokens'} by {chart.weekly ? 'week' : 'day'}"
+      aria-label="{measure === 'cost' ? 'Cost' : 'Tokens'} by {chart.grain}"
       aria-valuemin={0}
       aria-valuemax={chart.columns.length - 1}
       aria-valuenow={active ?? chart.columns.length - 1}
@@ -222,7 +247,8 @@
             class="fill-muted text-[11px]"
             x={Math.min(width - 22, Math.max(GUTTER + 22, GUTTER + (index + 0.5) * band))}
             y={HEIGHT - 6}
-            text-anchor="middle">{formatDay(column.start)}</text
+            text-anchor="middle"
+            >{chart.grain === "hour" ? formatHour(column.start) : formatDay(column.start)}</text
           >
         {/if}
       {/each}

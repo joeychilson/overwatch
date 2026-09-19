@@ -87,11 +87,13 @@ const SHOWN = 5;
 
 /** What a period is called on the card. */
 function periodName(days: number | null): string {
+  if (days === 1) return "Today";
   return days === null ? "All time" : `Last ${days} days`;
 }
 
 /** The part of a file name a period contributes. */
 function periodSlug(days: number | null): string {
+  if (days === 1) return "today";
   return days === null ? "all-time" : `${days}-days`;
 }
 

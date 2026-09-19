@@ -24,6 +24,7 @@
   import { afterNavigate, goto } from "$app/navigation";
   import { page } from "$app/state";
   import Calendar from "@lucide/svelte/icons/calendar";
+  import Clock from "@lucide/svelte/icons/clock";
   import Folder from "@lucide/svelte/icons/folder";
   import Layers from "@lucide/svelte/icons/layers";
   import Search from "@lucide/svelte/icons/search";
@@ -37,9 +38,11 @@
   import { agentName, parseAgent } from "#lib/agents.ts";
   import { REPLACE, parseSort, sortParam, withParams } from "#lib/address.ts";
   import {
+    HOUR,
     PERIODS,
     addDays,
     parseDayKey,
+    parseHour,
     parsePeriod,
     periodParam,
     periodStart,
@@ -51,6 +54,7 @@
     formatCount,
     formatCountCompact,
     formatDays,
+    formatHours,
     formatUsd,
     projectName,
   } from "#lib/format.ts";
@@ -88,6 +92,14 @@
       ? null
       : { from, to, label: formatDays(from, to, clock.now) };
   });
+  /**
+   * The hour of a column of the overview's chart of today, narrower still than
+   * a column's days, so it takes their place too.
+   */
+  const hour = $derived.by(() => {
+    const at = parseHour(params.get("hour"));
+    return at === null ? null : { at, label: formatHours(at, at, clock.now) };
+  });
   /** The project, from a row, matched whole. */
   const project = $derived(params.get("project"));
   /** The model, from a row or the Models page, matched whole. */
@@ -116,9 +128,10 @@
       search: params.get("q")?.trim() || null,
       agents: agent === null ? [] : [agent],
       // A column's days run from the first's midnight to the instant before
-      // the one after the last, however long the days; a period has no end.
-      since: days?.from ?? periodStart(period) ?? null,
-      until: days === null ? null : addDays(days.to, 1) - 1,
+      // the one after the last, however long the days, and its hour to the
+      // instant before the next; a period has no end.
+      since: hour?.at ?? days?.from ?? periodStart(period) ?? null,
+      until: hour !== null ? hour.at + HOUR - 1 : days === null ? null : addDays(days.to, 1) - 1,
       project,
       model,
       sort,
@@ -211,7 +224,7 @@
         : `${formatCount(loaded)} of ${formatCount(list.total)} ${named}`;
     const tokens = list.tokens.total > 0 ? `${formatCountCompact(list.tokens.total)} tokens` : null;
     const cost = list.costUsd === null ? null : formatUsd(list.costUsd);
-    return [counted, days?.label, tokens, cost].filter(Boolean).join(" · ");
+    return [counted, hour?.label ?? days?.label, tokens, cost].filter(Boolean).join(" · ");
   });
 </script>
 
@@ -220,11 +233,12 @@
 <PageHeader title="Sessions" description={describing}>
   {#snippet icon()}<SquareTerminal {...pageIcon} />{/snippet}
   {#snippet actions()}
-    <!-- A column's days are no period, so while they narrow the list none is chosen. -->
+    <!-- A column's days or hour are no period, so while they narrow the list none is chosen. -->
     <Segmented
       options={PERIODS}
-      value={days === null ? period : undefined}
-      onchange={(next) => change({ period: periodParam(next, ALL_TIME), from: null, to: null })}
+      value={days === null && hour === null ? period : undefined}
+      onchange={(next) =>
+        change({ period: periodParam(next, ALL_TIME), from: null, to: null, hour: null })}
     />
   {/snippet}
 </PageHeader>
@@ -297,7 +311,17 @@
     </a>
   {/if}
 
-  {#if days !== null}
+  {#if hour !== null}
+    <a
+      class={CHIP}
+      href={withParams(page.url, { hour: null })}
+      aria-label="Show every hour, not only {hour.label}"
+    >
+      <Clock class="shrink-0 text-muted" size={14} aria-hidden="true" />
+      <span>{hour.label}</span>
+      <X class="shrink-0 text-muted" size={14} aria-hidden="true" />
+    </a>
+  {:else if days !== null}
     <a
       class={CHIP}
       href={withParams(page.url, { from: null, to: null })}
@@ -330,7 +354,11 @@
     <p class="text-muted">
       {search.trim() !== ""
         ? "Try a different search."
-        : days !== null || period !== ALL_TIME || project !== null || model !== null
+        : hour !== null ||
+            days !== null ||
+            period !== ALL_TIME ||
+            project !== null ||
+            model !== null
           ? `No ${noun} match what the list is narrowed to.`
           : agent === null
             ? "No conversations have been indexed yet."

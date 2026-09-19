@@ -13,7 +13,7 @@ It reads what **Claude Code, Codex, OpenCode, Pi, and Grok Build** already keep 
 
 <img src=".github/assets/overwatch-menu-bar.png" alt="Overwatch menu bar panel listing Claude, Codex, OpenCode Go, and Grok accounts, those in use first, with each limit's time to reset and how much is left" width="240" align="right">
 
-- **Overview**: tokens and cost by agent, plus the top models, projects, and sessions.
+- **Overview**: tokens and cost by agent, plus the top models, projects, and sessions. Today is drawn by the hour.
 - **Share**: any period as a card — your top models and agents side by side — saved to your Desktop as a PNG.
 - **Sessions**: search every session and read it as a conversation with a timeline of turns and tool calls. Copy a message, a block of code, a tool's output, or the whole conversation as Markdown.
 - **Models**: usage, cost, and trend for each model.

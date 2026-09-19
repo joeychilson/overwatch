@@ -20,8 +20,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::Result;
 use crate::session::{
-    Account, Agent, AgentDay, AgentTotals, DayTotals, Filter, ModelDay, ModelSlice, ModelUsage,
-    Overview, ProjectUsage, Provider, Session, SessionPage, Tokens,
+    Account, Agent, AgentDay, AgentTotals, DayTotals, Filter, HourTotals, ModelDay, ModelSlice,
+    ModelUsage, Overview, ProjectUsage, Provider, Session, SessionPage, Tokens,
 };
 use crate::source::{Summary, Unit};
 
@@ -31,6 +31,34 @@ const SCHEMA: i64 = 9;
 
 /// The largest page the list will return, however much is asked for.
 const MAX_PAGE: i64 = 500;
+
+/// The local day a usage row's quarter hour falls in, as the instant of the
+/// midnight that starts it.
+///
+/// SQLite applies the local zone's rules to each instant, so a day beside a
+/// clock change is 23 or 25 hours long rather than shifted by an hour.
+const LOCAL_DAY: &str = "unixepoch(date(at / 1000, 'unixepoch', 'localtime'), 'utc') * 1000";
+
+/// The local hour a usage row's quarter hour falls in, as the instant it
+/// starts.
+///
+/// The zone's offset at the instant says how far into its local hour it is,
+/// so every span is an hour long. Grouping on the clock's reading would fold
+/// the hour repeated when clocks go back into one span of two hours, and whole
+/// hours of universal time would start half an hour off in zones such as
+/// India's.
+const LOCAL_HOUR: &str = "at - (at + (unixepoch(datetime(at / 1000, 'unixepoch', 'localtime')) \
+                          - at / 1000) * 1000) % 3600000";
+
+/// Usage within one span of local time, such as a day, split by agent.
+struct Span {
+    /// The instant it starts.
+    start: i64,
+    sessions: i64,
+    tokens: Tokens,
+    cost_usd: Option<f64>,
+    by_agent: Vec<AgentDay>,
+}
 
 /// The index database.
 pub struct Store {
@@ -432,16 +460,14 @@ impl Store {
         })?;
         let mut models: Vec<ModelUsage> = rows.collect::<rusqlite::Result<_>>()?;
 
-        let mut days = self.connection.prepare(
-            "SELECT model,
-                    unixepoch(date(at / 1000, 'unixepoch', 'localtime'), 'utc') * 1000 AS day,
-                    SUM(total), SUM(cost_usd)
+        let mut days = self.connection.prepare(&format!(
+            "SELECT model, {LOCAL_DAY} AS day, SUM(total), SUM(cost_usd)
              FROM usage
              WHERE model <> ''
                AND at >= COALESCE(?1, at)
                AND at <= COALESCE(?2, at)
-             GROUP BY model, day ORDER BY day",
-        )?;
+             GROUP BY model, day ORDER BY day"
+        ))?;
         let mut rows = days.query(params![since, until])?;
         while let Some(row) = rows.next()? {
             let name: String = row.get(0)?;
@@ -509,45 +535,17 @@ impl Store {
             })?
             .collect::<rusqlite::Result<_>>()?;
 
-        // A row for each agent on each day, folded into days that keep each
-        // agent's share.
-        let mut days = self.connection.prepare(
-            "SELECT unixepoch(date(at / 1000, 'unixepoch', 'localtime'), 'utc') * 1000 AS day,
-                    agent, COUNT(DISTINCT session_id),
-                    SUM(input), SUM(output), SUM(cache_read), SUM(cache_write),
-                    SUM(reasoning), SUM(total), SUM(cost_usd)
-             FROM usage
-             WHERE at >= COALESCE(?1, at) AND at <= COALESCE(?2, at)
-             GROUP BY day, agent ORDER BY day, agent",
-        )?;
-        let mut daily: Vec<DayTotals> = Vec::new();
-        let mut rows = days.query(params![since, until])?;
-        while let Some(row) = rows.next()? {
-            let day = row.get(0)?;
-            let tokens = read_tokens(row, 3)?;
-            let cost_usd: Option<f64> = row.get(9)?;
-            if daily.last().is_none_or(|last| last.day != day) {
-                daily.push(DayTotals {
-                    day,
-                    sessions: 0,
-                    tokens: Tokens::default(),
-                    cost_usd: None,
-                    by_agent: Vec::new(),
-                });
-            }
-            let totals = daily.last_mut().expect("the day was just added");
-            // A session belongs to one agent, so the agents' counts add up.
-            totals.sessions += row.get::<_, i64>(2)?;
-            totals.tokens.add(tokens);
-            if let Some(cost) = cost_usd {
-                *totals.cost_usd.get_or_insert(0.0) += cost;
-            }
-            totals.by_agent.push(AgentDay {
-                agent: row.get(1)?,
-                tokens: tokens.total,
-                cost_usd,
-            });
-        }
+        let daily = self
+            .spans(LOCAL_DAY, since, until)?
+            .into_iter()
+            .map(|span| DayTotals {
+                day: span.start,
+                sessions: span.sessions,
+                tokens: span.tokens,
+                cost_usd: span.cost_usd,
+                by_agent: span.by_agent,
+            })
+            .collect();
 
         let mut tokens = Tokens::default();
         let mut cost_usd = None;
@@ -567,6 +565,70 @@ impl Store {
             by_agent,
             daily,
         })
+    }
+
+    /// Totals for each local hour of a period that had any usage, oldest
+    /// first, for drawing a day by the hour.
+    ///
+    /// Sessions are those that used tokens in the hour, and tokens and cost
+    /// what was used within it. Hours are this machine's, as days are.
+    pub fn hours(&self, since: Option<i64>, until: Option<i64>) -> Result<Vec<HourTotals>> {
+        Ok(self
+            .spans(LOCAL_HOUR, since, until)?
+            .into_iter()
+            .map(|span| HourTotals {
+                hour: span.start,
+                sessions: span.sessions,
+                tokens: span.tokens,
+                cost_usd: span.cost_usd,
+                by_agent: span.by_agent,
+            })
+            .collect())
+    }
+
+    /// Usage within a period in spans of local time, oldest first, each split
+    /// by agent. `start` is [`LOCAL_DAY`] or [`LOCAL_HOUR`], the SQL placing a
+    /// usage row in its span; nothing else reaches the statement's text.
+    fn spans(&self, start: &str, since: Option<i64>, until: Option<i64>) -> Result<Vec<Span>> {
+        // A row for each agent in each span, folded into spans that keep each
+        // agent's share.
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {start} AS span, agent, COUNT(DISTINCT session_id),
+                    SUM(input), SUM(output), SUM(cache_read), SUM(cache_write),
+                    SUM(reasoning), SUM(total), SUM(cost_usd)
+             FROM usage
+             WHERE at >= COALESCE(?1, at) AND at <= COALESCE(?2, at)
+             GROUP BY span, agent ORDER BY span, agent"
+        ))?;
+        let mut spans: Vec<Span> = Vec::new();
+        let mut rows = statement.query(params![since, until])?;
+        while let Some(row) = rows.next()? {
+            let start = row.get(0)?;
+            let tokens = read_tokens(row, 3)?;
+            let cost_usd: Option<f64> = row.get(9)?;
+            if spans.last().is_none_or(|last| last.start != start) {
+                spans.push(Span {
+                    start,
+                    sessions: 0,
+                    tokens: Tokens::default(),
+                    cost_usd: None,
+                    by_agent: Vec::new(),
+                });
+            }
+            let span = spans.last_mut().expect("the span was just added");
+            // A session belongs to one agent, so the agents' counts add up.
+            span.sessions += row.get::<_, i64>(2)?;
+            span.tokens.add(tokens);
+            if let Some(cost) = cost_usd {
+                *span.cost_usd.get_or_insert(0.0) += cost;
+            }
+            span.by_agent.push(AgentDay {
+                agent: row.get(1)?,
+                tokens: tokens.total,
+                cost_usd,
+            });
+        }
+        Ok(spans)
     }
 
     /// Every subscription's last successfully read limits.
@@ -1540,6 +1602,62 @@ mod tests {
                 )
                 .expect("formats");
             assert_eq!(starts, "00:00", "the day from {} ms", day.day);
+        }
+    }
+
+    #[test]
+    fn hours_are_whole_local_hours_even_beside_a_clock_change() {
+        let mut store = Store::memory().expect("opens");
+        // Every quarter hour through the days North America and Europe change
+        // their clocks in 2026: 8 and 29 March, 25 October and 1 November.
+        let quarters = |from: i64, to: i64| (from..to).step_by(900).map(|seconds| seconds * 1_000);
+        let spring = (1_772_841_600, 1_774_828_800); // 2026-03-07 to 2026-03-30, UTC
+        let autumn = (1_792_281_600, 1_793_620_800); // 2026-10-18 to midday 2026-11-02, UTC
+        let mut clock = summary("clock", Agent::Codex, 0, 0, false);
+        clock.usage = quarters(spring.0, spring.1)
+            .chain(quarters(autumn.0, autumn.1))
+            .map(|at| usage(at, 1))
+            .collect();
+        let recorded = clock.usage.len() as i64;
+        store.put(&unit("/c.jsonl"), &[clock]).expect("writes");
+
+        let hours = store.hours(None, None).expect("totals");
+        let counted: i64 = hours.iter().map(|hour| hour.tokens.total).sum();
+        assert_eq!(counted, recorded, "every quarter hour lands in an hour");
+        let daily = store.overview(None, None).expect("totals").daily;
+        assert_eq!(
+            daily.iter().map(|day| day.tokens.total).sum::<i64>(),
+            counted
+        );
+
+        // The ends of each run may start or stop part-way into a local hour.
+        for pair in hours.windows(2) {
+            let (before, after) = (&pair[0], &pair[1]);
+            let within = |at: i64| {
+                (spring.0 * 1_000 + 3_600_000..spring.1 * 1_000 - 3_600_000).contains(&at)
+                    || (autumn.0 * 1_000 + 3_600_000..autumn.1 * 1_000 - 3_600_000).contains(&at)
+            };
+            if !within(before.hour) || !within(after.hour) {
+                continue;
+            }
+            assert_eq!(
+                after.hour - before.hour,
+                3_600_000,
+                "from {} ms",
+                before.hour
+            );
+            // Grouping on the clock's reading would fold the hour repeated
+            // when clocks go back into one of eight quarters.
+            assert_eq!(after.tokens.total, 4, "the hour from {} ms", after.hour);
+            let minutes: String = store
+                .connection
+                .query_row(
+                    "SELECT strftime('%M', ?1 / 1000, 'unixepoch', 'localtime')",
+                    [after.hour],
+                    |row| row.get(0),
+                )
+                .expect("formats");
+            assert_eq!(minutes, "00", "the hour from {} ms", after.hour);
         }
     }
 

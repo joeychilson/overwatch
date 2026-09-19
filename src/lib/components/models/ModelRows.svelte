@@ -14,8 +14,9 @@
    *
    * Each row opens the sessions that used its model. The trend draws the
    * period a day or a week to a bar, so a model coming into use or falling out
-   * of it shows without a chart of its own, and the share is of all the
-   * period's tokens.
+   * of it shows without a chart of its own; a period of one day has no trend
+   * to draw, so it has no such column. The share is of all the period's
+   * tokens.
    */
   import type { ModelUsage } from "#lib/api/backend.ts";
   import AgentMark from "#lib/components/marks/AgentMark.svelte";
@@ -68,6 +69,9 @@
     ),
   );
 
+  /** Whether the period spans more than a day, and so has a trend to draw. */
+  const trending = $derived(laid.starts.length > 1);
+
   function trend(model: ModelUsage): number[] {
     const values = laid.starts.map(() => 0);
     for (const day of model.daily) {
@@ -86,7 +90,9 @@
     descending={sort.descending}
     onclick={() => onsort("model")}
   />
-  <span class="hidden w-24 shrink-0 lg:block">Trend</span>
+  {#if trending}
+    <span class="hidden w-24 shrink-0 lg:block">Trend</span>
+  {/if}
   <span class="hidden w-12 shrink-0 text-right sm:block">Share</span>
   <SortButton
     class="w-20 shrink-0 justify-end"
@@ -129,13 +135,15 @@
           <span class="truncate font-mono text-meta" title={model.model}>{model.model}</span>
         </span>
 
-        <span class="hidden w-24 shrink-0 lg:block">
-          <Sparkline
-            {values}
-            label="Used in {values.filter((value) => value > 0)
-              .length} of {values.length} {laid.weekly ? 'weeks' : 'days'}"
-          />
-        </span>
+        {#if trending}
+          <span class="hidden w-24 shrink-0 lg:block">
+            <Sparkline
+              {values}
+              label="Used in {values.filter((value) => value > 0)
+                .length} of {values.length} {laid.grain === 'week' ? 'weeks' : 'days'}"
+            />
+          </span>
+        {/if}
         <span class="hidden w-12 shrink-0 text-right text-meta text-muted tabular-nums sm:block">
           <!-- A model that was used is never shown as none of the total. -->
           {share > 0 && share < 0.5 ? "<1%" : formatPercent(share)}

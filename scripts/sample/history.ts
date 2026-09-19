@@ -13,6 +13,7 @@ import type {
   Agent,
   AgentDay,
   DayTotals,
+  HourTotals,
   Filter,
   ModelSlice,
   ModelUsage,
@@ -589,6 +590,36 @@ function overview(since?: number, until?: number): Overview {
   };
 }
 
+/** Each local hour's usage, where each session's falls when it began. */
+function hours(since?: number, until?: number): HourTotals[] {
+  const buckets = new Map<number, Session[]>();
+  for (const each of within(since, until)) {
+    const hour = new Date(each.startedAt);
+    hour.setMinutes(0, 0, 0);
+    buckets.set(hour.getTime(), [...(buckets.get(hour.getTime()) ?? []), each]);
+  }
+  return [...buckets]
+    .sort(([a], [b]) => a - b)
+    .map(([hour, group]) => ({
+      hour,
+      sessions: group.length,
+      tokens: tokens(sum(group.map((each) => each.tokens.total))),
+      costUsd: cost(group.map((each) => each.costUsd)),
+      byAgent: AGENTS.flatMap((agent) => {
+        const own = group.filter((each) => each.agent === agent);
+        return own.length === 0
+          ? []
+          : [
+              {
+                agent,
+                tokens: sum(own.map((each) => each.tokens.total)),
+                costUsd: cost(own.map((each) => each.costUsd)),
+              },
+            ];
+      }),
+    }));
+}
+
 function models(since?: number, until?: number): ModelUsage[] {
   const usage = new Map<string, ModelUsage>();
   for (const each of within(since, until)) {
@@ -712,6 +743,8 @@ export function answer(command: string, args: Record<string, unknown>): unknown 
       return status();
     case "get_overview":
       return overview(number(args.since), number(args.until));
+    case "list_hours":
+      return hours(number(args.since), number(args.until));
     case "list_models":
       return models(number(args.since), number(args.until));
     case "list_projects":

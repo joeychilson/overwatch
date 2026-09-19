@@ -15,6 +15,7 @@ import {
   sessionPage,
   settle,
   status,
+  tokens,
 } from "./ipc.ts";
 
 test.beforeEach(async ({ page }) => {
@@ -132,5 +133,57 @@ test("rankings order by the measure shown and open the period's sessions", async
   await page.getByRole("list", { name: "Top projects" }).getByRole("link").click();
   await expect(page).toHaveURL(
     /\/sessions\?period=30&sort=-cost&project=%2FUsers%2Fme%2FWorkspace%2Foverwatch$/,
+  );
+});
+
+test("today is drawn by the hour, and an hour opens the sessions of it", async ({ page }) => {
+  await page.goto("/?period=today");
+  await settle(page, "get_status", status());
+  const [midnight, nine] = await page.evaluate(() => {
+    const day = new Date();
+    day.setHours(0, 0, 0, 0);
+    // Hours are elapsed time from midnight, which a clock change does not move.
+    return [day.getTime(), day.getTime() + 9 * 3_600_000];
+  });
+  await expect.poll(() => page.evaluate(() => window.__ipc.pendingCount("get_overview"))).toBe(2);
+  await settle(page, "get_overview", overview());
+  await settle(page, "list_models", []);
+  await settle(page, "list_projects", []);
+  await settle(page, "list_hours", [
+    {
+      hour: nine,
+      sessions: 1,
+      tokens: tokens(300_000),
+      costUsd: 2,
+      byAgent: [{ agent: "codex", tokens: 300_000, costUsd: 2 }],
+    },
+  ]);
+  await settle(page, "list_sessions", sessionPage([]));
+
+  expect(await lastArgs(page, "list_hours")).toMatchObject({ since: midnight });
+  // Today is compared with yesterday up to the same time, not all of it.
+  const [, before] = (await page.evaluate(() =>
+    window.__ipc.calls.filter((call) => call.cmd === "get_overview").map((call) => call.args),
+  )) as { since?: number; until?: number }[];
+  expect(before?.until).toBeLessThan(midnight);
+  expect(before?.until).toBeGreaterThan(midnight - 24 * 3_600_000);
+
+  const chart = page.getByRole("slider", { name: "Tokens by hour" });
+  await chart.focus();
+  await page.keyboard.press("Home");
+  for (let hour = 0; hour < 9; hour += 1) await page.keyboard.press("ArrowRight");
+  await expect(chart).toHaveAttribute("aria-valuetext", /: Codex 300K$/);
+  await page.keyboard.press("Enter");
+
+  await expect(page).toHaveURL(new RegExp(`/sessions\\?hour=${nine}$`));
+  await settle(page, "list_sessions", sessionPage([]));
+  expect(await lastArgs(page, "list_sessions")).toMatchObject({
+    filter: { since: nine, until: nine + 3_600_000 - 1 },
+  });
+  await expect(page.getByRole("link", { name: /^Show every hour, not only / })).toBeVisible();
+  // An hour is no period, so none is shown chosen.
+  await expect(page.getByRole("button", { name: "Today" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
   );
 });

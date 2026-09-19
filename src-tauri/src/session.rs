@@ -641,15 +641,33 @@ pub struct DayTotals {
     pub by_agent: Vec<AgentDay>,
 }
 
-/// One agent's share of a day.
+/// One local hour's totals.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HourTotals {
+    /// The instant the local hour starts. Beside a clock change an hour is
+    /// still an hour, so the hour repeated when clocks go back is two, each
+    /// with its own instant.
+    pub hour: i64,
+    /// Sessions that used tokens in the hour.
+    pub sessions: i64,
+    /// Usage in the hour.
+    pub tokens: Tokens,
+    /// Estimated cost in the hour; `None` when none of it is priced.
+    pub cost_usd: Option<f64>,
+    /// Each agent's share of the hour.
+    pub by_agent: Vec<AgentDay>,
+}
+
+/// One agent's share of a day, or of an hour.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDay {
     /// The agent.
     pub agent: Agent,
-    /// Its tokens that day, by its own count.
+    /// Its tokens in the span, by its own count.
     pub tokens: i64,
-    /// Its estimated cost that day; `None` when none of it is priced.
+    /// Its estimated cost in the span; `None` when none of it is priced.
     pub cost_usd: Option<f64>,
 }
 

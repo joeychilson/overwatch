@@ -7,7 +7,8 @@
    * revision, so choosing another period or finishing a scan re-reads, keeps the
    * last answer on screen meanwhile, and drops one that arrives late. Days are
    * bucketed by the engine in this machine's own zone, so a day here starts at
-   * the reader's midnight, clock changes included.
+   * the reader's midnight, clock changes included. Today is drawn by the hour,
+   * which the engine buckets the same way.
    *
    * The measure, tokens or cost, is the whole page's: the chart draws it and
    * every ranking orders by it. Only the top sessions are read for it, because
@@ -25,7 +26,13 @@
   import Ranking, { SHOWN } from "#lib/components/charts/Ranking.svelte";
   import AgentMark from "#lib/components/marks/AgentMark.svelte";
   import { MOST_TOKENS } from "#lib/components/models/ModelRows.svelte";
-  import { getOverview, listModels, listProjects, listSessions } from "#lib/api/backend.ts";
+  import {
+    getOverview,
+    listHours,
+    listModels,
+    listProjects,
+    listSessions,
+  } from "#lib/api/backend.ts";
   import { sessionLabel } from "#lib/agents.ts";
   import { card, type Card } from "#lib/card.ts";
   import { errorLine } from "#lib/errors.ts";
@@ -79,15 +86,16 @@
   async function read(days: number | null, revision: number) {
     void revision;
     const since = periodStart(days);
-    const [overview, before, models, projects] = await Promise.all([
+    const [overview, before, models, projects, hours] = await Promise.all([
       getOverview(since),
       since === undefined || days === null
         ? null
         : getOverview(addDays(since, -days), addDays(Date.now(), -days)),
       listModels(since),
       listProjects(since),
+      days === 1 ? listHours(since) : undefined,
     ]);
-    return { since, overview, before, models, projects };
+    return { since, overview, before, models, projects, hours };
   }
 
   /** The period's sessions that used the most by a measure. */
@@ -183,7 +191,7 @@
     </div>
   {/snippet}
 
-  {@const { since, overview, before, models, projects } = await read(days, engine.revision)}
+  {@const { since, overview, before, models, projects, hours } = await read(days, engine.revision)}
   {@const sessions = await readSessions(days, measure, engine.revision)}
 
   {@render header(
@@ -207,7 +215,9 @@
             {#if stat.moved}
               <span
                 class="text-meta text-muted tabular-nums"
-                title="Compared with the {days} days before"
+                title={days === 1
+                  ? "Compared with yesterday up to this time"
+                  : `Compared with the ${days} days before`}
               >
                 {stat.moved}
               </span>
@@ -220,7 +230,7 @@
     <section class="mt-10">
       {@render heading("Usage")}
       <div class="mt-4">
-        <UsageChart days={overview.daily} {since} {measure} />
+        <UsageChart days={overview.daily} {hours} {since} {measure} />
       </div>
     </section>
 
