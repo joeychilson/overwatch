@@ -84,14 +84,16 @@ pub struct Tokens {
 }
 
 impl Tokens {
-    /// Add another measurement, for totals across sessions.
+    /// Add another measurement, for totals across sessions. Each count
+    /// saturates rather than overflows, since counts come from the agents'
+    /// files and a corrupt one can hold any number.
     pub fn add(&mut self, other: Tokens) {
-        self.input += other.input;
-        self.output += other.output;
-        self.cache_read += other.cache_read;
-        self.cache_write += other.cache_write;
-        self.reasoning += other.reasoning;
-        self.total += other.total;
+        self.input = self.input.saturating_add(other.input);
+        self.output = self.output.saturating_add(other.output);
+        self.cache_read = self.cache_read.saturating_add(other.cache_read);
+        self.cache_write = self.cache_write.saturating_add(other.cache_write);
+        self.reasoning = self.reasoning.saturating_add(other.reasoning);
+        self.total = self.total.saturating_add(other.total);
     }
 
     /// Whether the source established any usage at all.
@@ -870,6 +872,15 @@ mod tests {
             }
         );
         assert!(!sum.is_empty());
+
+        // A corrupt count saturates instead of overflowing.
+        sum.add(Tokens {
+            input: i64::MAX,
+            total: i64::MAX - 100,
+            ..Tokens::default()
+        });
+        assert_eq!((sum.input, sum.total), (i64::MAX, i64::MAX));
+        assert_eq!(sum.output, 22);
     }
 
     #[test]
