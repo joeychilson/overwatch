@@ -191,8 +191,13 @@
     </div>
   {/snippet}
 
-  {@const { since, overview, before, models, projects, hours } = await read(days, engine.revision)}
-  {@const sessions = await readSessions(days, measure, engine.revision)}
+  <!-- Awaited together so that both start at once; another measure reads only the sessions. -->
+  {@const period = read(days, engine.revision)}
+  {@const top = readSessions(days, measure, engine.revision)}
+  {@const [{ since, overview, before, models, projects, hours }, sessions] = await Promise.all([
+    period,
+    top,
+  ])}
 
   {@render header(
     covered(since, overview.daily[0]?.day),
