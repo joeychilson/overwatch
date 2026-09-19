@@ -9,6 +9,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
   installIpc,
+  lastArgs,
   modelUsage,
   overview,
   projectUsage,
@@ -34,14 +35,6 @@ async function open(page: Page, answers: { models?: unknown[]; projects?: unknow
   await settle(page, "list_models", answers.models ?? []);
   await settle(page, "list_projects", answers.projects ?? []);
   await settle(page, "list_sessions", sessionPage([]));
-}
-
-/** The arguments of the latest call of a command. */
-function lastArgs(page: Page, cmd: string) {
-  return page.evaluate(
-    (c) => window.__ipc.calls.filter((call) => call.cmd === c).at(-1)?.args,
-    cmd,
-  );
 }
 
 test("totals compare with the period before, and unpriced usage shows no cost", async ({

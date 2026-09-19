@@ -10,6 +10,7 @@ import { expect, test, type Page } from "@playwright/test";
 import {
   engineError,
   installIpc,
+  lastArgs,
   modelUsage,
   overview,
   projectUsage,
@@ -73,9 +74,7 @@ test("the card names the period, and saving sends a PNG named for it", async ({ 
   await expect
     .poll(() => page.evaluate(() => window.__ipc.pendingCount("save_card")))
     .toBeGreaterThan(0);
-  const args = (await page.evaluate(
-    () => window.__ipc.calls.filter((call) => call.cmd === "save_card").at(-1)?.args,
-  )) as { name: string; png: string };
+  const args = (await lastArgs(page, "save_card")) as { name: string; png: string };
   expect(args.name).toBe(`overwatch-30-days-${today()}`);
   // A PNG's signature, base64: what the engine refuses anything else in place of.
   expect(args.png.startsWith("iVBORw0KGgo")).toBe(true);

@@ -11,6 +11,7 @@ import {
   emit,
   engineError,
   installIpc,
+  lastArgs,
   marks,
   session,
   settle,
@@ -151,9 +152,7 @@ test("a long conversation pages and says how far it has got", async ({ page }) =
   await expect
     .poll(() => page.evaluate(() => window.__ipc.pendingCount("get_transcript")))
     .toBeGreaterThan(0);
-  const asked = await page.evaluate(
-    () => window.__ipc.calls.filter((call) => call.cmd === "get_transcript").at(-1)?.args,
-  );
+  const asked = await lastArgs(page, "get_transcript");
   expect((asked as { offset: number }).offset).toBe(150);
 
   await page.evaluate(
@@ -185,9 +184,7 @@ test("choosing a turn on the timeline reads as far as it and brings it into view
   await expect
     .poll(() => page.evaluate(() => window.__ipc.pendingCount("get_transcript")))
     .toBeGreaterThan(0);
-  const asked = await page.evaluate(
-    () => window.__ipc.calls.filter((call) => call.cmd === "get_transcript").at(-1)?.args,
-  );
+  const asked = await lastArgs(page, "get_transcript");
   expect((asked as { offset: number }).offset).toBe(150);
   await page.evaluate(
     (data) => window.__ipc.settle("get_transcript", "resolve", data),
@@ -331,14 +328,6 @@ async function scanFinds(page: Page, activeAt: number, changed = ["codex:ses_a"]
     session("codex:ses_a", "Fix the parser", { updatedAt: activeAt }),
   );
   await emit(page, "sessions_changed", changed);
-}
-
-/** The arguments of the latest call of a command. */
-function lastArgs(page: Page, cmd: string) {
-  return page.evaluate(
-    (c) => window.__ipc.calls.filter((call) => call.cmd === c).at(-1)?.args,
-    cmd,
-  );
 }
 
 test("a live session fills in as its agent works, a tool's result landing in its call", async ({

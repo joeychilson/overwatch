@@ -11,6 +11,7 @@ import {
   emit,
   engineError,
   installIpc,
+  lastArgs,
   sendOnChannel,
   session,
   sessionPage,
@@ -21,6 +22,11 @@ import {
 test.beforeEach(async ({ page }) => {
   await installIpc(page);
 });
+
+/** The filter the list last asked the engine for. */
+async function lastFilter(page: Page) {
+  return (await lastArgs<{ filter: Record<string, unknown> }>(page, "list_sessions")).filter;
+}
 
 test("shows a skeleton first, then the rows", async ({ page }) => {
   await page.goto("/sessions");
@@ -48,10 +54,7 @@ test("the default view hides spawned runs and says which it is showing", async (
   await settle(page, "get_status", status());
   await settle(page, "list_sessions", sessionPage([session("codex:ses_a", "A conversation")]));
 
-  const sent = await page.evaluate(
-    () => window.__ipc.calls.filter((call) => call.cmd === "list_sessions").at(-1)?.args,
-  );
-  expect((sent as { filter: { includeSpawned: boolean } }).filter.includeSpawned).toBe(false);
+  expect((await lastFilter(page)).includeSpawned).toBe(false);
 
   await page.getByRole("button", { name: "All runs" }).click();
   await settle(
@@ -63,10 +66,7 @@ test("the default view hides spawned runs and says which it is showing", async (
     ]),
   );
 
-  const after = await page.evaluate(
-    () => window.__ipc.calls.filter((call) => call.cmd === "list_sessions").at(-1)?.args,
-  );
-  expect((after as { filter: { includeSpawned: boolean } }).filter.includeSpawned).toBe(true);
+  expect((await lastFilter(page)).includeSpawned).toBe(true);
   await expect(page.getByText("agent", { exact: true })).toBeVisible();
 });
 
@@ -75,21 +75,15 @@ test("days in the address narrow the list to sessions that used tokens then", as
   await settle(page, "get_status", status());
   await settle(page, "list_sessions", sessionPage([session("codex:ses_a", "That week")]));
 
-  const sent = async () =>
-    (
-      (await page.evaluate(
-        () => window.__ipc.calls.filter((call) => call.cmd === "list_sessions").at(-1)?.args,
-      )) as { filter: { since: number | null; until: number | null } }
-    ).filter;
   const [first, after] = await page.evaluate(() => [
     new Date(2026, 8, 6).getTime(),
     new Date(2026, 8, 13).getTime(),
   ]);
-  expect(await sent()).toMatchObject({ since: first, until: (after ?? 0) - 1 });
+  expect(await lastFilter(page)).toMatchObject({ since: first, until: (after ?? 0) - 1 });
 
   await page.getByRole("link", { name: /^Show every day, not only Sep 6/ }).click();
   await settle(page, "list_sessions", sessionPage([session("codex:ses_a", "That week")]));
-  expect(await sent()).toMatchObject({ since: null, until: null });
+  expect(await lastFilter(page)).toMatchObject({ since: null, until: null });
 });
 
 test("choosing a period narrows the list in place of a column's days", async ({ page }) => {
@@ -163,10 +157,7 @@ test("a later search supersedes an earlier one", async ({ page }) => {
 
   await expect(page.getByRole("link", { name: /Docs result/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /First result/ })).toBeHidden();
-  const sent = await page.evaluate(
-    () => window.__ipc.calls.filter((call) => call.cmd === "list_sessions").at(-1)?.args,
-  );
-  expect((sent as { filter: { search: string } }).filter.search).toBe("docs");
+  expect((await lastFilter(page)).search).toBe("docs");
 });
 
 test("a failed first read offers a retry that recovers", async ({ page }) => {
@@ -197,30 +188,13 @@ test("sorting asks the engine for the new ordering", async ({ page }) => {
   await page.getByRole("button", { name: "Sort by Tokens" }).click();
   await settle(page, "list_sessions", sessionPage([session("codex:ses_a", "A conversation")]));
 
-  const sent = await page.evaluate(
-    () => window.__ipc.calls.filter((call) => call.cmd === "list_sessions").at(-1)?.args,
-  );
-  const sort = (sent as { filter: { sort: { key: string; descending: boolean } } }).filter.sort;
   // Size reads largest first when a reader asks for it.
-  expect(sort).toEqual({ key: "tokens", descending: true });
+  expect((await lastFilter(page)).sort).toEqual({ key: "tokens", descending: true });
 
   await page.getByRole("button", { name: "Sort by Tokens" }).click();
   await settle(page, "list_sessions", sessionPage([session("codex:ses_a", "A conversation")]));
-  const again = await page.evaluate(
-    () => window.__ipc.calls.filter((call) => call.cmd === "list_sessions").at(-1)?.args,
-  );
-  expect((again as { filter: { sort: { descending: boolean } } }).filter.sort.descending).toBe(
-    false,
-  );
+  expect((await lastFilter(page)).sort).toEqual({ key: "tokens", descending: false });
 });
-
-/** The filter the list last asked the engine for. */
-async function lastFilter(page: Page) {
-  const args = await page.evaluate(
-    () => window.__ipc.calls.filter((call) => call.cmd === "list_sessions").at(-1)?.args,
-  );
-  return (args as { filter: Record<string, unknown> }).filter;
-}
 
 test("what the list shows lives in its address, so coming back finds it as left", async ({
   page,
@@ -495,9 +469,10 @@ test("full text keeps the list, narrowed to what was said, each row quoting it",
   await expect
     .poll(() => page.evaluate(() => window.__ipc.pendingCount("search_conversations")))
     .toBe(1);
-  const asked = (await page.evaluate(
-    () => window.__ipc.calls.filter((call) => call.cmd === "search_conversations").at(-1)?.args,
-  )) as { query: string; filter: Record<string, unknown> };
+  const asked = await lastArgs<{ query: string; filter: Record<string, unknown> }>(
+    page,
+    "search_conversations",
+  );
   expect(asked.query).toBe("idempotency");
   // What the list is narrowed to narrows the search; its own search is this one.
   expect(asked.filter).toMatchObject({ search: null, includeSpawned: false });

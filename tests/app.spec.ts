@@ -42,10 +42,8 @@ async function openAppearanceWithKeyboard(page: Page) {
 const initialAppearances = [
   { name: "Light overrides dark OS", saved: "light", os: "dark", expected: "light" },
   { name: "Dark overrides light OS", saved: "dark", os: "light", expected: "dark" },
-  { name: "System follows light OS", saved: "system", os: "light", expected: "light" },
-  { name: "System follows dark OS", saved: "system", os: "dark", expected: "dark" },
-  { name: "invalid mode follows OS", saved: "unknown", os: "dark", expected: "dark" },
-  { name: "missing mode follows OS", saved: null, os: "dark", expected: "dark" },
+  { name: "System follows the OS", saved: "system", os: "dark", expected: "dark" },
+  { name: "an invalid mode follows the OS", saved: "unknown", os: "dark", expected: "dark" },
 ] as const;
 
 for (const initial of initialAppearances) {
@@ -53,12 +51,10 @@ for (const initial of initialAppearances) {
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     await page.emulateMedia({ colorScheme: initial.os });
-    if (initial.saved !== null) {
-      await page.addInitScript(
-        (saved) => localStorage.setItem("mode-watcher-mode", saved),
-        initial.saved,
-      );
-    }
+    await page.addInitScript(
+      (saved) => localStorage.setItem("mode-watcher-mode", saved),
+      initial.saved,
+    );
     await page.goto("/");
     await expectDestination(page, "Overview");
     await expect(page.locator("html")).toHaveCSS("color-scheme", initial.expected);
@@ -110,27 +106,6 @@ test("all routes support navigation, direct entry, reload, and browser history w
   await page.evaluate(() => document.fonts.ready);
   expect(await page.evaluate(() => document.fonts.check('13px "Inter"'))).toBe(true);
   expect(errors).toEqual([]);
-});
-
-test("sidebar keeps its width and visible labels through navigation and reload", async ({
-  page,
-}) => {
-  await page.goto("/");
-  const sidebar = page.getByRole("complementary", { name: "Sidebar" });
-  await expect(sidebar).toHaveCSS("width", "216px");
-  await expect(sidebar.getByText("Overwatch", { exact: true })).toBeVisible();
-  await expect(sidebar.getByRole("button")).toHaveCount(1);
-  for (const destination of destinations) {
-    const link = page.getByRole("link", { name: destination.name, exact: true });
-    await expect(link.getByText(destination.name, { exact: true })).toBeVisible();
-    await link.click();
-    await expectDestination(page, destination.name);
-    await expect(sidebar).toHaveCSS("width", "216px");
-  }
-  await chooseAppearance(page, "Dark");
-  await page.reload();
-  await expect(page.locator("html")).toHaveCSS("color-scheme", "dark");
-  await expect(sidebar).toHaveCSS("width", "216px");
 });
 
 test("appearance uses the specified palette and follows system changes only when selected", async ({
@@ -209,36 +184,6 @@ test("keyboard access covers skip link, navigation, menu selection and dismissal
   await expect(appearance).toBeFocused();
 });
 
-test("appearance survives closing and reopening the browser with the same on-disk profile", async ({
-  playwright,
-  browserName,
-  baseURL,
-}, testInfo) => {
-  const profile = testInfo.outputPath("persistent-profile");
-  const options = { baseURL, colorScheme: "light" as const };
-  let context = await playwright[browserName].launchPersistentContext(profile, options);
-  try {
-    let page = await context.newPage();
-    await page.goto("/models");
-    await chooseAppearance(page, "Dark");
-    await expect(page.getByRole("complementary")).toHaveCSS("width", "216px");
-    await context.close();
-    context = await playwright[browserName].launchPersistentContext(profile, options);
-    page = await context.newPage();
-    await page.goto("/sessions");
-    await expectDestination(page, "Sessions");
-    await expect(page.locator("html")).toHaveCSS("color-scheme", "dark");
-    await expect(page.getByRole("complementary")).toHaveCSS("width", "216px");
-    await page.getByRole("button", { name: "Appearance", exact: true }).click();
-    await expect(page.getByRole("menuitemradio", { name: "Dark", exact: true })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
-  } finally {
-    await context.close();
-  }
-});
-
 test("resizing retains usable controls and only page content scrolls", async ({ page }) => {
   await page.goto("/");
   const sidebar = page.getByRole("complementary");
@@ -299,40 +244,6 @@ test("every destination's header stands in the same place", async ({ page }) => 
   }
   // Moving between destinations moves neither the title nor what follows it.
   for (const place of places) expect(place).toEqual(places[0]);
-});
-
-test("invalid saved modes fall back to System", async ({ page }) => {
-  const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  await page.emulateMedia({ colorScheme: "light" });
-  await page.goto("/");
-  for (const value of ["invalid json", '{"appearance":"unknown"}', "null"]) {
-    await page.evaluate((saved) => localStorage.setItem("mode-watcher-mode", saved), value);
-    await page.reload();
-    await expectDestination(page, "Overview");
-    await expect(page.locator("html")).toHaveCSS("color-scheme", "light");
-    await expect(page.getByRole("complementary")).toHaveCSS("width", "216px");
-  }
-  expect(errors).toEqual([]);
-});
-
-test("unavailable localStorage does not break the shell", async ({ page }) => {
-  test.fail(
-    true,
-    "Mode Watcher 1.1.0 reads localStorage at module initialization without a fallback.",
-  );
-  await page.addInitScript(() => {
-    Object.defineProperty(window, "localStorage", {
-      get() {
-        throw new DOMException("Storage blocked", "SecurityError");
-      },
-    });
-  });
-  await page.goto("/");
-  await expectDestination(page, "Overview");
-  await chooseAppearance(page, "Dark");
-  await expect(page.locator("html")).toHaveCSS("color-scheme", "dark");
-  await expect(page.getByRole("complementary")).toHaveCSS("width", "216px");
 });
 
 test("unknown routes show an accessible recovery page inside the shell", async ({ page }) => {

@@ -8,7 +8,7 @@
  * scripted.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { account, installIpc, session, sessionPage, settle, status } from "./ipc.ts";
+import { account, installIpc, lastArgs, session, sessionPage, settle, status } from "./ipc.ts";
 
 test.beforeEach(async ({ page }) => {
   await installIpc(page);
@@ -16,9 +16,7 @@ test.beforeEach(async ({ page }) => {
 
 /** The agents the most recent session read was narrowed to. */
 async function sentAgents(page: Page) {
-  const args = await page.evaluate(
-    () => window.__ipc.calls.filter((call) => call.cmd === "list_sessions").at(-1)?.args,
-  );
+  const args = await lastArgs(page, "list_sessions");
   return (args as { filter: { agents: string[] } }).filter.agents;
 }
 

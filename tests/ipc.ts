@@ -210,6 +210,14 @@ export async function sendOnChannel(page: Page, cmd: string, arg: string, messag
     .toBe(true);
 }
 
+/** The arguments of the latest call of a command. */
+export function lastArgs<T = Record<string, unknown>>(page: Page, cmd: string): Promise<T> {
+  return page.evaluate(
+    (c) => window.__ipc.calls.filter((call) => call.cmd === c).at(-1)?.args,
+    cmd,
+  ) as Promise<T>;
+}
+
 /** A serialized engine failure. */
 export function engineError(kind: string, message: string) {
   return { kind, message };
