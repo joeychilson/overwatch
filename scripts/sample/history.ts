@@ -405,8 +405,11 @@ const SESSIONS: Session[] = (() => {
   return drawn;
 })();
 
-/** Accounts of every subscription, in the states a busy week leaves them in. */
-const ACCOUNTS: Account[] = [
+/**
+ * Accounts of every subscription, in the states a busy week leaves them in, as
+ * they stand at `now`.
+ */
+const accounts = (now: number): Account[] => [
   {
     id: "claude:me",
     provider: "claude",
@@ -418,27 +421,27 @@ const ACCOUNTS: Account[] = [
         name: "5 hours",
         scope: null,
         usedPercent: 71,
-        resetsAt: NOW + 108 * MINUTE,
-        runsOutAt: NOW + 52 * MINUTE,
+        resetsAt: now + 108 * MINUTE,
+        runsOutAt: now + 52 * MINUTE,
       },
       {
         name: "Weekly",
         scope: null,
         usedPercent: 46,
-        resetsAt: NOW + 3 * 24 * HOUR,
+        resetsAt: now + 3 * 24 * HOUR,
         runsOutAt: null,
       },
       {
         name: "Weekly",
         scope: "Opus",
         usedPercent: 58,
-        resetsAt: NOW + 3 * 24 * HOUR,
+        resetsAt: now + 3 * 24 * HOUR,
         runsOutAt: null,
       },
     ],
-    readAt: NOW - 2 * MINUTE,
+    readAt: now - 2 * MINUTE,
     problem: null,
-    usedAt: NOW - 4 * MINUTE,
+    usedAt: now - 4 * MINUTE,
   },
   {
     id: "codex:me",
@@ -451,27 +454,27 @@ const ACCOUNTS: Account[] = [
         name: "5 hours",
         scope: null,
         usedPercent: 23,
-        resetsAt: NOW + 190 * MINUTE,
+        resetsAt: now + 190 * MINUTE,
         runsOutAt: null,
       },
       {
         name: "Weekly",
         scope: null,
         usedPercent: 64,
-        resetsAt: NOW + 4 * 24 * HOUR,
+        resetsAt: now + 4 * 24 * HOUR,
         runsOutAt: null,
       },
       {
         name: "Weekly",
         scope: "GPT-5.3-Codex-Spark",
         usedPercent: 12,
-        resetsAt: NOW + 4 * 24 * HOUR,
+        resetsAt: now + 4 * 24 * HOUR,
         runsOutAt: null,
       },
     ],
-    readAt: NOW - 3 * MINUTE,
+    readAt: now - 3 * MINUTE,
     problem: null,
-    usedAt: NOW - 12 * MINUTE,
+    usedAt: now - 12 * MINUTE,
   },
   {
     id: "open_code_go:me",
@@ -480,25 +483,25 @@ const ACCOUNTS: Account[] = [
     plan: "Go",
     via: ["OpenCode", "Pi"],
     limits: [
-      { name: "5 hours", scope: null, usedPercent: 8, resetsAt: NOW + 4 * HOUR, runsOutAt: null },
+      { name: "5 hours", scope: null, usedPercent: 8, resetsAt: now + 4 * HOUR, runsOutAt: null },
       {
         name: "Weekly",
         scope: null,
         usedPercent: 31,
-        resetsAt: NOW + 5 * 24 * HOUR,
+        resetsAt: now + 5 * 24 * HOUR,
         runsOutAt: null,
       },
       {
         name: "Monthly",
         scope: null,
         usedPercent: 44,
-        resetsAt: NOW + 16 * 24 * HOUR,
+        resetsAt: now + 16 * 24 * HOUR,
         runsOutAt: null,
       },
     ],
-    readAt: NOW - 3 * MINUTE,
+    readAt: now - 3 * MINUTE,
     problem: null,
-    usedAt: NOW - 5 * HOUR,
+    usedAt: now - 5 * HOUR,
   },
   {
     id: "claude:work",
@@ -511,20 +514,20 @@ const ACCOUNTS: Account[] = [
         name: "5 hours",
         scope: null,
         usedPercent: 88,
-        resetsAt: NOW - 20 * MINUTE,
+        resetsAt: now - 20 * MINUTE,
         runsOutAt: null,
       },
       {
         name: "Weekly",
         scope: null,
         usedPercent: 18,
-        resetsAt: NOW + 6 * 24 * HOUR,
+        resetsAt: now + 6 * 24 * HOUR,
         runsOutAt: null,
       },
     ],
-    readAt: NOW - 2 * MINUTE,
+    readAt: now - 2 * MINUTE,
     problem: null,
-    usedAt: NOW - 3 * HOUR,
+    usedAt: now - 3 * HOUR,
   },
   {
     id: "grok:me",
@@ -537,13 +540,13 @@ const ACCOUNTS: Account[] = [
         name: "Weekly",
         scope: null,
         usedPercent: 38,
-        resetsAt: NOW + 2 * 24 * HOUR,
+        resetsAt: now + 2 * 24 * HOUR,
         runsOutAt: null,
       },
     ],
-    readAt: NOW - 2 * 24 * HOUR,
+    readAt: now - 2 * 24 * HOUR,
     problem: "sign_in",
-    usedAt: NOW - 2 * 24 * HOUR,
+    usedAt: now - 2 * 24 * HOUR,
   },
 ];
 
@@ -723,24 +726,27 @@ function transcript(id: string, offset: number, limit: number): Transcript {
  * module is still being evaluated then, so `AGENTS` is not there yet. Every
  * command is answered later, by which time it is.
  */
-const status = (): Status => ({
+const status = (now: number): Status => ({
   scanning: false,
   filesRead: 0,
   progress: null,
   sessions: SESSIONS.length,
   agents: [...AGENTS],
   problems: [],
-  accounts: ACCOUNTS,
+  accounts: accounts(now),
 });
 
 const number = (value: unknown) => (typeof value === "number" ? value : undefined);
 
-/** What the engine would answer a command with. */
-export function answer(command: string, args: Record<string, unknown>): unknown {
+/**
+ * What the engine would answer a command with, at `now`: the history's own
+ * moment, or a later one that leaves the days since without any work.
+ */
+export function answer(command: string, args: Record<string, unknown>, now = NOW): unknown {
   const id = typeof args.id === "string" ? args.id : "";
   switch (command) {
     case "get_status":
-      return status();
+      return status(now);
     case "get_overview":
       return overview(number(args.since), number(args.until));
     case "list_hours":

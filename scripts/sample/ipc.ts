@@ -10,11 +10,17 @@
  * real one and no module under `src/` knows the difference. `vite.config.ts`
  * makes the swap for that run alone, and it cannot reach a build.
  *
- * The clock is moved rather than stopped, so the history's last day is today
- * however long after it was written the demo runs, and relative times go on
- * ticking as they would on a real machine.
+ * The clock is moved rather than stopped, so the history's last day is
+ * yesterday however long after it was written the demo runs, and relative
+ * times go on ticking as they would on a real machine. Today has no work yet,
+ * so the window shows how it looks with nothing in a period; the screenshots
+ * are taken at the history's own moment instead.
  */
+import { addDays } from "#lib/periods.ts";
 import { NOW, answer } from "./history.ts";
+
+/** The demo's moment: a day after the history's, so that today is empty. */
+const DEMO_NOW = addDays(NOW, 1);
 
 /**
  * How long an answer is held.
@@ -24,8 +30,8 @@ import { NOW, answer } from "./history.ts";
  */
 const LATENCY_MS = 90;
 
-/** How far the history sits from this machine's clock. */
-const skew = NOW - Date.now();
+/** How far the demo sits from this machine's clock. */
+const skew = DEMO_NOW - Date.now();
 const real = Date.now.bind(Date);
 Date.now = () => real() + skew;
 // The bare constructor reads the clock itself rather than `Date.now`, so it is
@@ -39,7 +45,7 @@ globalThis.Date = new Proxy(Date, {
 export async function invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
   await new Promise((resolve) => setTimeout(resolve, LATENCY_MS));
   try {
-    return answer(command, args) as T;
+    return answer(command, args, DEMO_NOW) as T;
   } catch (error) {
     // The only thing the history refuses is a session it does not hold, which
     // the engine reports the same way.
