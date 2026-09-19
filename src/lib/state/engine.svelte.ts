@@ -29,7 +29,7 @@ const UNKNOWN: Status = {
 
 export class Engine {
   /** The engine's last reported state. */
-  status = $state<Status>(UNKNOWN);
+  status = $state.raw<Status>(UNKNOWN);
   /**
    * Bumped whenever the index changes.
    *
@@ -64,7 +64,9 @@ export class Engine {
    */
   async #read(): Promise<void> {
     try {
-      this.status = await getStatus();
+      const status = await getStatus();
+      // A scan announced while this was asked is newer.
+      if (this.status === UNKNOWN) this.status = status;
     } catch {
       // The next announced scan brings the status instead.
     }
