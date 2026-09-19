@@ -123,22 +123,27 @@
     {/each}
   </div>
 
+  {#snippet todayItem(used: string)}
+    <button
+      class="{ITEM} justify-between gap-3"
+      title="Open the overview of today"
+      onclick={() => openWindow("/?period=today")}
+    >
+      <span>Today</span>
+      <span class="text-meta text-muted tabular-nums">{used}</span>
+    </button>
+  {/snippet}
+
   <div class="mx-1 grid border-t border-text/10 py-1.5">
+    <!-- The row holds its place while today is read, so the panel does not jump. -->
     <svelte:boundary>
-      {#snippet pending()}{/snippet}
+      {#snippet pending()}{@render todayItem("")}{/snippet}
       {@const today = await readToday(engine.revision, startOfDay(clock.now.getTime()))}
-      <button
-        class="{ITEM} justify-between gap-3"
-        title="Open the overview of today"
-        onclick={() => openWindow("/?period=today")}
-      >
-        <span>Today</span>
-        <span class="text-meta text-muted tabular-nums">
-          {today === null
-            ? UNKNOWN
-            : `${formatCountCompact(today.tokens.total)} tokens · ${formatUsd(today.costUsd)}`}
-        </span>
-      </button>
+      {@render todayItem(
+        today === null
+          ? UNKNOWN
+          : `${formatCountCompact(today.tokens.total)} tokens · ${formatUsd(today.costUsd)}`,
+      )}
     </svelte:boundary>
     <button class={ITEM} onclick={() => openWindow()}>Open Overwatch</button>
     <button class={ITEM} onclick={() => quit()}>Quit Overwatch</button>
