@@ -502,6 +502,8 @@ pub struct Filter {
     pub until: Option<i64>,
     /// Only sessions that worked in this directory, matched whole.
     pub project: Option<String>,
+    /// Whether `project` also matches the directories inside it.
+    pub include_subfolders: bool,
     /// Only sessions that used this model, matched whole.
     pub model: Option<String>,
     /// How to order the result.
@@ -711,8 +713,18 @@ pub struct Limit {
     pub used_percent: f64,
     /// When it resets.
     pub resets_at: Option<i64>,
+    /// When its current window began, so how much of the window has passed
+    /// can be set beside how much of the limit has; `None` when the provider
+    /// does not say.
+    #[serde(default)]
+    pub starts_at: Option<i64>,
     /// When it runs out at the recent rate of use, if that is before it resets.
     pub runs_out_at: Option<i64>,
+    /// How fast it has been rising, in percentage points an hour, over the last
+    /// hour of readings; `None` until readings span fifteen minutes of its
+    /// current window.
+    #[serde(default)]
+    pub per_hour: Option<f64>,
 }
 
 /// Why a subscription's limits could not be refreshed.

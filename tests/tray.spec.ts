@@ -19,6 +19,8 @@ const nearlyOut = {
   usedPercent: 95,
   resetsAt: 4_102_444_800_000,
   runsOutAt: null,
+  perHour: null,
+  startsAt: null,
 };
 
 test("the subscriptions in use come first and open, however near a limit the others are", async ({

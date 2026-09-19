@@ -111,7 +111,14 @@ fn windows(rate: &Value, scope: Option<&str>, now: i64) -> Vec<Limit> {
                 super::span(seconds),
                 scope.map(str::to_owned),
                 &window["used_percent"],
-                resets_at,
+                // A length too long to count in milliseconds has no start,
+                // and the limit is still read.
+                (
+                    seconds
+                        .checked_mul(1_000)
+                        .and_then(|length| resets_at?.checked_sub(length)),
+                    resets_at,
+                ),
             )
         })
         .collect()
@@ -179,6 +186,10 @@ mod tests {
         assert_eq!(usage.limits[0].used_percent, 42.0);
         assert_eq!(usage.limits[0].resets_at, Some(1_788_423_600_000));
         assert_eq!(usage.limits[1].resets_at, Some(NOW + 518_400_000));
+        // Each window began its stated length before it resets: five hours,
+        // and a week, of which six days are still to come.
+        assert_eq!(usage.limits[0].starts_at, Some(1_788_405_600_000));
+        assert_eq!(usage.limits[1].starts_at, Some(NOW - 86_400_000));
     }
 
     #[test]
@@ -196,8 +207,10 @@ mod tests {
             "reset_at": 0
         }}});
         let usage = parse(&body, NOW).expect("reads");
-        // No instant is that far off, so when it resets is unknown.
+        // No instant is that far off, so when it resets is unknown, and so
+        // when it began.
         assert_eq!(usage.limits[0].resets_at, None);
+        assert_eq!(usage.limits[0].starts_at, None);
     }
 
     #[test]

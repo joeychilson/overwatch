@@ -166,6 +166,8 @@ export interface Filter {
   until?: number | null;
   /** Only sessions that worked in this directory, matched whole. */
   project?: string | null;
+  /** Whether `project` also matches the directories inside it. */
+  includeSubfolders?: boolean;
   /** Only sessions that used this model, matched whole. */
   model?: string | null;
   sort?: Sort;
@@ -226,8 +228,15 @@ export interface Limit {
   /** How much has been used, from 0; above 100 once exceeded. */
   usedPercent: number;
   resetsAt: number | null;
+  /** When its current window began; null when the provider does not say. */
+  startsAt: number | null;
   /** When it runs out at the recent rate of use, if that is before it resets. */
   runsOutAt: number | null;
+  /**
+   * How fast it has been rising, in percentage points an hour, over the last
+   * hour of readings; null until readings span fifteen minutes of its window.
+   */
+  perHour: number | null;
 }
 
 /** A subscription whose limits the engine reads, whichever agent holds it. */

@@ -43,6 +43,13 @@ pub enum Error {
     /// The system could not open a file or folder.
     #[error("could not open it: {0}")]
     Open(String),
+
+    /// The index was built by another version of Overwatch, or is being
+    /// rebuilt, so it cannot be read as it stands. Only a reader beside the
+    /// app meets this, such as the MCP server: the app rebuilds the index
+    /// instead.
+    #[error("the index was built by another version of Overwatch")]
+    OtherVersion,
 }
 
 /// The shape a failure takes on the wire.
@@ -65,6 +72,7 @@ impl Error {
             Error::Store(_) => "store_failed",
             Error::Open(_) => "open_failed",
             Error::Invalid(_) => "invalid",
+            Error::OtherVersion => "other_version",
         }
     }
 }

@@ -10,12 +10,15 @@
 //! and `bridge` answers the window. `account` reads subscription limits from
 //! their providers, and `tray` shows them in the menu bar. `card` writes out a
 //! picture of a period that the window drew and the reader wants to keep.
+//! [`mcp`] answers coding agents from the same index, in a process of its own
+//! that only reads.
 
 mod account;
 mod bridge;
 mod card;
 pub mod error;
 pub mod index;
+pub mod mcp;
 mod price;
 pub mod session;
 mod shell;
@@ -79,8 +82,23 @@ pub fn run() -> tauri::Result<()> {
         .on_menu_event(|app, event| shell::handle(app, event.id().as_ref()))
         .setup(|app| {
             let home = app.path().home_dir()?;
-            let index = Arc::new(Index::open(&app.path().app_data_dir()?, home.clone())?);
+            let data = app.path().app_data_dir()?;
+            let index = Arc::new(Index::open(&data, home.clone())?);
             app.manage(Arc::clone(&index));
+            // Tells the MCP server's agents whether what they read is current.
+            // The claim waits out anyone holding the mark, so it has a thread
+            // of its own.
+            let (keeping, kept) = (app.handle().clone(), data.clone());
+            std::thread::Builder::new()
+                .name("keeper".into())
+                .spawn(move || match index::Keeper::claim(&kept) {
+                    Ok(keeper) => {
+                        keeping.manage(keeper);
+                    }
+                    Err(error) => {
+                        eprintln!("overwatch: could not mark the index as kept: {error}");
+                    }
+                })?;
 
             app.set_menu(shell::menu(app.handle())?)?;
             // The window starts hidden, so it appears only once it is where it

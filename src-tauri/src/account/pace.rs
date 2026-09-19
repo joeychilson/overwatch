@@ -1,5 +1,6 @@
-//! When a limit will run out at the current rate of use, and when a change in a
-//! limit is worth a notification.
+//! How fast a limit is rising, when it will run out at that rate, and when a
+//! change in a limit is worth a notification. The rate is kept with each
+//! reading, as the limit's pace an hour.
 //!
 //! The rate comes from the readings this process takes, not from local session
 //! files: providers count usage from every device and from their own apps, and
@@ -8,6 +9,9 @@
 use std::collections::HashMap;
 
 use crate::session::{Account, Limit};
+
+/// Milliseconds in an hour, as a rate is given per hour.
+const HOUR: f64 = 3_600_000.0;
 
 /// How far back readings count toward a rate.
 ///
@@ -96,6 +100,7 @@ impl Pace {
                 }
                 tracked.readings.retain(|&(at, _)| now - at <= SPAN);
                 tracked.readings.push((now, limit.used_percent));
+                limit.per_hour = rate(&tracked.readings).map(|rate| rate * HOUR);
                 limit.runs_out_at = forecast(&tracked.readings, limit.resets_at);
 
                 // Using up one model's limit does not stop work, so it is not
@@ -149,14 +154,23 @@ fn say(said: Said, limit: &Limit, now: i64) -> (Said, Option<String>) {
     }
 }
 
+/// How fast a limit's readings rose, in percentage points a millisecond, or
+/// `None` while they span too short a time to say.
+fn rate(readings: &[(i64, f64)]) -> Option<f64> {
+    let (&(from, first), &(now, used)) = (readings.first()?, readings.last()?);
+    // Readings are cleared when a limit goes down, so they only ever rise; the
+    // floor keeps a provider's rounding from reading as a fall.
+    (now - from >= LEAST).then(|| ((used - first) / (now - from) as f64).max(0.0))
+}
+
 /// When a limit runs out at the rate its readings rose, if that is before it
 /// resets.
 fn forecast(readings: &[(i64, f64)], resets_at: Option<i64>) -> Option<i64> {
-    let (&(from, first), &(now, used)) = (readings.first()?, readings.last()?);
-    if now - from < LEAST || used <= first || used >= 100.0 {
+    let &(now, used) = readings.last()?;
+    let rate = rate(readings).filter(|&rate| rate > 0.0)?;
+    if used >= 100.0 {
         return None;
     }
-    let rate = (used - first) / (now - from) as f64;
     // Saturating: a slow enough rate puts running out past any instant.
     let runs_out_at = now.saturating_add(((100.0 - used) / rate) as i64);
     resets_at
@@ -187,6 +201,12 @@ mod tests {
     /// Read a five-hour limit at `used` percent, `minute` minutes in, and
     /// return its forecast and what was said.
     fn read(pace: &mut Pace, minute: i64, used: f64, resets_at: i64) -> (Option<i64>, Vec<String>) {
+        let (limit, bodies) = reading(pace, minute, used, resets_at);
+        (limit.runs_out_at, bodies)
+    }
+
+    /// Read a five-hour limit, and return it as forecast and what was said.
+    fn reading(pace: &mut Pace, minute: i64, used: f64, resets_at: i64) -> (Limit, Vec<String>) {
         let now = minute * MINUTE;
         let mut accounts = vec![Account {
             id: "codex:a".into(),
@@ -199,7 +219,9 @@ mod tests {
                 scope: None,
                 used_percent: used,
                 resets_at: Some(resets_at),
+                starts_at: None,
                 runs_out_at: None,
+                per_hour: None,
             }],
             read_at: Some(now),
             problem: None,
@@ -207,7 +229,26 @@ mod tests {
         }];
         let alerts = pace.update(&mut accounts, now);
         let bodies = alerts.into_iter().map(|alert| alert.body).collect();
-        (accounts[0].limits[0].runs_out_at, bodies)
+        (accounts[0].limits.remove(0), bodies)
+    }
+
+    #[test]
+    fn a_limit_keeps_the_pace_its_readings_rose_at() {
+        let reset = 300 * MINUTE;
+        let mut pace = Pace::default();
+        let per_hour =
+            |pace: &mut Pace, minute, used| reading(pace, minute, used, reset).0.per_hour;
+        assert_eq!(per_hour(&mut pace, 0, 40.0), None, "no rate yet");
+        assert_eq!(per_hour(&mut pace, 10, 45.0), None, "too short a run");
+        // Ten points in twenty minutes is thirty an hour.
+        assert_eq!(per_hour(&mut pace, 20, 50.0), Some(30.0));
+        // A reset starts the run again.
+        assert_eq!(per_hour(&mut pace, 25, 2.0), None);
+
+        // Readings that hold still have a pace, of nothing.
+        let mut idle = Pace::default();
+        per_hour(&mut idle, 0, 40.0);
+        assert_eq!(per_hour(&mut idle, 30, 40.0), Some(0.0));
     }
 
     #[test]

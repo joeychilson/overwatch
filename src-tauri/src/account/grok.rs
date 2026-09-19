@@ -83,7 +83,7 @@ fn parse(body: &Value) -> Option<Usage> {
         .and_then(|(start, end)| end.checked_sub(start))
         .filter(|length| *length > 0);
     let name = length.map_or_else(|| "Usage".to_owned(), |length| super::span(length / 1_000));
-    let limit = super::limit(name, None, &config["creditUsagePercent"], end)?;
+    let limit = super::limit(name, None, &config["creditUsagePercent"], (start, end))?;
     super::usage(None, vec![limit])
 }
 
@@ -110,6 +110,8 @@ mod tests {
         // Twelve days and 19:28:21.395 after 2026-09-03T00:00:00Z, which is
         // 1_788_393_600 seconds.
         assert_eq!(usage.limits[0].resets_at, Some(1_789_500_501_395));
+        // Five days and 19:28:21.395 after the same instant.
+        assert_eq!(usage.limits[0].starts_at, Some(1_788_895_701_395));
     }
 
     #[test]

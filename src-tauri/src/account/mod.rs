@@ -356,15 +356,24 @@ fn limit(
     name: String,
     scope: Option<String>,
     used: &Value,
-    resets_at: Option<i64>,
+    window: (Option<i64>, Option<i64>),
 ) -> Option<Limit> {
+    let (starts_at, resets_at) = window;
     Some(Limit {
         name,
         scope,
         used_percent: used.as_f64().filter(|percent| *percent >= 0.0)?,
         resets_at,
+        starts_at,
         runs_out_at: None,
+        per_hour: None,
     })
+}
+
+/// A window of `length` milliseconds ending at `resets_at`: when it began, and
+/// when it resets.
+fn ending(resets_at: Option<i64>, length: i64) -> (Option<i64>, Option<i64>) {
+    (resets_at.and_then(|end| end.checked_sub(length)), resets_at)
 }
 
 /// A window's length, said the way a person would say it.
@@ -492,7 +501,7 @@ mod tests {
     #[test]
     fn a_limit_needs_a_nonnegative_percentage() {
         let used = |value: Value| {
-            limit("Weekly".into(), None, &value, None).map(|found| found.used_percent)
+            limit("Weekly".into(), None, &value, (None, None)).map(|found| found.used_percent)
         };
         assert_eq!(used(json!(42)), Some(42.0));
         assert_eq!(used(json!(104.5)), Some(104.5));

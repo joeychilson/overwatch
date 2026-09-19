@@ -12,7 +12,15 @@ test.beforeEach(async ({ page }) => {
 
 /** A limit covering all usage, resetting far enough ahead that no run sees it end. */
 function limit(usedPercent: number, scope: string | null = null) {
-  return { name: "Weekly", scope, usedPercent, resetsAt: 4_102_444_800_000, runsOutAt: null };
+  return {
+    name: "Weekly",
+    scope,
+    usedPercent,
+    resetsAt: 4_102_444_800_000,
+    runsOutAt: null,
+    perHour: null,
+    startsAt: null,
+  };
 }
 
 test("an account shows what is left of each limit, who holds it, and when it was read", async ({

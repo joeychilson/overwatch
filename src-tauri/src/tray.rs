@@ -246,7 +246,9 @@ mod tests {
             scope: None,
             used_percent: used,
             resets_at: Some(resets_in_minutes * MINUTE),
+            starts_at: None,
             runs_out_at: None,
+            per_hour: None,
         }
     }
 

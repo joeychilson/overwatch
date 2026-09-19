@@ -12,6 +12,8 @@ function limit(name: string, usedPercent: number, overrides: Partial<Limit> = {}
     usedPercent,
     resetsAt: NOW + 60 * MINUTE,
     runsOutAt: null,
+    perHour: null,
+    startsAt: null,
     ...overrides,
   };
 }

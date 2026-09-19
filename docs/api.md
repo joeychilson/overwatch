@@ -86,8 +86,10 @@ hears every event, and the menu bar panel runs the same layout.
 machine, whichever app holds it. Each has an `id` stable across launches, its
 `provider` (`claude`, `codex`, `grok`, `open_code_go`), a `label` such as an
 email address, the `via` apps holding it, `limits` (`name`, `scope` when a
-limit covers one model, `usedPercent`, `resetsAt`, and `runsOutAt` when the
-recent pace would use it up before it resets), `readAt`, `problem`:
+limit covers one model, `usedPercent`, `resetsAt`, `startsAt` when the
+provider says when its window began, `runsOutAt` when the recent pace would use
+it up before it resets, and `perHour`, that pace in percentage points an hour
+once readings span fifteen minutes), `readAt`, `problem`:
 `sign_in`, `unavailable` or `unrecognized` when the latest refresh failed, in
 which case the limits are the last ones read, and `usedAt`, when it was last
 seen in use by a session on this machine or by its limits rising between reads.
@@ -102,6 +104,7 @@ interface Filter {
   since?: number | null; // used tokens at or after
   until?: number | null; // used tokens at or before
   project?: string | null; // worked in this directory, matched whole
+  includeSubfolders?: boolean; // default false: project matches its subfolders too
   model?: string | null; // used this model, matched whole
   sort?: { key: SortKey; descending: boolean };
   offset?: number;

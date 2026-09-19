@@ -116,6 +116,44 @@ pub(crate) fn now() -> i64 {
         .unwrap_or(0)
 }
 
+/// The same moment a calendar month before `at`, in universal time: the same
+/// day of the previous month, or its last day when it is shorter, as a
+/// subscription billed on the 31st renews on the 28th in February.
+///
+/// Returns `None` for an instant too far from 1970 to count back from.
+pub(crate) fn month_before(at: i64) -> Option<i64> {
+    const DAY: i64 = 86_400_000;
+    let (days, into_day) = (at.div_euclid(DAY), at.rem_euclid(DAY));
+    let (year, month, day) = civil_from_days(days)?;
+    let (year, month) = if month == 1 {
+        (year.checked_sub(1)?, 12)
+    } else {
+        (year, month - 1)
+    };
+    days_from_civil(year, month, day.min(days_in(year, month)))
+        .checked_mul(DAY)?
+        .checked_add(into_day)
+}
+
+/// The proleptic Gregorian date of a day counted from 1970-01-01, by Howard
+/// Hinnant's `civil_from_days`, counting in eras of 400 years from 0000-03-01.
+fn civil_from_days(days: i64) -> Option<(i64, i64, i64)> {
+    let shifted = days.checked_add(719_468)?;
+    let era = shifted.div_euclid(146_097);
+    let of_era = shifted.rem_euclid(146_097);
+    let year_of_era = (of_era - of_era / 1_460 + of_era / 36_524 - of_era / 146_096) / 365;
+    let of_year = of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * of_year + 2) / 153;
+    let day = of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    let year = era.checked_mul(400)?.checked_add(year_of_era)?;
+    Some((if month <= 2 { year + 1 } else { year }, month, day))
+}
+
 /// How many days a month has, accounting for leap years, so that a date such
 /// as `2100-02-29` is rejected rather than read as the first of March.
 fn days_in(year: i64, month: i64) -> i64 {
@@ -250,5 +288,43 @@ mod tests {
             assert_eq!(from_unix_number(before), None, "{before}");
         }
         assert_eq!(from_json(&serde_json::json!(-1.0e30)), None);
+    }
+
+    #[test]
+    fn a_month_before_is_the_same_day_or_the_shorter_months_last() {
+        let at = |text| parse_rfc3339(text).expect("parses");
+        assert_eq!(
+            month_before(at("2026-10-01T00:00:00Z")),
+            Some(at("2026-09-01T00:00:00Z"))
+        );
+        assert_eq!(
+            month_before(at("2026-01-15T05:06:07.890Z")),
+            Some(at("2025-12-15T05:06:07.890Z"))
+        );
+        assert_eq!(
+            month_before(at("2026-03-31T12:00:00Z")),
+            Some(at("2026-02-28T12:00:00Z"))
+        );
+        assert_eq!(
+            month_before(at("2028-03-30T00:00:00Z")),
+            Some(at("2028-02-29T00:00:00Z"))
+        );
+        // Before the epoch counts back the same way.
+        assert_eq!(
+            month_before(at("1969-03-01T00:00:00Z")),
+            Some(at("1969-02-01T00:00:00Z"))
+        );
+    }
+
+    #[test]
+    fn days_are_dated_against_independently_known_dates() {
+        assert_eq!(civil_from_days(0), Some((1970, 1, 1)));
+        // 2000-03-01 is day 11,017, the first after a leap day in a year
+        // divisible by 400.
+        assert_eq!(civil_from_days(11_017), Some((2000, 3, 1)));
+        assert_eq!(civil_from_days(11_016), Some((2000, 2, 29)));
+        // 2024-01-01 is day 19,723.
+        assert_eq!(civil_from_days(19_723), Some((2024, 1, 1)));
+        assert_eq!(civil_from_days(-1), Some((1969, 12, 31)));
     }
 }

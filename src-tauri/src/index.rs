@@ -76,7 +76,7 @@ impl Index {
             path: data_dir.display().to_string(),
             source,
         })?;
-        let store = Store::open(&data_dir.join("index.sqlite"))?;
+        let store = Store::open(&file(data_dir))?;
         let mut accounts = store.accounts()?;
         order(&mut accounts);
         let status = Status {
@@ -222,12 +222,7 @@ impl Index {
         let now = crate::timestamp::now();
         self.mark(|status| {
             for account in &mut status.accounts {
-                let local = used
-                    .iter()
-                    .filter(|(provider, _)| Provider::serving(provider) == Some(account.provider))
-                    .map(|&(_, at)| at.min(now))
-                    .max();
-                account.used_at = account.used_at.max(local);
+                account.used_at = last_used(account, &used, now);
             }
         });
         Ok(())
@@ -319,12 +314,8 @@ impl Index {
     /// filter matches, newest first, for `query`, ignoring case, handing
     /// `found` each batch of sessions that mention it as they turn up.
     ///
-    /// Conversations are read from the agents' files, on every core, and one
-    /// whose files cannot contain the query is passed over unread, as is one
-    /// that cannot be read. The search ends when it has looked through them
-    /// all, when it has found [`MOST`], when a later search or
-    /// [`Index::stop_searching`] overtakes it, or when `found` answers that
-    /// nobody is listening any more.
+    /// The search runs as [`look_through`] describes, and also ends when a
+    /// later search or [`Index::stop_searching`] overtakes it.
     pub fn search(
         &self,
         query: &str,
@@ -337,63 +328,13 @@ impl Index {
             return Ok(Searched::default());
         }
         let origins = self.read(|store| store.origins(filter))?;
-        let library = source::Library::new(&self.home, &needle);
-        let searched = AtomicUsize::new(0);
-        let done = AtomicBool::new(false);
-
-        let capped = fan_out(
+        Ok(look_through(
             &origins,
-            |Origin { session, unit }| {
-                let mentioned = library
-                    .may_mention(unit, &session.native_id)
-                    .then(|| library.transcript(unit, &session.native_id).ok())
-                    .flatten()
-                    .and_then(|transcript| transcript.mentions(&needle));
-                searched.fetch_add(1, Ordering::Relaxed);
-                mentioned.map(|mentioned| Mention {
-                    session: session.clone(),
-                    turns: mentioned.turns,
-                    first: mentioned.first,
-                    excerpt: mentioned.excerpt,
-                })
-            },
-            || done.load(Ordering::Relaxed) || self.searches.load(Ordering::Relaxed) != search,
-            |mentions| {
-                // Handed over together every so often rather than one message
-                // each, and never past the most a search answers with.
-                let mut batch = Vec::new();
-                let mut handed = 0;
-                let mut last = Instant::now();
-                loop {
-                    let ended = match mentions.recv_timeout(FOUND) {
-                        Ok(mention) => {
-                            batch.push(mention);
-                            false
-                        }
-                        Err(mpsc::RecvTimeoutError::Timeout) => false,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => true,
-                    };
-                    let capped = handed + batch.len() >= MOST;
-                    batch.truncate(MOST - handed);
-                    if !batch.is_empty() && (ended || capped || last.elapsed() >= FOUND) {
-                        handed += batch.len();
-                        if !found(std::mem::take(&mut batch)) {
-                            done.store(true, Ordering::Relaxed);
-                        }
-                        last = Instant::now();
-                    }
-                    if ended || capped {
-                        done.store(true, Ordering::Relaxed);
-                        return capped;
-                    }
-                }
-            },
-        );
-        Ok(Searched {
-            searched: searched.into_inner() as i64,
-            total: origins.len() as i64,
-            capped,
-        })
+            &self.home,
+            &needle,
+            || self.searches.load(Ordering::Relaxed) != search,
+            found,
+        ))
     }
 
     /// Stop any search that is running.
@@ -438,6 +379,7 @@ impl Index {
                         .iter()
                         .map(|limit| Limit {
                             runs_out_at: None,
+                            per_hour: None,
                             ..limit.clone()
                         })
                         .collect();
@@ -449,6 +391,150 @@ impl Index {
             order(&mut status.accounts);
         });
         self.write(|store| store.put_accounts(provider, &accounts))
+    }
+}
+
+/// Look through the conversations of `origins` under `home`, newest first, for
+/// `needle`, which is lowercase and not empty, handing `found` each batch of
+/// sessions that mention it as they turn up, and answer how far it got.
+///
+/// Conversations are read from the agents' files, on every core, and one
+/// whose files cannot contain the needle is passed over unread, as is one
+/// that cannot be read. The search ends when it has looked through them all,
+/// when it has found [`MOST`], when `overtaken` says so, or when `found`
+/// answers that nobody is listening any more.
+pub(crate) fn look_through(
+    origins: &[Origin],
+    home: &Path,
+    needle: &str,
+    overtaken: impl Fn() -> bool + Sync,
+    found: impl Fn(Vec<Mention>) -> bool,
+) -> Searched {
+    let library = source::Library::new(home, needle);
+    let searched = AtomicUsize::new(0);
+    let done = AtomicBool::new(false);
+
+    let capped = fan_out(
+        origins,
+        |Origin { session, unit }| {
+            let mentioned = library
+                .may_mention(unit, &session.native_id)
+                .then(|| library.transcript(unit, &session.native_id).ok())
+                .flatten()
+                .and_then(|transcript| transcript.mentions(needle));
+            searched.fetch_add(1, Ordering::Relaxed);
+            mentioned.map(|mentioned| Mention {
+                session: session.clone(),
+                turns: mentioned.turns,
+                first: mentioned.first,
+                excerpt: mentioned.excerpt,
+            })
+        },
+        || done.load(Ordering::Relaxed) || overtaken(),
+        |mentions| {
+            // Handed over together every so often rather than one message
+            // each, and never past the most a search answers with.
+            let mut batch = Vec::new();
+            let mut handed = 0;
+            let mut last = Instant::now();
+            loop {
+                let ended = match mentions.recv_timeout(FOUND) {
+                    Ok(mention) => {
+                        batch.push(mention);
+                        false
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => false,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => true,
+                };
+                let capped = handed + batch.len() >= MOST;
+                batch.truncate(MOST - handed);
+                if !batch.is_empty() && (ended || capped || last.elapsed() >= FOUND) {
+                    handed += batch.len();
+                    if !found(std::mem::take(&mut batch)) {
+                        done.store(true, Ordering::Relaxed);
+                    }
+                    last = Instant::now();
+                }
+                if ended || capped {
+                    done.store(true, Ordering::Relaxed);
+                    return capped;
+                }
+            }
+        },
+    );
+    Searched {
+        searched: searched.into_inner() as i64,
+        total: origins.len() as i64,
+        capped,
+    }
+}
+
+/// Where the index is kept in the application's data directory.
+pub(crate) fn file(data_dir: &Path) -> PathBuf {
+    data_dir.join("index.sqlite")
+}
+
+/// When an account was last in use: as it was last seen, by a session on this
+/// machine using its subscription, going by the provider `used` names, or by
+/// its limits rising, and never later than `now`.
+pub(crate) fn last_used(account: &Account, used: &[(String, i64)], now: i64) -> Option<i64> {
+    let local = used
+        .iter()
+        .filter(|(provider, _)| Provider::serving(provider) == Some(account.provider))
+        .map(|&(_, at)| at.min(now))
+        .max();
+    account.used_at.max(local)
+}
+
+/// The file whose lock says the index beside it is being kept current.
+fn keeper_file(data_dir: &Path) -> PathBuf {
+    data_dir.join("keeper.lock")
+}
+
+/// A mark that this process keeps the index current, held for as long as the
+/// process runs: an exclusive lock on a file beside the index, which the
+/// system releases when the process ends, however it ends.
+pub(crate) struct Keeper {
+    /// Held only to keep the lock.
+    _locked: std::fs::File,
+}
+
+impl Keeper {
+    /// Mark the index in `data_dir` as kept current by this process, waiting
+    /// while another process holds the mark: a server checking it holds it for
+    /// a moment, and another copy of the app for as long as that copy runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be opened or locked.
+    pub(crate) fn claim(data_dir: &Path) -> std::io::Result<Keeper> {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(keeper_file(data_dir))?;
+        file.lock()?;
+        Ok(Keeper { _locked: file })
+    }
+}
+
+/// Whether a running app keeps the index in `data_dir` current.
+///
+/// # Errors
+///
+/// Returns an error when the mark cannot be checked. No mark at all means no
+/// app has run.
+pub(crate) fn kept(data_dir: &Path) -> std::io::Result<bool> {
+    let file = match std::fs::File::open(keeper_file(data_dir)) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    // A shared lock taken here is released as the file closes.
+    match file.try_lock_shared() {
+        Ok(()) => Ok(false),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(true),
+        Err(std::fs::TryLockError::Error(error)) => Err(error),
     }
 }
 
@@ -1025,7 +1111,9 @@ mod tests {
                 scope: None,
                 used_percent: 40.0,
                 resets_at: None,
+                starts_at: None,
                 runs_out_at: None,
+                per_hour: None,
             }],
             read_at: Some(1_000),
             problem: None,
@@ -1082,7 +1170,9 @@ mod tests {
                 scope: None,
                 used_percent,
                 resets_at: None,
+                starts_at: None,
                 runs_out_at: None,
+                per_hour: None,
             }],
             read_at: Some(read_at),
             problem: None,

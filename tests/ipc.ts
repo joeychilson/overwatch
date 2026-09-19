@@ -424,6 +424,8 @@ export function account(overrides: Partial<Record<string, unknown>> = {}) {
         usedPercent: 42,
         resetsAt: 4_102_444_800_000,
         runsOutAt: null,
+        perHour: null,
+        startsAt: null,
       },
       {
         name: "Weekly",
@@ -431,6 +433,8 @@ export function account(overrides: Partial<Record<string, unknown>> = {}) {
         usedPercent: 56,
         resetsAt: 4_102_444_800_000,
         runsOutAt: null,
+        perHour: null,
+        startsAt: null,
       },
     ],
     readAt: 1_789_000_600_000,

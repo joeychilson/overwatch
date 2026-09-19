@@ -159,6 +159,63 @@ menu bar until Overwatch is quit.
 None of these endpoints is publicly documented. An answer that stops matching
 what the reader expects is reported as changed, never shown as zero.
 
+## Agents, over MCP
+
+Coding agents can ask Overwatch about the same history, through the Model
+Context Protocol. The server is the app's own executable run as
+`overwatch mcp`: an agent starts it, speaks JSON-RPC to it a line at a time on
+standard input and output, and it ends when the agent closes its input.
+
+The server only reads. It opens `index.sqlite` read-only for each request,
+beside the app that keeps it current, and never scans, so there is one writer
+and a query sees whatever the app last wrote. An index built by another
+version is refused rather than rebuilt: after an update the running app and a
+server started before it can disagree, and a second process dropping the
+tables the app is writing would leave both rebuilding in turn. Conversations
+are read from the agents' files, as the window reads them, and limits are the
+ones the app last read, so the server makes no network requests. While the app
+runs it holds a lock on `keeper.lock` beside the index, which the system
+releases however the app ends; the server tries the lock to tell agents
+whether what they read will keep being updated.
+
+The tools are shaped for what an agent does with the history rather than for
+the window's pages:
+
+| Tool              | What it answers                                                                                                                                                                                                |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_sessions`   | Sessions narrowed by folder (and every folder inside it), agent, model, period or words in their title, folder or models, with totals for every match; `active` marks one at work now, such as the agent's own |
+| `get_session`     | One session summed up: tokens by kind and model, turns by kind, each tool with its calls and failures, its first and last prompts and last reply, and the command that resumes it                              |
+| `read_session`    | A page of one conversation as text, at one of three levels of detail, optionally only the turns that mention something, and from the end when the offset is negative                                           |
+| `search_messages` | The sessions in which something was said, newest first, with the first turn that says it and a line of it                                                                                                      |
+| `get_usage`       | Tokens by kind and cost over a period, narrowed like the session list and split by agent, provider, model, project, day or hour                                                                                |
+| `get_limits`      | Every account's limits with their pace, time to reset and time to run out, whether the account is in use, and, given a threshold, whether a limit has reached it and when the next will at the recent pace     |
+
+A limit's pace is the rate its readings rose over the last hour, which the app
+keeps with each reading, and its window's start sets how much of the window has
+passed beside how much of the limit has. While the app runs a reading is at
+most five minutes old, so the server carries one under a quarter of an hour old
+forward at its pace as an estimate of use now; an older one means the app has
+stopped reading, and stands as read. A limit whose window has reset since it
+was read is refilled. A threshold counts the accounts in
+use, or the subscriptions asked for, and only limits on all usage decide
+whether it is reached; one model's limit that reaches it is listed apart.
+
+Every tool also runs once from a shell as `overwatch call <tool> '<json>'`,
+printing the same answer and exiting 1 when the tool cannot answer, arguments
+it does not take included, and 2 when the command is malformed, so an agent
+can watch a threshold from a background loop or a hook while it works.
+
+Times are given in this machine's zone with their offset, which SQLite works
+out for each instant as it does for local days. A period may be given as a
+local date, `today`, `yesterday`, a time with its offset, or a span back from
+now such as `6h`. A conversation page stops at about 40 KB, shortening what was
+said to 8 KB and anything else in a turn to 2 KB, and says where to read on
+from. The server speaks the `initialize` handshake of the protocol's
+2024-11-05 to 2025-11-25 revisions, which Claude Code, Codex, OpenCode and Grok
+Build use; a
+client of the stateless 2026-07-28 revision finds no `server/discover` and
+falls back to it.
+
 ## Module layout
 
 Data moves through the crate in this order:
@@ -172,6 +229,7 @@ Data moves through the crate in this order:
 | `index.rs`     | Keeping the index current                                    |
 | `account/`     | Reading subscription limits; one module per provider         |
 | `bridge.rs`    | The commands the window and the menu bar panel call          |
+| `mcp.rs`       | The MCP server agents start with `overwatch mcp`             |
 | `shell.rs`     | The app's menu, what its items do, and its place in the Dock |
 | `tray.rs`      | The menu bar item that shows limits, and its panel           |
 | `timestamp.rs` | Instants, as Unix milliseconds                               |

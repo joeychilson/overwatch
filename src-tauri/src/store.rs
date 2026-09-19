@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use rusqlite::types::{
     FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, Type, Value, ValueRef,
 };
-use rusqlite::{Connection, ErrorCode, OptionalExtension, Row, params, params_from_iter};
+use rusqlite::{
+    Connection, ErrorCode, OpenFlags, OptionalExtension, Row, params, params_from_iter,
+};
 
 use crate::error::{Error, Result};
 use crate::session::{
@@ -107,7 +109,7 @@ impl Store {
     /// Open the index at `path`, creating it, or rebuilding it when its schema
     /// or prices moved on.
     fn connect(path: &Path) -> Result<Store> {
-        let connection = Connection::open(path)?;
+        let mut connection = Connection::open(path)?;
         // WAL keeps reads from blocking the scanner's writes, and NORMAL is
         // durable enough for a cache that can be rebuilt.
         connection.execute_batch(
@@ -117,17 +119,13 @@ impl Store {
              PRAGMA mmap_size = 268435456;",
         )?;
 
-        // Costs are estimated as the index is built, so new prices rebuild it
-        // as a new schema does.
-        let version = format!("{SCHEMA}.{:x}", crate::price::version());
-        // No table, no row, or another version: each means a rebuild.
-        let found: Option<String> = connection
-            .query_row("SELECT value FROM meta WHERE key = 'schema'", [], |row| {
-                row.get(0)
-            })
-            .ok();
-        if found.as_deref() != Some(version.as_str()) {
-            let tables: Vec<String> = connection
+        let version = version();
+        // No table, no row, or another version: each means a rebuild. It is
+        // one transaction, so a reader beside the app sees the old index or
+        // the new one, never neither.
+        if built_by(&connection).as_deref() != Some(version.as_str()) {
+            let transaction = connection.transaction()?;
+            let tables: Vec<String> = transaction
                 .prepare(
                     "SELECT name FROM sqlite_master
                      WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
@@ -135,15 +133,102 @@ impl Store {
                 .query_map([], |row| row.get(0))?
                 .collect::<rusqlite::Result<_>>()?;
             for table in tables {
-                connection.execute(&format!("DROP TABLE \"{table}\""), [])?;
+                transaction.execute(&format!("DROP TABLE \"{table}\""), [])?;
             }
-            connection.execute_batch(include_str!("schema.sql"))?;
-            connection.execute(
+            transaction.execute_batch(include_str!("schema.sql"))?;
+            transaction.execute(
                 "INSERT INTO meta (key, value) VALUES ('schema', ?1)",
                 [version],
             )?;
+            transaction.commit()?;
         }
         Ok(Store { connection })
+    }
+
+    /// Open the index at `path` only to read it, beside the app that keeps it.
+    ///
+    /// Nothing is created, rebuilt or written: a second process rebuilding an
+    /// index built by another version would drop the tables the app is
+    /// writing, and the app would rebuild them in turn.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when there is no index at `path`, and
+    /// [`Error::OtherVersion`] when another version of Overwatch built it or is
+    /// rebuilding it.
+    pub(crate) fn read_only(path: &Path) -> Result<Store> {
+        if !path.is_file() {
+            return Err(Error::NotFound("Overwatch's index".into()));
+        }
+        let connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        // No meta table is an index still being made; any other failure to
+        // read it is reported as itself rather than as another version.
+        let made: bool = connection.query_row(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta')",
+            [],
+            |row| row.get(0),
+        )?;
+        let found: Option<String> = if made {
+            connection
+                .query_row("SELECT value FROM meta WHERE key = 'schema'", [], |row| {
+                    row.get(0)
+                })
+                .optional()?
+        } else {
+            None
+        };
+        if found != Some(version()) {
+            return Err(Error::OtherVersion);
+        }
+        Ok(Store { connection })
+    }
+
+    /// An instant as RFC 3339 text in this machine's time zone, with the
+    /// offset in force then, such as `2026-09-11T16:38:22-07:00`.
+    ///
+    /// SQLite applies the zone's rules to each instant, as it does in dating
+    /// usage to local days, so the offset is the one in force at the instant
+    /// rather than now.
+    pub(crate) fn local_time(&self, at: i64) -> Result<String> {
+        let seconds = at.div_euclid(1_000);
+        let (clock, offset): (String, i64) = self
+            .connection
+            .prepare_cached(
+                "SELECT strftime('%Y-%m-%dT%H:%M:%S', ?1, 'unixepoch', 'localtime'),
+                        unixepoch(?1, 'unixepoch', 'localtime') - ?1",
+            )?
+            .query_row([seconds], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        let sign = if offset < 0 { '-' } else { '+' };
+        let minutes = offset.abs() / 60;
+        Ok(format!(
+            "{clock}{sign}{:02}:{:02}",
+            minutes / 60,
+            minutes % 60
+        ))
+    }
+
+    /// The instant a local day starts, given as `YYYY-MM-DD`, or with `end`,
+    /// the last millisecond of it; `None` when `date` is not a calendar date.
+    ///
+    /// A day beside a clock change is 23 or 25 hours long, as it is in the
+    /// overview.
+    pub(crate) fn local_day(&self, date: &str, end: bool) -> Result<Option<i64>> {
+        // SQLite rolls a day past the end of its month into the next month, so
+        // the date is checked here first.
+        let calendar = date.len() == 10
+            && crate::timestamp::parse_rfc3339(&format!("{date}T00:00:00Z")).is_some();
+        if !calendar {
+            return Ok(None);
+        }
+        let days = i64::from(end);
+        Ok(self.connection.query_row(
+            "SELECT unixepoch(?1, ?2 || ' days', 'utc') * 1000 - ?3",
+            params![date, days, days],
+            |row| row.get(0),
+        )?)
     }
 
     /// The signature of every file the index has read, by path: its
@@ -611,7 +696,7 @@ impl Store {
         }
         if let Some(project) = &filter.project {
             bindings.push(Value::Text(project.clone()));
-            clauses.push(format!("cwd = ?{}", bindings.len()));
+            clauses.push(in_project("cwd", bindings.len(), filter.include_subfolders));
         }
         if let Some(model) = &filter.model {
             bindings.push(Value::Text(model.clone()));
@@ -644,6 +729,75 @@ impl Store {
             models,
             bindings,
         })
+    }
+
+    /// What the usage a filter chooses adds up to: all of it as one part, even
+    /// when there is none, or split by `group`, in no particular order.
+    ///
+    /// The filter's period, agents, project and model choose the usage
+    /// records, and runs an agent spawned count only when it includes them.
+    /// Its search, order and window do not apply. Each part counts only the
+    /// usage inside the period, as the overview does.
+    pub(crate) fn spent(&self, filter: &Filter, group: Option<Group>) -> Result<Vec<Spent>> {
+        let mut clauses = vec![self.within(filter.since, filter.until)?];
+        let mut bindings = Vec::new();
+        if !filter.include_spawned {
+            clauses.push("sessions.spawned = 0".to_owned());
+        }
+        if !filter.agents.is_empty() {
+            let keys: Vec<String> = filter
+                .agents
+                .iter()
+                .map(|agent| format!("'{}'", agent.key()))
+                .collect();
+            clauses.push(format!("usage.agent IN ({})", keys.join(", ")));
+        }
+        if let Some(project) = &filter.project {
+            bindings.push(Value::Text(project.clone()));
+            clauses.push(in_project(
+                "sessions.cwd",
+                bindings.len(),
+                filter.include_subfolders,
+            ));
+        }
+        if let Some(model) = &filter.model {
+            bindings.push(Value::Text(model.clone()));
+            clauses.push(format!("usage.model = ?{}", bindings.len()));
+        }
+        let key = match group {
+            None => "NULL",
+            Some(Group::Agent) => "usage.agent",
+            Some(Group::Provider) => "NULLIF(usage.provider, '')",
+            Some(Group::Model) => "NULLIF(usage.model, '')",
+            Some(Group::Project) => "sessions.cwd",
+            Some(Group::Day) => LOCAL_DAY,
+            Some(Group::Hour) => LOCAL_HOUR,
+        };
+        let spans = matches!(group, Some(Group::Day | Group::Hour));
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {key} AS part, COUNT(DISTINCT usage.session_id),
+                    COALESCE(SUM(usage.input), 0), COALESCE(SUM(usage.output), 0),
+                    COALESCE(SUM(usage.cache_read), 0), COALESCE(SUM(usage.cache_write), 0),
+                    COALESCE(SUM(usage.reasoning), 0), COALESCE(SUM(usage.total), 0),
+                    SUM(usage.cost_usd), MAX(usage.at)
+             FROM usage JOIN sessions ON sessions.id = usage.session_id
+             WHERE {}
+             {}",
+            clauses.join(" AND "),
+            // Without a group, the whole is one row even when nothing matches.
+            if group.is_some() { "GROUP BY part" } else { "" }
+        ))?;
+        let rows = statement.query_map(params_from_iter(&bindings), |row| {
+            Ok(Spent {
+                name: if spans { None } else { row.get(0)? },
+                start: if spans { row.get(0)? } else { None },
+                sessions: row.get(1)?,
+                tokens: read_tokens(row, 2)?,
+                cost_usd: row.get(8)?,
+                last: row.get(9)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// The condition choosing the usage rows within a period: a range of their
@@ -700,6 +854,77 @@ impl Store {
         Ok(self
             .connection
             .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))?)
+    }
+}
+
+/// The version an index is built to: its schema, and the prices its costs
+/// were estimated at, since new prices rebuild it as a new schema does.
+fn version() -> String {
+    format!("{SCHEMA}.{:x}", crate::price::version())
+}
+
+/// The version the index on `connection` was built to, or `None` while it has
+/// no tables, or none recorded yet.
+fn built_by(connection: &Connection) -> Option<String> {
+    connection
+        .query_row("SELECT value FROM meta WHERE key = 'schema'", [], |row| {
+            row.get(0)
+        })
+        .ok()
+}
+
+/// How [`Store::spent`] splits usage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Group {
+    /// By the agent that recorded it.
+    Agent,
+    /// By who served it, as agents name them, such as `anthropic`.
+    Provider,
+    /// By model.
+    Model,
+    /// By the directory its session worked in.
+    Project,
+    /// By this machine's local day.
+    Day,
+    /// By this machine's local hour.
+    Hour,
+}
+
+/// What some usage adds up to.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Spent {
+    /// What it has in common: an agent's key, a provider, a model or a
+    /// directory. `None` for the whole, for a day or an hour, and for usage
+    /// that recorded none.
+    pub(crate) name: Option<String>,
+    /// The instant a day or an hour starts.
+    pub(crate) start: Option<i64>,
+    /// Sessions it came from.
+    pub(crate) sessions: i64,
+    /// Tokens used.
+    pub(crate) tokens: Tokens,
+    /// Its estimated cost; `None` when none of it is priced.
+    pub(crate) cost_usd: Option<f64>,
+    /// The quarter hour the latest of it fell in, by its start; `None` when
+    /// there is none.
+    pub(crate) last: Option<i64>,
+}
+
+/// The condition that `column` names the directory bound as `?{n}`, or with
+/// `subfolders`, that directory or one inside it.
+///
+/// A prefix is compared rather than matched with `LIKE`, whose wildcards a path
+/// can hold, and a directory given with a trailing slash, the root included,
+/// is the same directory.
+fn in_project(column: &str, n: usize, subfolders: bool) -> String {
+    if subfolders {
+        let inside = format!("rtrim(?{n}, '/') || '/'");
+        format!(
+            "({column} = ?{n} OR {column} = rtrim(?{n}, '/') \
+             OR substr({column}, 1, length({inside})) = {inside})"
+        )
+    } else {
+        format!("{column} = ?{n}")
     }
 }
 
@@ -1839,5 +2064,91 @@ mod tests {
         let store = Store::open(&path).expect("rebuilds");
         assert_eq!(store.count().expect("counts"), 0);
         assert_ne!(std::fs::read(&wal).ok().as_deref(), Some(&b"stale"[..]));
+    }
+
+    #[test]
+    fn a_local_time_names_its_instant_with_the_offset_then_in_force() {
+        use crate::timestamp::parse_rfc3339;
+        let store = memory();
+        // Both halves of the year, whichever of them has summer time here, a
+        // leap day, and the morning clocks go forward in North America.
+        for text in [
+            "2026-01-15T12:00:00Z",
+            "2026-07-15T12:00:00Z",
+            "2028-02-29T23:59:59Z",
+            "2026-03-08T10:30:00Z",
+        ] {
+            let at = parse_rfc3339(text).expect("parses");
+            let local = store.local_time(at + 999).expect("formats");
+            assert_eq!(parse_rfc3339(&local), Some(at), "{local}");
+            assert!(matches!(local.as_bytes()[19], b'+' | b'-'), "{local}");
+        }
+    }
+
+    #[test]
+    fn a_local_date_runs_from_its_midnight_to_its_last_millisecond() {
+        let store = memory();
+        let start = store.local_day("2026-03-08", false).expect("reads");
+        let end = store.local_day("2026-03-08", true).expect("reads");
+        let (Some(start), Some(end)) = (start, end) else {
+            panic!("a calendar date");
+        };
+        let shown = |at| store.local_time(at).expect("formats");
+        assert!(
+            shown(start).starts_with("2026-03-08T00:00:00"),
+            "{}",
+            shown(start)
+        );
+        assert!(
+            shown(end).starts_with("2026-03-08T23:59:59"),
+            "{}",
+            shown(end)
+        );
+        assert!(
+            shown(end + 1).starts_with("2026-03-09T00:00:00"),
+            "{}",
+            shown(end + 1)
+        );
+
+        for other in [
+            "2026-02-30",
+            "2026-13-01",
+            "2026-9-01",
+            "yesterday",
+            "2026-09-18T00:00",
+        ] {
+            assert_eq!(
+                store.local_day(other, false).expect("reads"),
+                None,
+                "{other}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_folder_matches_what_is_inside_it_however_it_is_written() {
+        let mut store = memory();
+        for (id, cwd) in [
+            ("root", "/w/proj"),
+            ("sub", "/w/proj/web"),
+            ("next", "/w/project-two"),
+        ] {
+            let mut summary = summary(id, Agent::ClaudeCode, 1_000, 10, false);
+            summary.session.cwd = Some(cwd.into());
+            store.put(&unit(id), &[summary]).expect("puts");
+        }
+        let matched = |project: &str| {
+            let filter = Filter {
+                project: Some(project.into()),
+                include_subfolders: true,
+                limit: 10,
+                ..Filter::default()
+            };
+            store.list(&filter).expect("lists").total
+        };
+        assert_eq!(matched("/w/proj"), 2);
+        assert_eq!(matched("/w/proj/"), 2);
+        assert_eq!(matched("/"), 3, "the root holds everything");
+        assert_eq!(matched("/w/project-two"), 1);
     }
 }

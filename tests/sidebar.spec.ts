@@ -85,7 +85,14 @@ test("a limit running out marks Subscriptions, and one model's used-up limit doe
   page,
 }) => {
   await page.goto("/");
-  const weekly = { name: "Weekly", scope: null, resetsAt: 4_102_444_800_000, runsOutAt: null };
+  const weekly = {
+    name: "Weekly",
+    scope: null,
+    resetsAt: 4_102_444_800_000,
+    runsOutAt: null,
+    perHour: null,
+    startsAt: null,
+  };
   const pressed = { ...weekly, usedPercent: 60, runsOutAt: Date.now() + 45 * 60_000 };
   // Spark is used up, but only Spark: work carries on with every other model.
   const spark = { ...weekly, scope: "GPT-5.3-Codex-Spark", usedPercent: 100 };
