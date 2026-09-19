@@ -130,10 +130,14 @@ test("connecting an agent gives the command that registers this app with it", as
   // Pi has no MCP of its own, so it is passed over.
   await settle(page, "get_status", status({ agents: ["pi", "codex"] }));
 
-  await page.getByRole("button", { name: "Connect agents" }).click();
-  const dialog = page.getByRole("dialog", { name: "Connect an agent" });
-  await expect(dialog.getByText("Finding where Overwatch is…")).toBeVisible();
+  await page.getByRole("button", { name: "Add to your agent" }).click();
+  const dialog = page.getByRole("dialog", { name: "Add Overwatch to your agent" });
+  // What to do is said while where the app is is still being found, and stays as it arrives.
+  const instruction = dialog.getByRole("heading", { name: "Run this in a terminal" });
+  await expect(instruction).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Copy command" })).toHaveCount(0);
   await settle(page, "get_mcp_server", { command: INSTALLED, args: ["mcp"] });
+  await expect(instruction).toBeVisible();
 
   // The first agent found on this machine is the one offered.
   const agent = dialog.getByRole("group", { name: "Agent" });
@@ -159,6 +163,12 @@ test("connecting an agent gives the command that registers this app with it", as
 
   await dialog.getByRole("button", { name: "Close" }).click();
   await expect(dialog).toBeHidden();
+
+  // Where the app is cannot change while it runs, so opening again asks nothing
+  // and shows the steps at once.
+  await page.getByRole("button", { name: "Add to your agent" }).click();
+  await expect(dialog.getByRole("button", { name: "Copy configuration" })).toBeVisible();
+  expect(await page.evaluate(() => window.__ipc.pendingCount("get_mcp_server"))).toBe(0);
 });
 
 test("connecting recovers from a failure, and warns when macOS runs a temporary copy", async ({
@@ -166,8 +176,8 @@ test("connecting recovers from a failure, and warns when macOS runs a temporary 
 }) => {
   await page.goto("/");
   await settle(page, "get_status", status());
-  await page.getByRole("button", { name: "Connect agents" }).click();
-  const dialog = page.getByRole("dialog", { name: "Connect an agent" });
+  await page.getByRole("button", { name: "Add to your agent" }).click();
+  const dialog = page.getByRole("dialog", { name: "Add Overwatch to your agent" });
 
   await expect
     .poll(() => page.evaluate(() => window.__ipc.pendingCount("get_mcp_server")))

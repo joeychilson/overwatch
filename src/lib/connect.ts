@@ -23,10 +23,8 @@ export function isClient(agent: Agent): agent is Exclude<Agent, "pi"> {
 /** The clients offered, in order: the agents Overwatch reads, then any other. */
 export const CLIENTS: readonly Client[] = [...AGENTS.filter(isClient), "other"];
 
-/** One thing to do to connect a client. */
+/** What connects a client. */
 export interface Step {
-  /** What to do with `code`. */
-  say: string;
   /** What to run or add, exactly. */
   code: string;
   /** What `code` is, for the name of the button that copies it. */
@@ -44,37 +42,48 @@ export function shellWord(word: string): string {
   return PLAIN.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
 }
 
-/** The steps that connect `client` to `server`. */
-export function steps(client: Client, server: McpServer): Step[] {
+/**
+ * What to do with the step that connects `client`. It depends on the client
+ * alone, so it can be said before the step can be written out.
+ */
+export function instruction(client: Client): string {
+  return client === "other" ? "Add this to your client's MCP settings" : "Run this in a terminal";
+}
+
+/** The step that connects `client` to `server`. */
+export function step(client: Client, server: McpServer): Step {
   const start = [server.command, ...server.args].map(shellWord).join(" ");
-  const run = (command: string): Step => ({
-    say: "Run this in a terminal:",
-    code: command,
-    kind: "command",
-  });
+  const run = (command: string): Step => ({ code: command, kind: "command" });
   switch (client) {
     case "claude_code":
-      return [run(`claude mcp add --scope user ${NAME} -- ${start}`)];
+      return run(`claude mcp add --scope user ${NAME} -- ${start}`);
     case "codex":
-      return [run(`codex mcp add ${NAME} -- ${start}`)];
+      return run(`codex mcp add ${NAME} -- ${start}`);
     case "open_code":
-      return [run(`opencode mcp add --global ${NAME} -- ${start}`)];
+      return run(`opencode mcp add --global ${NAME} -- ${start}`);
     case "grok_build":
-      return [run(`grok mcp add ${NAME} -- ${start}`)];
+      return run(`grok mcp add ${NAME} -- ${start}`);
     case "other":
-      return [
-        {
-          say: "Add Overwatch to the client's MCP servers:",
-          // The shape Claude Desktop set, which most clients read.
-          code: JSON.stringify(
-            { mcpServers: { [NAME]: { command: server.command, args: server.args } } },
-            null,
-            2,
-          ),
-          kind: "configuration",
-        },
-      ];
+      return {
+        // The shape Claude Desktop set, which most clients read.
+        code: configuration({
+          mcpServers: { [NAME]: { command: server.command, args: server.args } },
+        }),
+        kind: "configuration",
+      };
   }
+}
+
+/**
+ * JSON as it is written by hand: indented, with a list of plain values kept on
+ * one line. A string holds no raw line break, so a bracket ending a line opens
+ * a list and a comma ending one separates its items.
+ */
+function configuration(value: unknown): string {
+  return JSON.stringify(value, null, 2).replaceAll(
+    /\[\n\s*([^[\]{}]*?)\n\s*\]/g,
+    (_, items: string) => `[${items.split(/,\n\s*/).join(", ")}]`,
+  );
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vite-plus/test";
-import { CLIENTS, isTranslocated, shellWord, steps } from "./connect.ts";
+import { CLIENTS, isTranslocated, shellWord, step } from "./connect.ts";
 
 const INSTALLED = {
   command: "/Applications/Overwatch.app/Contents/MacOS/overwatch",
@@ -19,9 +19,9 @@ describe("shellWord", () => {
   });
 });
 
-describe("steps", () => {
+describe("step", () => {
   test("registers the server with each agent's own command, at the user's scope", () => {
-    const command = (client: (typeof CLIENTS)[number]) => steps(client, INSTALLED)[0]?.code;
+    const command = (client: (typeof CLIENTS)[number]) => step(client, INSTALLED).code;
     const start = "/Applications/Overwatch.app/Contents/MacOS/overwatch mcp";
     expect(command("claude_code")).toBe(`claude mcp add --scope user overwatch -- ${start}`);
     expect(command("codex")).toBe(`codex mcp add overwatch -- ${start}`);
@@ -34,19 +34,24 @@ describe("steps", () => {
       command: "/Users/me/My Apps/Overwatch.app/Contents/MacOS/overwatch",
       args: ["mcp"],
     };
-    expect(steps("codex", moved)[0]?.code).toBe(
+    expect(step("codex", moved).code).toBe(
       "codex mcp add overwatch -- '/Users/me/My Apps/Overwatch.app/Contents/MacOS/overwatch' mcp",
     );
     // JSON carries the path as it is.
-    const [configuration] = steps("other", moved);
-    expect(JSON.parse(configuration?.code ?? "")).toEqual({
+    expect(JSON.parse(step("other", moved).code)).toEqual({
       mcpServers: { overwatch: moved },
     });
   });
 
-  test("has steps for every client offered, which are the agents with MCP of their own", () => {
+  test("keeps a list of arguments on one line, and every value as it is", () => {
+    expect(step("other", INSTALLED).code).toContain(`"args": ["mcp"]`);
+    // Brackets, braces and commas inside the values must not be taken for the list's own.
+    const tricky = { command: "/Apps/[x], {y}/overwatch", args: ["mcp", "a],\n b"] };
+    expect(JSON.parse(step("other", tricky).code)).toEqual({ mcpServers: { overwatch: tricky } });
+  });
+
+  test("offers the agents with MCP of their own, then any other client", () => {
     expect(CLIENTS).toEqual(["claude_code", "codex", "open_code", "grok_build", "other"]);
-    for (const client of CLIENTS) expect(steps(client, INSTALLED).length).toBeGreaterThan(0);
   });
 });
 

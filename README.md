@@ -19,7 +19,7 @@ It reads what **Claude Code, Codex, OpenCode, Pi, and Grok Build** already keep 
 - **Models**: usage, cost, and trend for each model.
 - **Subscriptions**: what's left of your Claude, Codex, Grok, and OpenCode Go limits, marked against how much of each window is left so you can see whether you'll outlast it, and a notification before one runs out.
 - **Menu bar**: your tightest limit at a glance, and what today has used. Close the window and it leaves the Dock but keeps watching from the menu bar.
-- **Agents**: connect Claude Code, Codex, OpenCode, Grok Build, or any other MCP client, and it can find, sum up, and read your sessions from every agent, search what was said in them, total usage and cost any way it needs, and pace itself against your limits — "work on this, but stop when the 5-hour limit reaches 50%". **Connect agents** in the sidebar gives the command to run.
+- **Agents**: connect Claude Code, Codex, OpenCode, Grok Build, or any other MCP client, and it can find, sum up, and read your sessions from every agent, search what was said in them, total usage and cost any way it needs, and pace itself against your limits — "work on this, but stop when the 5-hour limit reaches 50%". **Add to your agent** in the sidebar gives the command to run.
 
 New sessions show up within seconds while you work.
 

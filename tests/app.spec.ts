@@ -167,11 +167,11 @@ test("keyboard access covers skip link, navigation, menu selection and dismissal
   await expectDestination(page, "Subscriptions");
   await page.getByRole("link", { name: "Subscriptions", exact: true }).focus();
   await page.keyboard.press(tabKey);
-  const connect = page.getByRole("button", { name: "Connect agents", exact: true });
+  const connect = page.getByRole("button", { name: "Add to your agent", exact: true });
   await expect(connect).toBeFocused();
   await expect(connect).toHaveCSS("outline-style", "solid");
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("dialog", { name: "Connect an agent" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Add Overwatch to your agent" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(connect).toBeFocused();
