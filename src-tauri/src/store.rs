@@ -16,9 +16,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, ErrorCode, OptionalExtension, params};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::session::{
     Account, Agent, AgentDay, AgentTotals, DayTotals, Filter, HourTotals, ModelDay, ModelSlice,
     ModelUsage, Overview, ProjectUsage, Provider, Session, SessionPage, Sort, SortKey, Tokens,
@@ -76,8 +76,40 @@ pub struct Store {
 }
 
 impl Store {
-    /// Open the index at `path`, creating or rebuilding it as needed.
+    /// Open the index at `path`, creating it, or rebuilding it when it was
+    /// built by another schema or with other prices, or is not a readable
+    /// database at all.
     pub fn open(path: &Path) -> Result<Store> {
+        match Store::connect(path) {
+            Err(Error::Store(error))
+                if matches!(
+                    error.sqlite_error_code(),
+                    Some(ErrorCode::NotADatabase | ErrorCode::DatabaseCorrupt)
+                ) =>
+            {
+                // A cache of the agents' files is rebuilt rather than stopping
+                // the app from starting.
+                for suffix in ["", "-wal", "-shm"] {
+                    let mut file = path.as_os_str().to_owned();
+                    file.push(suffix);
+                    match std::fs::remove_file(&file) {
+                        Err(source) if source.kind() != std::io::ErrorKind::NotFound => {
+                            return Err(Error::Write {
+                                path: Path::new(&file).display().to_string(),
+                                source,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                Store::connect(path)
+            }
+            opened => opened,
+        }
+    }
+
+    /// Open the index at `path`, creating it or rebuilding it as needed.
+    fn connect(path: &Path) -> Result<Store> {
         let connection = Connection::open(path)?;
         connection.execute_batch(
             // WAL keeps reads from blocking the scanner's writes, and NORMAL
@@ -1842,6 +1874,19 @@ mod tests {
         assert_eq!(unit.agent, Agent::Codex);
         assert_eq!(native_id, "one");
         assert!(store.locate("codex:missing").expect("reads").is_none());
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_database_is_discarded_and_rebuilt() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("index.sqlite");
+        let wal = directory.path().join("index.sqlite-wal");
+        std::fs::write(&path, b"this is not a database, and it is long enough").expect("writes");
+        // A journal left beside it would be replayed into the new index.
+        std::fs::write(&wal, b"stale").expect("writes");
+        let store = Store::open(&path).expect("rebuilds");
+        assert_eq!(store.count().expect("counts"), 0);
+        assert_ne!(std::fs::read(&wal).ok().as_deref(), Some(&b"stale"[..]));
     }
 
     #[test]
