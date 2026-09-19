@@ -3,7 +3,7 @@
   import { goto, snapshot } from "$app/navigation";
   import { page } from "$app/state";
   import Sidebar from "#lib/components/sidebar/Sidebar.svelte";
-  import { onOpen } from "#lib/api/backend.ts";
+  import { onCommand, onOpen } from "#lib/api/backend.ts";
   import { Engine, setEngine } from "#lib/state/engine.svelte.ts";
   import { Clock, setClock } from "#lib/state/clock.svelte.ts";
   import { ModeWatcher } from "mode-watcher";
@@ -31,10 +31,17 @@
       if (route !== page.url.pathname) await goto(route);
       if (focus) document.getElementById(focus)?.focus();
     });
+    // The menu's Back and Forward move through the window's own history, as
+    // the buttons of a browser would.
+    const commanding = onCommand((command) => {
+      if (command === "back") history.back();
+      else history.forward();
+    });
     return () => {
       stopEngine();
       stopClock();
       void opening.then((stop) => stop());
+      void commanding.then((stop) => stop());
     };
   });
 

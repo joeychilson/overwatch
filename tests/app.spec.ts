@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
+import { emitTo, installIpc } from "./ipc.ts";
 
 const destinations = [
   { path: "/", name: "Overview" },
@@ -484,4 +485,16 @@ test("theme initialization and switching work under the desktop script policy", 
   await expectDestination(page, "Sessions");
   await expect(page.locator("html")).toHaveCSS("color-scheme", "dark");
   expect(errors).toEqual([]);
+});
+
+test("the menu's Back and Forward move through the window's history", async ({ page }) => {
+  await installIpc(page);
+  await page.goto("/");
+  await page.getByRole("link", { name: "Models", exact: true }).click();
+  await expect(page).toHaveTitle("Models · Overwatch");
+
+  await emitTo(page, "main", "command", "back");
+  await expect(page).toHaveTitle("Overview · Overwatch");
+  await emitTo(page, "main", "command", "forward");
+  await expect(page).toHaveTitle("Models · Overwatch");
 });

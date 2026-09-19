@@ -26,6 +26,10 @@ pub const CHANGED: &str = "index_changed";
 /// The event asking the window to show a destination, carrying its path.
 pub const OPEN: &str = "open";
 
+/// The event asking the window to carry out a command from the app's menu,
+/// carrying its name, such as `back`.
+pub const COMMAND: &str = "command";
+
 /// One page of the session list, with the totals of the whole match.
 #[tauri::command(async)]
 pub fn list_sessions(index: State<'_, Arc<Index>>, filter: Filter) -> Result<SessionPage> {

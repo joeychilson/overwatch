@@ -65,7 +65,10 @@ read, and every quarter second during a long scan, when `Status.progress` holds
 the files read and the files to read. It emits `open`, carrying a path such as
 `/subscriptions`, to the app's window when its menu or `open_window` asks it to
 show a destination; a path such as `/sessions#search` also names an element to
-focus there.
+focus there. It emits `command`, carrying `back` or `forward`, to the app's
+window when the menu's Back or Forward is chosen. Both are sent to that window
+alone, so the window listens for them on itself: a listener for any window
+hears every event, and the menu bar panel runs the same layout.
 
 ### Subscription limits
 

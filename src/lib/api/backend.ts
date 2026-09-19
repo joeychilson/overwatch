@@ -423,6 +423,19 @@ async function listenHere<T>(event: string, handler: (payload: T) => void): Prom
   }
 }
 
+/** A command the app's menu asks the window to carry out. */
+export type Command = "back" | "forward";
+
+/**
+ * Subscribe to the app's menu asking the window to carry out a command, such as
+ * going back.
+ *
+ * Resolves to an unlisten function, as {@link onIndexChanged} does.
+ */
+export function onCommand(handler: (command: Command) => void): Promise<UnlistenFn> {
+  return listenHere("command", handler);
+}
+
 /**
  * Subscribe to the app's menu asking the window to show a destination, such as
  * `/subscriptions`.
